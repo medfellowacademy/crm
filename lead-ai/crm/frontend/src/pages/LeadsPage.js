@@ -114,6 +114,8 @@ const LeadsPage = () => {
 
   const clearFilters = () => {
     setFilters({});
+    setCreatedDateType('between');
+    setUpdatedDateType('between');
   };
 
   // Get unique countries from leads

@@ -23,13 +23,25 @@ class SupabaseDataLayer:
         country: Optional[str] = None,
         segment: Optional[str] = None,
         assigned_to: Optional[str] = None,
-        search: Optional[str] = None
+        search: Optional[str] = None,
+        # Date filters for created_at
+        created_on: Optional[str] = None,
+        created_after: Optional[str] = None,
+        created_before: Optional[str] = None,
+        created_from: Optional[str] = None,
+        created_to: Optional[str] = None,
+        # Date filters for updated_at
+        updated_on: Optional[str] = None,
+        updated_after: Optional[str] = None,
+        updated_before: Optional[str] = None,
+        updated_from: Optional[str] = None,
+        updated_to: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Get leads with filters"""
         try:
             query = self.client.table('leads').select("*")
-            
-            # Apply filters
+
+            # Apply basic filters
             if status:
                 query = query.eq('status', status)
             if country:
@@ -44,14 +56,46 @@ class SupabaseDataLayer:
                     f"email.ilike.%{search}%,"
                     f"phone.ilike.%{search}%"
                 )
-            
+
+            # Apply created_at date filters
+            if created_on:
+                # For "on" filter, match the date part only
+                query = query.gte('created_at', f"{created_on}T00:00:00")
+                query = query.lt('created_at', f"{created_on}T23:59:59")
+            elif created_from and created_to:
+                # Between filter
+                query = query.gte('created_at', created_from)
+                query = query.lte('created_at', created_to)
+            elif created_after:
+                # After filter
+                query = query.gt('created_at', created_after)
+            elif created_before:
+                # Before filter
+                query = query.lt('created_at', created_before)
+
+            # Apply updated_at date filters
+            if updated_on:
+                # For "on" filter, match the date part only
+                query = query.gte('updated_at', f"{updated_on}T00:00:00")
+                query = query.lt('updated_at', f"{updated_on}T23:59:59")
+            elif updated_from and updated_to:
+                # Between filter
+                query = query.gte('updated_at', updated_from)
+                query = query.lte('updated_at', updated_to)
+            elif updated_after:
+                # After filter
+                query = query.gt('updated_at', updated_after)
+            elif updated_before:
+                # Before filter
+                query = query.lt('updated_at', updated_before)
+
             # Order and paginate
             query = query.order('ai_score', desc=True)
             query = query.range(skip, skip + limit - 1)
-            
+
             response = query.execute()
             return response.data if response.data else []
-            
+
         except Exception as e:
             logger.error(f"Error fetching leads: {e}")
             return []

@@ -1180,7 +1180,19 @@ async def get_leads(
                 country=country,
                 segment=segment.value if segment else None,
                 assigned_to=assigned_to,
-                search=search
+                search=search,
+                # Date filters for created_at
+                created_on=created_on,
+                created_after=created_after.isoformat() if created_after else None,
+                created_before=created_before.isoformat() if created_before else None,
+                created_from=created_from.isoformat() if created_from else None,
+                created_to=created_to.isoformat() if created_to else None,
+                # Date filters for updated_at
+                updated_on=updated_on,
+                updated_after=updated_after.isoformat() if updated_after else None,
+                updated_before=updated_before.isoformat() if updated_before else None,
+                updated_from=updated_from.isoformat() if updated_from else None,
+                updated_to=updated_to.isoformat() if updated_to else None,
             )
             # Return raw data from Supabase (already in correct format)
             return leads_data
