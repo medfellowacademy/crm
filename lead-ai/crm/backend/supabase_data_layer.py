@@ -36,12 +36,51 @@ class SupabaseDataLayer:
         updated_before: Optional[str] = None,
         updated_from: Optional[str] = None,
         updated_to: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """Get leads with filters"""
+    ) -> Dict[str, Any]:
+        """Get leads with filters. Returns a paginated response dict."""
         try:
+            # ---- count query (no range) ----
+            count_query = self.client.table('leads').select("*", count='exact')
+
+            if status:
+                count_query = count_query.eq('status', status)
+            if country:
+                count_query = count_query.eq('country', country)
+            if segment:
+                count_query = count_query.eq('ai_segment', segment)
+            if assigned_to:
+                count_query = count_query.eq('assigned_to', assigned_to)
+            if search:
+                count_query = count_query.or_(
+                    f"full_name.ilike.%{search}%,"
+                    f"email.ilike.%{search}%,"
+                    f"phone.ilike.%{search}%"
+                )
+
+            if created_on:
+                count_query = count_query.gte('created_at', f"{created_on}T00:00:00").lt('created_at', f"{created_on}T23:59:59")
+            elif created_from and created_to:
+                count_query = count_query.gte('created_at', created_from).lte('created_at', created_to)
+            elif created_after:
+                count_query = count_query.gt('created_at', created_after)
+            elif created_before:
+                count_query = count_query.lt('created_at', created_before)
+
+            if updated_on:
+                count_query = count_query.gte('updated_at', f"{updated_on}T00:00:00").lt('updated_at', f"{updated_on}T23:59:59")
+            elif updated_from and updated_to:
+                count_query = count_query.gte('updated_at', updated_from).lte('updated_at', updated_to)
+            elif updated_after:
+                count_query = count_query.gt('updated_at', updated_after)
+            elif updated_before:
+                count_query = count_query.lt('updated_at', updated_before)
+
+            count_response = count_query.limit(0).execute()
+            total = count_response.count if hasattr(count_response, 'count') and count_response.count is not None else 0
+
+            # ---- data query (with range) ----
             query = self.client.table('leads').select("*")
 
-            # Apply basic filters
             if status:
                 query = query.eq('status', status)
             if country:
@@ -57,48 +96,41 @@ class SupabaseDataLayer:
                     f"phone.ilike.%{search}%"
                 )
 
-            # Apply created_at date filters
             if created_on:
-                # For "on" filter, match the date part only
-                query = query.gte('created_at', f"{created_on}T00:00:00")
-                query = query.lt('created_at', f"{created_on}T23:59:59")
+                query = query.gte('created_at', f"{created_on}T00:00:00").lt('created_at', f"{created_on}T23:59:59")
             elif created_from and created_to:
-                # Between filter
-                query = query.gte('created_at', created_from)
-                query = query.lte('created_at', created_to)
+                query = query.gte('created_at', created_from).lte('created_at', created_to)
             elif created_after:
-                # After filter
                 query = query.gt('created_at', created_after)
             elif created_before:
-                # Before filter
                 query = query.lt('created_at', created_before)
 
-            # Apply updated_at date filters
             if updated_on:
-                # For "on" filter, match the date part only
-                query = query.gte('updated_at', f"{updated_on}T00:00:00")
-                query = query.lt('updated_at', f"{updated_on}T23:59:59")
+                query = query.gte('updated_at', f"{updated_on}T00:00:00").lt('updated_at', f"{updated_on}T23:59:59")
             elif updated_from and updated_to:
-                # Between filter
-                query = query.gte('updated_at', updated_from)
-                query = query.lte('updated_at', updated_to)
+                query = query.gte('updated_at', updated_from).lte('updated_at', updated_to)
             elif updated_after:
-                # After filter
                 query = query.gt('updated_at', updated_after)
             elif updated_before:
-                # Before filter
                 query = query.lt('updated_at', updated_before)
 
-            # Order and paginate
             query = query.order('ai_score', desc=True)
             query = query.range(skip, skip + limit - 1)
 
             response = query.execute()
-            return response.data if response.data else []
+            leads = response.data if response.data else []
+
+            return {
+                "leads": leads,
+                "total": total,
+                "skip": skip,
+                "limit": limit,
+                "has_more": (skip + limit) < total,
+            }
 
         except Exception as e:
             logger.error(f"Error fetching leads: {e}")
-            return []
+            return {"leads": [], "total": 0, "skip": skip, "limit": limit, "has_more": False}
     
     def get_lead_by_id(self, lead_id: str) -> Optional[Dict[str, Any]]:
         """Get single lead by ID"""

@@ -9,12 +9,22 @@ import os
 from jose import JWTError, jwt
 import bcrypt
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
-# Security configuration
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production-use-openssl-rand-hex-32")
+# deps.py provides get_db without importing from main.py, breaking the circular dependency.
+from deps import get_db
+
+# Security configuration — fail fast if the secret is missing or left as the default.
+_raw_secret = os.getenv("JWT_SECRET_KEY", "")
+_default_insecure = "your-secret-key-change-in-production"
+if not _raw_secret or _raw_secret.startswith(_default_insecure):
+    raise RuntimeError(
+        "JWT_SECRET_KEY environment variable is not set or is still the insecure default. "
+        "Generate one with: openssl rand -hex 32"
+    )
+SECRET_KEY: str = _raw_secret
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))  # 24 hours
 
@@ -90,43 +100,46 @@ def decode_access_token(token: str) -> TokenData:
 
 def authenticate_user(db: Session, email: str, password: str):
     """Authenticate a user by email and password"""
-    from main import DBUser  # Import here to avoid circular dependency
-    
+    # Lazy import to avoid circular dependency (main.py defines DBUser).
+    from main import DBUser
+
     user = db.query(DBUser).filter(DBUser.email == email).first()
-    
+
     if not user:
         return False
-    
+
     if not verify_password(password, user.password):
         return False
-    
+
     return user
-
-
-def get_db_dependency():
-    """Get database session - imported here to avoid circular dependency"""
-    from main import get_db
-    return get_db
 
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db_dependency)
+    db: Session = Depends(get_db),
 ):
-    """Get the current authenticated user from JWT token"""
-    from main import DBUser  # Import here to avoid circular dependency
-    
+    """Validate the Bearer token and return the authenticated DBUser."""
+    # Lazy import to avoid circular dependency (main.py defines DBUser).
+    from main import DBUser
+
     token_data = decode_access_token(token)
-    
+
     user = db.query(DBUser).filter(DBUser.email == token_data.email).first()
-    
+
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Account is inactive",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     return user
 
 

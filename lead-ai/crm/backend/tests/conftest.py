@@ -12,9 +12,14 @@ from fastapi.testclient import TestClient
 # Use in-memory SQLite for tests
 TEST_DATABASE_URL = "sqlite:///./test_crm.db"
 
-# We need to patch the database before importing main
+# Patch environment before importing main so auth.py doesn't raise on startup
 import os
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+os.environ.setdefault(
+    "JWT_SECRET_KEY",
+    "ci-test-secret-key-do-not-use-in-production-64chars-padded-here",
+)
+os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.pop("SUPABASE_URL", None)
 os.environ.pop("SUPABASE_KEY", None)
 
@@ -28,7 +33,6 @@ def engine():
     yield eng
     Base.metadata.drop_all(bind=eng)
     eng.dispose()
-    # Clean up test db file
     import pathlib
     db_file = pathlib.Path("test_crm.db")
     if db_file.exists():
@@ -42,17 +46,50 @@ def db_session(engine):
     transaction = connection.begin()
     Session = sessionmaker(bind=connection)
     session = Session()
-
     yield session
-
     session.close()
     transaction.rollback()
     connection.close()
 
 
 @pytest.fixture
-def client(db_session):
-    """FastAPI test client with overridden database dependency."""
+def admin_user(db_session):
+    """Insert a Super Admin user for auth tests."""
+    from main import DBUser
+    from auth import get_password_hash
+
+    user = DBUser(
+        full_name="Test Admin",
+        email="admin@test.com",
+        phone="+910000000001",
+        password=get_password_hash("Admin@123"),
+        role="Super Admin",
+        is_active=True,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    return user
+
+
+@pytest.fixture
+def auth_headers(admin_user):
+    """Return Authorization headers with a valid JWT for the test admin."""
+    from auth import create_access_token
+
+    token = create_access_token({"sub": admin_user.email, "role": admin_user.role})
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def client(db_session, auth_headers):
+    """
+    FastAPI test client with:
+    - overridden database dependency (isolated SQLite session)
+    - pre-set Authorization header so all requests are authenticated
+    """
     from main import app, get_db
 
     def override_get_db():
@@ -62,7 +99,7 @@ def client(db_session):
             pass
 
     app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as c:
+    with TestClient(app, headers=auth_headers) as c:
         yield c
     app.dependency_overrides.clear()
 
@@ -78,6 +115,15 @@ def sample_lead_data():
         "source": "Website",
         "course_interested": "Emergency Medicine Fellowship",
     }
+
+
+@pytest.fixture
+def created_lead(client, sample_lead_data):
+    """Create a lead and return the response dict."""
+    response = client.post("/api/leads", json=sample_lead_data)
+    assert response.status_code == 200, response.text
+    return response.json()
+
 
 
 @pytest.fixture

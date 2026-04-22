@@ -23,6 +23,7 @@ requests>=2.31.0
 loguru>=0.7.0
 cachetools>=5.3.0
 supabase>=2.3.0
+slowapi>=0.1.9            # Rate limiting for FastAPI
 
 # Monitoring & Observability (Optional but recommended for production)
 sentry-sdk[fastapi]>=2.0.0  # Error tracking and performance monitoring
@@ -37,3 +38,4 @@ postgrest>=0.13.0
 bcrypt>=4.1.0
 openai>=1.0.0
 email-validator>=2.0.0
+ruff>=0.4.0               # Fast linter / formatter (used in CI)

@@ -3,6 +3,7 @@ Structured Logging Configuration
 Implements comprehensive logging with rotation, JSON formatting, and multiple sinks
 """
 
+import os
 import sys
 from pathlib import Path
 from loguru import logger
@@ -15,27 +16,32 @@ logger.remove()
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(exist_ok=True)
 
+# diagnose=True dumps local variable values into tracebacks which can expose
+# secrets and PII.  Only enable it when explicitly running in DEBUG mode.
+_LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+_DEBUG_MODE = _LOG_LEVEL == "DEBUG"
+
 # Console logging - colorized and formatted
 logger.add(
     sys.stdout,
     format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
-    level="INFO",
+    level=_LOG_LEVEL,
     colorize=True,
     backtrace=True,
-    diagnose=True,
+    diagnose=_DEBUG_MODE,
 )
 
-# File logging - all levels with rotation
+# File logging - rotated, INFO by default (DEBUG only in debug mode)
 logger.add(
     LOG_DIR / "app.log",
     format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
-    level="DEBUG",
-    rotation="10 MB",  # Rotate when file reaches 10MB
-    retention="30 days",  # Keep logs for 30 days
-    compression="zip",  # Compress rotated logs
+    level=_LOG_LEVEL,
+    rotation="10 MB",
+    retention="30 days",
+    compression="zip",
     backtrace=True,
-    diagnose=True,
-    enqueue=True,  # Async logging
+    diagnose=_DEBUG_MODE,  # Never expose locals in production
+    enqueue=True,
 )
 
 # Error logging - separate file for errors only
@@ -44,10 +50,10 @@ logger.add(
     format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
     level="ERROR",
     rotation="5 MB",
-    retention="60 days",  # Keep errors longer
+    retention="60 days",
     compression="zip",
     backtrace=True,
-    diagnose=True,
+    diagnose=False,  # Never expose locals for errors (most sensitive traces)
     enqueue=True,
 )
 

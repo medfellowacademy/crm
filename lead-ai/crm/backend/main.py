@@ -42,8 +42,16 @@ from exceptions import (
     BusinessLogicError, to_http_exception
 )
 
-# Authentication disabled - public access only
-# from auth import get_current_user, oauth2_scheme
+# Authentication
+from auth import get_current_user, oauth2_scheme, decode_access_token
+from deps import get_db as _shared_get_db  # used by auth.py via deps.py
+
+# Rate limiting
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+limiter = Limiter(key_func=get_remote_address)
 
 # Import caching system
 from cache import (
@@ -142,11 +150,10 @@ except ImportError:
 
 # Global model instance cache (loaded once at startup)
 MODEL_INSTANCE_CACHE = {}
-COURSE_PRICE_CACHE = {
-    'data': {},
-    'timestamp': None,
-    'ttl': 3600  # 1 hour TTL
-}
+
+# Course price cache — use COURSE_CACHE from cache.py (TTLCache with 1-hour TTL)
+# The old manual COURSE_PRICE_CACHE dict has been removed to unify caching.
+_COURSE_PRICES_KEY = "course_prices:all"
 
 def get_cached_model():
     """Get cached CatBoost model instance (loads once)"""
@@ -168,32 +175,43 @@ def get_cached_model():
     return MODEL_INSTANCE_CACHE['catboost']
 
 def get_cached_course_prices(db: Session, force_refresh: bool = False) -> Dict[str, float]:
-    """Get cached course prices (1-hour TTL)"""
-    now = datetime.utcnow()
-    cache_expired = (
-        COURSE_PRICE_CACHE['timestamp'] is None or
-        (now - COURSE_PRICE_CACHE['timestamp']).total_seconds() > COURSE_PRICE_CACHE['ttl']
-    )
-    
-    if force_refresh or cache_expired:
-        courses = db.query(DBCourse.course_name, DBCourse.price).all()
-        COURSE_PRICE_CACHE['data'] = {name: price for name, price in courses}
-        COURSE_PRICE_CACHE['timestamp'] = now
-        logger.info(f"✅ Course prices cached: {len(COURSE_PRICE_CACHE['data'])} courses")
-    
-    return COURSE_PRICE_CACHE['data']
+    """Get cached course prices using the unified COURSE_CACHE (1-hour TTL)."""
+    if not force_refresh and _COURSE_PRICES_KEY in COURSE_CACHE:
+        return COURSE_CACHE[_COURSE_PRICES_KEY]
+
+    courses = db.query(DBCourse.course_name, DBCourse.price).all()
+    prices = {name: price for name, price in courses}
+    COURSE_CACHE[_COURSE_PRICES_KEY] = prices
+    logger.info(f"✅ Course prices cached: {len(prices)} courses")
+    return prices
 
 # Lifespan context manager for startup/shutdown
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler"""
-    # Startup
+    # ---- Startup ----
     logger.info("🚀 Application startup initiated")
+
+    # --- Fail-fast environment validation ---
+    _required_env = {
+        "JWT_SECRET_KEY": os.getenv("JWT_SECRET_KEY", ""),
+    }
+    _missing = [k for k, v in _required_env.items() if not v]
+    if _missing:
+        raise RuntimeError(
+            f"Missing required environment variables: {', '.join(_missing)}. "
+            "Set them before starting the application."
+        )
+    if os.getenv("SUPABASE_URL") and not os.getenv("SUPABASE_KEY"):
+        logger.warning("⚠️ SUPABASE_URL is set but SUPABASE_KEY is missing — Supabase will not connect.")
+    if not os.getenv("OPENAI_API_KEY"):
+        logger.warning("⚠️ OPENAI_API_KEY is not set — AI assistant features will be disabled.")
+
     logger.info(f"📊 Database: {SQLALCHEMY_DATABASE_URL}")
-    
+
     # Create database indexes for optimized queries
     create_database_indexes(engine)
-    
+
     # Pre-load model and course prices at startup
     db = SessionLocal()
     try:
@@ -203,18 +221,20 @@ async def lifespan(app: FastAPI):
         logger.error(f"⚠️ Failed to pre-load caches: {e}")
     finally:
         db.close()
-    
-    # Auto-seed Supabase if empty
-    if supabase_manager.client:
+
+    # Auto-seed Supabase only in non-production environments (guard against wiping prod)
+    _env = os.getenv("ENVIRONMENT", "development").lower()
+    if supabase_manager.client and _env != "production":
         try:
             response = supabase_manager.client.table('leads').select('count', count='exact').limit(0).execute()
             if response.count == 0:
                 logger.info("🌱 Database is empty - seeding with sample data...")
-                from seed_supabase import seed_supabase_data
-                seed_supabase_data()
+                from seed_all import seed_courses, seed_users
+                seed_courses(supabase_manager.client)
+                seed_users(supabase_manager.client)
         except Exception as e:
             logger.warning(f"⚠️ Could not check/seed database: {e}")
-    
+
     # Warm up caches with frequently accessed data
     db = SessionLocal()
     try:
@@ -224,22 +244,74 @@ async def lifespan(app: FastAPI):
         logger.error(f"⚠️ Cache warming failed: {e}")
     finally:
         db.close()
-    
+
     logger.info("✅ Application ready to accept requests")
-    
+
     yield
-    
-    # Shutdown
+
+    # ---- Shutdown ----
     logger.info("👋 Application shutdown initiated")
     logger.info("✅ Cleanup complete")
 
-# Initialize FastAPI
+# ============================================================================
+# GLOBAL AUTHENTICATION DEPENDENCY
+# All routes are protected by default.  Public paths are explicitly excluded.
+# ============================================================================
+
+# Paths that do NOT require a valid JWT.
+_PUBLIC_PATHS = {
+    "/",
+    "/health",
+    "/ready",
+    "/metrics",
+    "/api/auth/login",
+    "/api/auth/logout",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+}
+
+from fastapi import Request
+
+async def _verify_token(request: Request) -> None:
+    """
+    Global dependency: validates the Bearer token for every route except
+    those listed in _PUBLIC_PATHS.  Raises 401 if the token is missing or
+    invalid.  The full user object (with DB lookup) is only fetched by
+    routes that explicitly Depend(get_current_user).
+    """
+    if request.url.path in _PUBLIC_PATHS:
+        return
+    # Allow Swagger UI asset paths
+    if request.url.path.startswith(("/docs", "/redoc", "/openapi")):
+        return
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token = auth_header.split(" ", 1)[1]
+    decode_access_token(token)  # raises 401 if expired / invalid
+
+
+from fastapi import status
+
+# Initialize FastAPI with the global auth dependency
 app = FastAPI(
     lifespan=lifespan,
     title="Medical Education CRM",
     description="AI-powered CRM for lead management and conversion optimization",
-    version="1.0.0"
+    version="1.0.0",
+    dependencies=[Depends(_verify_token)],
 )
+
+# Attach rate limiter to the app
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Add custom middleware (order matters - first added is outermost)
 app.add_middleware(ErrorHandlingMiddleware)
@@ -474,10 +546,20 @@ Base.metadata.create_all(bind=engine)
 # PYDANTIC MODELS (API)
 # ============================================================================
 
+# Import sanitizer for free-text field validation
+from sanitize import sanitize_text
+from pydantic import field_validator
+
+
 class NoteCreate(BaseModel):
     content: str
     channel: str = "manual"
     created_by: str
+
+    @field_validator('content', 'created_by', mode='before')
+    @classmethod
+    def _sanitize(cls, v):
+        return sanitize_text(v, max_length=10000)
 
 class NoteResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -498,6 +580,11 @@ class LeadCreate(BaseModel):
     course_interested: str
     assigned_to: Optional[str] = None
 
+    @field_validator('full_name', 'source', 'course_interested', 'assigned_to', mode='before')
+    @classmethod
+    def _sanitize(cls, v):
+        return sanitize_text(v, max_length=500)
+
 class LeadUpdate(BaseModel):
     full_name: Optional[str] = None
     email: Optional[EmailStr] = None
@@ -512,6 +599,12 @@ class LeadUpdate(BaseModel):
     next_action: Optional[str] = None
     loss_reason: Optional[str] = None
     loss_note: Optional[str] = None
+
+    @field_validator('full_name', 'course_interested', 'assigned_to', 'next_action',
+                     'loss_reason', 'loss_note', mode='before')
+    @classmethod
+    def _sanitize(cls, v):
+        return sanitize_text(v, max_length=5000)
 
 class LeadResponse(BaseModel):
     id: int
@@ -1003,14 +1096,11 @@ ai_scorer = AILeadScorer()
 
 # ============================================================================
 # DEPENDENCY
+# get_db is defined in deps.py and re-exported here so route handlers that
+# already import it from main continue to work during the migration.
 # ============================================================================
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+from deps import get_db  # noqa: E402 (import after model definitions is intentional)
 
 # ============================================================================
 # API ENDPOINTS - AUTHENTICATION
@@ -1021,9 +1111,10 @@ class LoginRequest(BaseModel):
     password: str
 
 @app.post("/api/auth/login")
-async def login(request: LoginRequest, db: Session = Depends(get_db)):
+@limiter.limit("10/minute")  # Brute-force protection: max 10 login attempts per minute per IP
+async def login(request: Request, body: LoginRequest, db: Session = Depends(get_db)):
     """Login with username (email) and password - validates against users table"""
-    user = db.query(DBUser).filter(DBUser.email == request.username).first()
+    user = db.query(DBUser).filter(DBUser.email == body.username).first()
 
     if not user:
         raise HTTPException(status_code=401, detail="Invalid username or password")
@@ -1038,14 +1129,14 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
             try:
                 import bcrypt as _bcrypt
                 password_valid = _bcrypt.checkpw(
-                    request.password.encode('utf-8'),
+                    body.password.encode('utf-8'),
                     user.password.encode('utf-8')
                 )
             except Exception:
                 password_valid = False
         else:
             # plain text password (legacy)
-            password_valid = (user.password == request.password)
+            password_valid = (user.password == body.password)
 
     if not password_valid:
         raise HTTPException(status_code=401, detail="Invalid username or password")

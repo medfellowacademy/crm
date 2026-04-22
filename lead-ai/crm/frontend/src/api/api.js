@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_BASE_URL = 'https://medfellow-crm-api.onrender.com';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://medfellow-crm-api.onrender.com';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -9,7 +9,10 @@ const api = axios.create({
   },
 });
 
-// Redirect to login if server returns 401
+// Redirect to login if server returns 401 (expired or invalid token).
+// We clear localStorage directly here because the interceptor runs outside
+// React's render cycle (no access to AuthContext).  AuthContext reads from
+// localStorage on mount and will reflect the cleared state after redirect.
 api.interceptors.response.use(
   (response) => response,
   (error) => {
