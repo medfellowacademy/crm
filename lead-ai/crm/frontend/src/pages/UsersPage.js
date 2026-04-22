@@ -644,8 +644,7 @@ const UsersPage = () => {
 
           <Form.Item
             name="phone"
-            label="Phone"
-            rules={[{ required: true, message: 'Please enter phone number' }]}
+            label="Phone (Optional)"
           >
             <Input size="large" prefix={<PhoneOutlined />} placeholder="+1 234 567 8900" />
           </Form.Item>

@@ -633,7 +633,7 @@ class CounselorResponse(BaseModel):
 class UserCreate(BaseModel):
     full_name: str
     email: EmailStr
-    phone: str
+    phone: Optional[str] = None
     password: str
     role: str  # Super Admin, Manager, Team Leader, Counselor
     reports_to: Optional[int] = None
@@ -643,6 +643,7 @@ class UserUpdate(BaseModel):
     full_name: Optional[str] = None
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
+    password: Optional[str] = None
     role: Optional[str] = None
     reports_to: Optional[int] = None
     is_active: Optional[bool] = None
