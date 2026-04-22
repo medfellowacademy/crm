@@ -627,13 +627,13 @@ class UserResponse(BaseModel):
     id: int
     full_name: str
     email: str
-    phone: str
+    phone: Optional[str] = None
     role: str
-    reports_to: Optional[int]
+    reports_to: Optional[int] = None
     is_active: bool
-    created_at: datetime
-    updated_at: datetime
-    
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
     model_config = ConfigDict(from_attributes=True)
 
 class DashboardStats(BaseModel):
@@ -1440,6 +1440,16 @@ async def get_courses(
 # ============================================================================
 # API ENDPOINTS - DASHBOARD & ANALYTICS
 # ============================================================================
+
+@app.get("/api/notifications")
+async def get_notifications(db: Session = Depends(get_db)):
+    """Get smart notifications - returns empty list if not implemented"""
+    return []
+
+@app.get("/api/audit-logs")
+async def get_audit_logs(page: int = 1, limit: int = 50, db: Session = Depends(get_db)):
+    """Get audit logs - returns empty list if not implemented"""
+    return {"logs": [], "total": 0, "page": page, "limit": limit}
 
 @app.get("/api/dashboard/stats", response_model=DashboardStats)
 @cache_async_result(STATS_CACHE, "dashboard_stats")
