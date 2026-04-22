@@ -1,0 +1,513 @@
+import React, { useState } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import {
+  Card,
+  Row,
+  Col,
+  Descriptions,
+  Tag,
+  Button,
+  Input,
+  Select,
+  Form,
+  message,
+  Timeline,
+  Progress,
+  Space,
+  Modal,
+  DatePicker,
+  Divider,
+  Alert,
+  Badge,
+  Statistic,
+} from 'antd';
+import {
+  ArrowLeftOutlined,
+  WhatsAppOutlined,
+  MailOutlined,
+  PhoneOutlined,
+  SaveOutlined,
+  ThunderboltOutlined,
+  DollarOutlined,
+  WarningOutlined,
+  FireOutlined,
+} from '@ant-design/icons';
+import { leadsAPI, coursesAPI, counselorsAPI } from '../api/api';
+import dayjs from 'dayjs';
+import ActivityTimeline from '../features/activity/ActivityTimeline';
+import { isFeatureEnabled } from '../config/featureFlags';
+
+const { TextArea } = Input;
+const { Option } = Select;
+
+const LeadDetails = () => {
+  const { leadId } = useParams();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [noteForm] = Form.useForm();
+  const [emailModal, setEmailModal] = useState(false);
+  const [whatsappModal, setWhatsappModal] = useState(false);
+
+  // Fetch lead details
+  const { data: lead, isLoading } = useQuery({
+    queryKey: ['lead', leadId],
+    queryFn: () => leadsAPI.getById(leadId).then(res => res.data)
+  });
+
+  const { data: courses } = useQuery({
+    queryKey: ['courses'],
+    queryFn: () => coursesAPI.getAll().then(res => res.data)
+  });
+
+  const { data: counselors } = useQuery({
+    queryKey: ['counselors'],
+    queryFn: () => counselorsAPI.getAll().then(res => res.data)
+  });
+
+  // Update lead mutation
+  const updateLeadMutation = useMutation({
+    mutationFn: (data) => leadsAPI.update(leadId, data),
+    onSuccess: () => {
+      message.success('Lead updated successfully!');
+      queryClient.invalidateQueries({ queryKey: ['lead', leadId] });
+    },
+    onError: (error) => {
+      message.error(`Failed to update lead: ${error.message}`);
+    },
+  });
+
+  // Add note mutation
+  const addNoteMutation = useMutation({
+    mutationFn: (data) => leadsAPI.addNote(leadId, data),
+    onSuccess: () => {
+      message.success('Note added successfully!');
+      noteForm.resetFields();
+      queryClient.invalidateQueries({ queryKey: ['lead', leadId] });
+    },
+    onError: (error) => {
+      message.error(`Failed to add note: ${error.message}`);
+    },
+  });
+
+  const handleAddNote = (values) => {
+    addNoteMutation.mutate({
+      content: values.content,
+      channel: values.channel || 'manual',
+      created_by: values.created_by || 'Counselor',
+    });
+  };
+
+  const handleUpdateField = (field, value) => {
+    updateLeadMutation.mutate({ [field]: value });
+  };
+
+  if (isLoading) {
+    return <div>Loading...</div>;
+  }
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ marginBottom: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <Button
+            icon={<ArrowLeftOutlined />}
+            onClick={() => navigate('/leads')}
+          >
+            Back
+          </Button>
+          <div>
+            <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 600 }}>
+              {lead?.full_name}
+            </h1>
+            <div style={{ color: '#8c8c8c', marginTop: '4px' }}>
+              {lead?.lead_id} • Created {dayjs(lead?.created_at).format('MMM DD, YYYY')}
+            </div>
+          </div>
+        </div>
+
+        <Space>
+          <Button
+            icon={<PhoneOutlined />}
+            href={`tel:${lead?.phone}`}
+          >
+            Call
+          </Button>
+          <Button
+            icon={<WhatsAppOutlined />}
+            style={{ background: '#25D366', borderColor: '#25D366', color: '#fff' }}
+            onClick={() => setWhatsappModal(true)}
+          >
+            WhatsApp
+          </Button>
+          <Button
+            icon={<MailOutlined />}
+            type="primary"
+            onClick={() => setEmailModal(true)}
+          >
+            Email
+          </Button>
+        </Space>
+      </div>
+
+      {/* AI Insights Alert */}
+      {lead?.next_action && (
+        <Alert
+          message={<span><ThunderboltOutlined /> AI Recommendation</span>}
+          description={
+            <div>
+              <div style={{ fontWeight: 600, marginBottom: '8px' }}>{lead.next_action}</div>
+              <div style={{ fontSize: '12px', color: '#8c8c8c' }}>
+                Priority: {lead.priority_level} • Follow up: {lead.follow_up_date ? dayjs(lead.follow_up_date).format('MMM DD, hh:mm A') : 'Not set'}
+              </div>
+            </div>
+          }
+          type={
+            lead.ai_segment === 'Hot' ? 'error' :
+            lead.ai_segment === 'Warm' ? 'warning' : 'info'
+          }
+          showIcon
+          style={{ marginBottom: '24px' }}
+        />
+      )}
+
+      <Row gutter={[24, 24]}>
+        {/* Left Column */}
+        <Col xs={24} lg={16}>
+          {/* Lead Information */}
+          <Card title="Lead Information" style={{ marginBottom: '24px' }}>
+            <Descriptions column={2} bordered>
+              <Descriptions.Item label="Full Name">
+                {lead?.full_name}
+              </Descriptions.Item>
+              <Descriptions.Item label="Email">
+                {lead?.email || '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="Phone">
+                {lead?.phone}
+              </Descriptions.Item>
+              <Descriptions.Item label="WhatsApp">
+                {lead?.whatsapp || lead?.phone}
+              </Descriptions.Item>
+              <Descriptions.Item label="Country">
+                <Tag color="blue">{lead?.country}</Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="Source">
+                <Tag>{lead?.source}</Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="Course Interested" span={2}>
+                <Select
+                  style={{ width: '100%' }}
+                  value={lead?.course_interested}
+                  onChange={(value) => handleUpdateField('course_interested', value)}
+                >
+                  {courses?.map(course => (
+                    <Option key={course.id} value={course.course_name}>
+                      {course.course_name}
+                    </Option>
+                  ))}
+                </Select>
+              </Descriptions.Item>
+              <Descriptions.Item label="Status">
+                <Select
+                  value={lead?.status}
+                  onChange={(value) => handleUpdateField('status', value)}
+                  style={{ width: '100%' }}
+                >
+                  <Option value="Fresh">Fresh</Option>
+                  <Option value="Follow Up">Follow Up</Option>
+                  <Option value="Warm">Warm</Option>
+                  <Option value="Hot">Hot</Option>
+                  <Option value="Not Interested">Not Interested</Option>
+                  <Option value="Junk">Junk</Option>
+                  <Option value="Not Answering">Not Answering</Option>
+                  <Option value="Enrolled">Enrolled</Option>
+                </Select>
+              </Descriptions.Item>
+              <Descriptions.Item label="Follow-up Date">
+                <DatePicker
+                  showTime
+                  value={lead?.follow_up_date ? dayjs(lead.follow_up_date) : null}
+                  onChange={(date) => handleUpdateField('follow_up_date', date?.toISOString())}
+                  style={{ width: '100%' }}
+                />
+              </Descriptions.Item>
+              <Descriptions.Item label="Assigned To" span={2}>
+                <Select
+                  value={lead?.assigned_to}
+                  onChange={(value) => handleUpdateField('assigned_to', value)}
+                  style={{ width: '100%' }}
+                  allowClear
+                >
+                  {counselors?.map(counselor => (
+                    <Option key={counselor.id} value={counselor.name}>
+                      {counselor.name}
+                    </Option>
+                  ))}
+                </Select>
+              </Descriptions.Item>
+            </Descriptions>
+          </Card>
+
+          {/* Notes Section */}
+          <Card title="Notes & Communication History">
+            <Form form={noteForm} onFinish={handleAddNote} layout="vertical">
+              <Form.Item name="content" rules={[{ required: true, message: 'Please enter note' }]}>
+                <TextArea
+                  rows={4}
+                  placeholder="Add note about conversation, objections, requirements..."
+                />
+              </Form.Item>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item name="channel">
+                    <Select placeholder="Channel" defaultValue="manual">
+                      <Option value="manual">Manual Note</Option>
+                      <Option value="call">Phone Call</Option>
+                      <Option value="whatsapp">WhatsApp</Option>
+                      <Option value="email">Email</Option>
+                    </Select>
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item name="created_by">
+                    <Select placeholder="Counselor" defaultValue={counselors?.[0]?.name}>
+                      {counselors?.map(counselor => (
+                        <Option key={counselor.id} value={counselor.name}>
+                          {counselor.name}
+                        </Option>
+                      ))}
+                    </Select>
+                  </Form.Item>
+                </Col>
+              </Row>
+              <Button
+                type="primary"
+                htmlType="submit"
+                icon={<SaveOutlined />}
+                loading={addNoteMutation.isLoading}
+              >
+                Add Note
+              </Button>
+            </Form>
+
+            <Divider />
+
+            <Timeline style={{ marginTop: '24px' }}>
+              {lead?.notes?.map((note, index) => (
+                <Timeline.Item
+                  key={note.id}
+                  color={
+                    note.channel === 'whatsapp' ? 'green' :
+                    note.channel === 'email' ? 'blue' :
+                    note.channel === 'call' ? 'orange' : 'gray'
+                  }
+                >
+                  <div style={{ marginBottom: '8px' }}>
+                    <Tag color={
+                      note.channel === 'whatsapp' ? 'green' :
+                      note.channel === 'email' ? 'blue' :
+                      note.channel === 'call' ? 'orange' : 'default'
+                    }>
+                      {note.channel}
+                    </Tag>
+                    <span style={{ fontWeight: 600, marginLeft: '8px' }}>
+                      {note.created_by}
+                    </span>
+                    <span style={{ color: '#8c8c8c', marginLeft: '8px', fontSize: '12px' }}>
+                      {dayjs(note.created_at).format('MMM DD, YYYY hh:mm A')}
+                    </span>
+                  </div>
+                  <div style={{ whiteSpace: 'pre-wrap' }}>{note.content}</div>
+                </Timeline.Item>
+              ))}
+            </Timeline>
+          </Card>
+        </Col>
+
+        {/* Right Column - AI Insights */}
+        <Col xs={24} lg={8}>
+          {/* AI Score Card */}
+          <Card
+            title={<span><ThunderboltOutlined /> AI Lead Score</span>}
+            style={{ marginBottom: '24px' }}
+          >
+            <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+              <Progress
+                type="circle"
+                percent={lead?.ai_score}
+                strokeColor={
+                  lead?.ai_score >= 75 ? '#ff4d4f' :
+                  lead?.ai_score >= 50 ? '#faad14' :
+                  lead?.ai_score >= 25 ? '#52c41a' : '#8c8c8c'
+                }
+                format={(percent) => (
+                  <div>
+                    <div style={{ fontSize: '32px', fontWeight: 600 }}>{percent.toFixed(0)}</div>
+                    <div style={{ fontSize: '12px', color: '#8c8c8c' }}>AI Score</div>
+                  </div>
+                )}
+              />
+            </div>
+
+            <Divider />
+
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ fontSize: '12px', color: '#8c8c8c', marginBottom: '4px' }}>Segment</div>
+              <Badge
+                color={
+                  lead?.ai_segment === 'Hot' ? 'red' :
+                  lead?.ai_segment === 'Warm' ? 'orange' :
+                  lead?.ai_segment === 'Cold' ? 'green' : 'default'
+                }
+                text={<span style={{ fontSize: '16px', fontWeight: 600 }}>{lead?.ai_segment}</span>}
+              />
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ fontSize: '12px', color: '#8c8c8c', marginBottom: '4px' }}>Conversion Probability</div>
+              <div style={{ fontSize: '16px', fontWeight: 600 }}>
+                {((lead?.conversion_probability || 0) * 100).toFixed(1)}%
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ fontSize: '12px', color: '#8c8c8c', marginBottom: '4px' }}>Buying Signal Strength</div>
+              <Progress
+                percent={lead?.buying_signal_strength}
+                strokeColor="#52c41a"
+                format={(percent) => `${percent.toFixed(0)}`}
+              />
+            </div>
+
+            {lead?.primary_objection && (
+              <div style={{ marginBottom: '16px' }}>
+                <div style={{ fontSize: '12px', color: '#8c8c8c', marginBottom: '4px' }}>Primary Objection</div>
+                <Tag color="orange">{lead.primary_objection}</Tag>
+              </div>
+            )}
+
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ fontSize: '12px', color: '#8c8c8c', marginBottom: '4px' }}>Churn Risk</div>
+              <Progress
+                percent={lead?.churn_risk * 100}
+                strokeColor="#ff4d4f"
+                format={(percent) => `${percent.toFixed(0)}%`}
+              />
+            </div>
+          </Card>
+
+          {/* Revenue Card */}
+          <Card title={<span><DollarOutlined /> Revenue</span>} style={{ marginBottom: '24px' }}>
+            {lead?.status === 'Enrolled' ? (
+              <Statistic
+                title="Total Revenue"
+                value={lead?.actual_revenue}
+                precision={0}
+                prefix="₹"
+                suffix=""
+                valueStyle={{ color: '#52c41a', fontSize: '28px' }}
+              />
+            ) : (
+              <Statistic
+                title="Expected Revenue"
+                value={lead?.expected_revenue}
+                precision={0}
+                prefix="₹"
+                suffix=""
+                valueStyle={{ color: '#faad14', fontSize: '28px' }}
+              />
+            )}
+
+            {lead?.status === 'Enrolled' && (
+              <div style={{ marginTop: '16px' }}>
+                <Form.Item label="Actual Revenue (₹)">
+                  <Input
+                    type="number"
+                    defaultValue={lead?.actual_revenue}
+                    onBlur={(e) => handleUpdateField('actual_revenue', parseFloat(e.target.value))}
+                  />
+                </Form.Item>
+              </div>
+            )}
+          </Card>
+
+          {/* Recommended Script */}
+          {lead?.recommended_script && (
+            <Card title="Recommended Script" style={{ marginBottom: '24px' }}>
+              <div style={{ whiteSpace: 'pre-wrap', fontSize: '13px', lineHeight: '1.6' }}>
+                {lead.recommended_script}
+              </div>
+            </Card>
+          )}
+
+          {/* Activity Timeline */}
+          {isFeatureEnabled('ACTIVITY_TIMELINE') && (
+            <Card title="Activity Timeline" style={{ marginBottom: '24px' }}>
+              <ActivityTimeline leadId={leadId} />
+            </Card>
+          )}
+        </Col>
+      </Row>
+
+      {/* WhatsApp Modal */}
+      <Modal
+        title={<span><WhatsAppOutlined /> Send WhatsApp Message</span>}
+        open={whatsappModal}
+        onCancel={() => setWhatsappModal(false)}
+        footer={null}
+      >
+        <Form
+          onFinish={(values) => {
+            leadsAPI.sendWhatsApp(leadId, values.message)
+              .then(() => {
+                message.success('WhatsApp message queued!');
+                setWhatsappModal(false);
+              })
+              .catch(() => message.error('Failed to send WhatsApp'));
+          }}
+        >
+          <Form.Item name="message" rules={[{ required: true }]}>
+            <TextArea rows={6} placeholder="Type your message..." />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" block>
+            Send Message
+          </Button>
+        </Form>
+      </Modal>
+
+      {/* Email Modal */}
+      <Modal
+        title={<span><MailOutlined /> Send Email</span>}
+        open={emailModal}
+        onCancel={() => setEmailModal(false)}
+        footer={null}
+        width={600}
+      >
+        <Form
+          onFinish={(values) => {
+            leadsAPI.sendEmail(leadId, values.subject, values.body)
+              .then(() => {
+                message.success('Email queued!');
+                setEmailModal(false);
+              })
+              .catch(() => message.error('Failed to send email'));
+          }}
+        >
+          <Form.Item name="subject" label="Subject" rules={[{ required: true }]}>
+            <Input placeholder="Email subject" />
+          </Form.Item>
+          <Form.Item name="body" label="Message" rules={[{ required: true }]}>
+            <TextArea rows={8} placeholder="Email message..." />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" block>
+            Send Email
+          </Button>
+        </Form>
+      </Modal>
+    </div>
+  );
+};
+
+export default LeadDetails;
