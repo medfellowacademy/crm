@@ -15,6 +15,7 @@ import {
   Search,
   Shield,
   LogOut,
+  CalendarClock,
 } from 'lucide-react';
 import SmartNotifications from '../../features/notifications/SmartNotifications';
 import { isFeatureEnabled } from '../../config/featureFlags';
@@ -36,6 +37,7 @@ const ProfessionalLayout = ({ children }) => {
 
   const menuItems = [
     { key: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+    { key: '/followups', icon: CalendarClock, label: "Today's Follow-ups" },
     { key: '/leads', icon: Users, label: 'Leads' },
     { key: '/pipeline', icon: GitBranch, label: 'Pipeline' },
     { key: '/lead-analysis', icon: TrendingUp, label: 'Lead Analysis' },

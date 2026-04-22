@@ -16,6 +16,7 @@ import UserActivityPage from './pages/UserActivityPage';
 import LeadAnalysisPage from './pages/LeadAnalysisPage';
 import AuditLogs from './features/audit/AuditLogs';
 import LoginPage from './pages/LoginPage';
+import FollowupTodayPage from './pages/FollowupTodayPage';
 import { isFeatureEnabled } from './config/featureFlags';
 import ErrorBoundary from './components/ErrorBoundary';
 
@@ -68,6 +69,7 @@ function App() {
                     <Routes>
                       <Route path="/" element={<Navigate to="/dashboard" replace />} />
                       <Route path="/dashboard" element={<RoleBasedDashboard />} />
+                      <Route path="/followups" element={<FollowupTodayPage />} />
                       <Route path="/leads" element={<LeadsPageEnhanced />} />
                       <Route path="/leads/:leadId" element={<LeadDetails />} />
                       <Route path="/pipeline" element={<DragDropPipeline />} />

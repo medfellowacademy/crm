@@ -267,3 +267,28 @@ ORDER BY table_name;
 
 SELECT 'Users seeded:' AS status;
 SELECT id, full_name, email, role FROM users ORDER BY id;
+
+-- ============================================================
+-- MIGRATIONS (run if tables already exist)
+-- ============================================================
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS loss_reason VARCHAR;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS loss_note TEXT;
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS lead_db_id INTEGER REFERENCES leads(id);
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS msg_type VARCHAR DEFAULT 'text';
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS media_url VARCHAR;
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS filename VARCHAR;
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS sender_name VARCHAR;
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS interakt_id VARCHAR;
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id SERIAL PRIMARY KEY,
+    lead_db_id INTEGER REFERENCES leads(id),
+    direction VARCHAR,
+    msg_type VARCHAR DEFAULT 'text',
+    content TEXT,
+    media_url VARCHAR,
+    filename VARCHAR,
+    sender_name VARCHAR,
+    timestamp TIMESTAMP DEFAULT NOW(),
+    status VARCHAR DEFAULT 'sent',
+    interakt_id VARCHAR
+);

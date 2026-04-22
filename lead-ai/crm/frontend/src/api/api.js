@@ -65,6 +65,9 @@ export const uploadAPI = {
 // Dashboard API
 export const dashboardAPI = {
   getStats: () => api.get('/api/dashboard/stats'),
+  getFollowupsToday: (assignedTo) =>
+    api.get('/api/leads/followups/today', assignedTo ? { params: { assigned_to: assignedTo } } : {}),
+  getNotifications: () => api.get('/api/notifications'),
 };
 
 // Analytics API
@@ -88,6 +91,7 @@ export const coursesAPI = {
 // Counselors API
 export const counselorsAPI = {
   getAll: () => api.get('/api/counselors'),
+  getPerformance: () => api.get('/api/counselors/performance'),
 };
 
 // Users API

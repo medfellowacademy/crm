@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { BarChart, Bar, PieChart, Pie, Cell, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { dashboardAPI, analyticsAPI, leadsAPI } from '../api/api';
+import CounselorPerformanceWidget from '../components/CounselorPerformanceWidget';
 
 const SEGMENT_COLORS = ['#ef4444', '#f59e0b', '#10b981', '#6b7280'];
 
@@ -331,4 +332,19 @@ const ProfessionalDashboard = () => {
   );
 };
 
-export default ProfessionalDashboard;
+const ProfessionalDashboardWithPerformance = (props) => {
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const showTeam = ['Super Admin', 'Manager', 'Team Leader'].includes(user.role);
+  return (
+    <>
+      <ProfessionalDashboard {...props} />
+      {showTeam && (
+        <div style={{ padding: '0 24px 24px' }}>
+          <CounselorPerformanceWidget />
+        </div>
+      )}
+    </>
+  );
+};
+
+export default ProfessionalDashboardWithPerformance;

@@ -360,6 +360,10 @@ class DBLead(Base):
     churn_risk = Column(Float, default=0)
     recommended_script = Column(Text, nullable=True)
     feature_importance = Column(Text, nullable=True)  # JSON string of feature importance
+
+    # Loss tracking
+    loss_reason = Column(String, nullable=True)   # Why lead was lost / not interested
+    loss_note = Column(Text, nullable=True)        # Free-text loss detail
     
     # Relationships
     notes = relationship("DBNote", back_populates="lead", cascade="all, delete-orphan")
@@ -505,6 +509,9 @@ class LeadUpdate(BaseModel):
     follow_up_date: Optional[datetime] = None
     assigned_to: Optional[str] = None
     actual_revenue: Optional[float] = None
+    next_action: Optional[str] = None
+    loss_reason: Optional[str] = None
+    loss_note: Optional[str] = None
 
 class LeadResponse(BaseModel):
     id: int
@@ -538,8 +545,10 @@ class LeadResponse(BaseModel):
     churn_risk: float
     recommended_script: Optional[str]
     feature_importance: Optional[dict] = None
+    loss_reason: Optional[str] = None
+    loss_note: Optional[str] = None
     notes: List[NoteResponse] = []
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 class HospitalCreate(BaseModel):
@@ -1458,13 +1467,157 @@ async def get_courses(
 
 @app.get("/api/notifications")
 async def get_notifications(db: Session = Depends(get_db)):
-    """Get smart notifications - returns empty list if not implemented"""
-    return []
+    """Real notifications: overdue follow-ups + stale hot leads"""
+    today = datetime.utcnow().date()
+    notifications = []
+
+    # Overdue follow-ups
+    overdue = (
+        db.query(DBLead)
+        .filter(
+            DBLead.follow_up_date < datetime.utcnow(),
+            DBLead.status.notin_(["Enrolled", "Not Interested", "Junk"]),
+        )
+        .order_by(DBLead.follow_up_date.asc())
+        .limit(20)
+        .all()
+    )
+    for lead in overdue:
+        days = (datetime.utcnow() - lead.follow_up_date).days if lead.follow_up_date else 0
+        notifications.append({
+            "type": "overdue_followup",
+            "severity": "error",
+            "title": f"Overdue follow-up — {lead.full_name}",
+            "message": f"{days} day{'s' if days != 1 else ''} overdue · {lead.course_interested or 'No course'} · {lead.assigned_to or 'Unassigned'}",
+            "lead_id": lead.id,
+            "lead_name": lead.full_name,
+        })
+
+    # Hot leads not contacted in 3+ days
+    three_days_ago = datetime.utcnow() - timedelta(days=3)
+    stale_hot = (
+        db.query(DBLead)
+        .filter(
+            DBLead.ai_segment == "Hot",
+            DBLead.status.notin_(["Enrolled", "Not Interested"]),
+            (DBLead.last_contact_date < three_days_ago) | (DBLead.last_contact_date == None),
+        )
+        .limit(10)
+        .all()
+    )
+    for lead in stale_hot:
+        notifications.append({
+            "type": "stale_hot_lead",
+            "severity": "warning",
+            "title": f"Hot lead going cold — {lead.full_name}",
+            "message": f"No contact in 3+ days · {lead.course_interested or 'No course'} · {lead.assigned_to or 'Unassigned'}",
+            "lead_id": lead.id,
+            "lead_name": lead.full_name,
+        })
+
+    # Follow-ups due today
+    due_today = (
+        db.query(DBLead)
+        .filter(
+            func.date(DBLead.follow_up_date) == today,
+            DBLead.status.notin_(["Enrolled", "Not Interested", "Junk"]),
+        )
+        .limit(20)
+        .all()
+    )
+    for lead in due_today:
+        notifications.append({
+            "type": "followup_today",
+            "severity": "info",
+            "title": f"Follow-up due today — {lead.full_name}",
+            "message": f"{lead.course_interested or 'No course'} · {lead.assigned_to or 'Unassigned'}",
+            "lead_id": lead.id,
+            "lead_name": lead.full_name,
+        })
+
+    return notifications
+
 
 @app.get("/api/audit-logs")
 async def get_audit_logs(page: int = 1, limit: int = 50, db: Session = Depends(get_db)):
-    """Get audit logs - returns empty list if not implemented"""
-    return {"logs": [], "total": 0, "page": page, "limit": limit}
+    """Get recent activity logs as audit trail"""
+    offset = (page - 1) * limit
+    activities = (
+        db.query(DBActivity)
+        .order_by(DBActivity.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    total = db.query(DBActivity).count()
+    logs = [
+        {
+            "id": a.id,
+            "lead_id": a.lead_id,
+            "action": a.activity_type,
+            "description": a.description,
+            "created_by": a.created_by,
+            "timestamp": a.created_at.isoformat() if a.created_at else None,
+        }
+        for a in activities
+    ]
+    return {"logs": logs, "total": total, "page": page, "limit": limit}
+
+
+@app.get("/api/leads/followups/today")
+async def get_followups_today(assigned_to: Optional[str] = None, db: Session = Depends(get_db)):
+    """All leads with follow_up_date = today + overdue, for the daily work view"""
+    today = datetime.utcnow().date()
+    active_statuses = ["Enrolled", "Not Interested", "Junk"]
+
+    base = db.query(DBLead).filter(DBLead.status.notin_(active_statuses))
+    if assigned_to:
+        base = base.filter(DBLead.assigned_to == assigned_to)
+
+    overdue = (
+        base.filter(
+            DBLead.follow_up_date != None,
+            func.date(DBLead.follow_up_date) < today,
+        )
+        .order_by(DBLead.follow_up_date.asc())
+        .all()
+    )
+
+    due_today = (
+        base.filter(
+            func.date(DBLead.follow_up_date) == today,
+        )
+        .order_by(DBLead.follow_up_date.asc())
+        .all()
+    )
+
+    def fmt(lead):
+        return {
+            "id": lead.id,
+            "lead_id": lead.lead_id,
+            "full_name": lead.full_name,
+            "phone": lead.phone,
+            "whatsapp": lead.whatsapp,
+            "course_interested": lead.course_interested,
+            "status": lead.status.value if hasattr(lead.status, 'value') else str(lead.status or ''),
+            "ai_segment": lead.ai_segment.value if hasattr(lead.ai_segment, 'value') else str(lead.ai_segment or ''),
+            "ai_score": round(lead.ai_score or 0, 1),
+            "assigned_to": lead.assigned_to,
+            "follow_up_date": lead.follow_up_date.isoformat() if lead.follow_up_date else None,
+            "last_contact_date": lead.last_contact_date.isoformat() if lead.last_contact_date else None,
+            "country": lead.country,
+            "next_action": lead.next_action,
+            "primary_objection": lead.primary_objection,
+            "churn_risk": round(lead.churn_risk or 0, 2),
+        }
+
+    return {
+        "overdue": [fmt(l) for l in overdue],
+        "today": [fmt(l) for l in due_today],
+        "overdue_count": len(overdue),
+        "today_count": len(due_today),
+    }
+
 
 @app.get("/api/dashboard/stats", response_model=DashboardStats)
 @cache_async_result(STATS_CACHE, "dashboard_stats")
@@ -1567,9 +1720,76 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
 @app.get("/api/counselors", response_model=List[CounselorResponse])
 async def get_counselors(db: Session = Depends(get_db)):
     """Get all counselors with performance"""
-    
     counselors = db.query(DBCounselor).filter(DBCounselor.is_active == True).all()
     return counselors
+
+
+@app.get("/api/counselors/performance")
+async def get_counselor_performance(db: Session = Depends(get_db)):
+    """Live counselor performance computed from leads table"""
+    from sqlalchemy import func as sqlfunc
+
+    today = datetime.utcnow().date()
+    now   = datetime.utcnow()
+
+    rows = (
+        db.query(
+            DBLead.assigned_to,
+            sqlfunc.count(DBLead.id).label("total_leads"),
+            sqlfunc.sum(
+                case((DBLead.status == "Enrolled", 1), else_=0)
+            ).label("enrolled"),
+            sqlfunc.sum(
+                case((DBLead.ai_segment == "Hot", 1), else_=0)
+            ).label("hot_leads"),
+            sqlfunc.sum(
+                case((DBLead.status == "Not Interested", 1), else_=0)
+            ).label("lost"),
+            sqlfunc.avg(DBLead.ai_score).label("avg_score"),
+            sqlfunc.sum(DBLead.actual_revenue).label("revenue"),
+            sqlfunc.sum(
+                case(
+                    (func.date(DBLead.follow_up_date) == today, 1),
+                    else_=0
+                )
+            ).label("followups_today"),
+            sqlfunc.sum(
+                case(
+                    (
+                        (DBLead.follow_up_date != None) &
+                        (DBLead.follow_up_date < now) &
+                        (DBLead.status.notin_(["Enrolled", "Not Interested", "Junk"])),
+                        1
+                    ),
+                    else_=0
+                )
+            ).label("overdue"),
+        )
+        .filter(DBLead.assigned_to != None)
+        .group_by(DBLead.assigned_to)
+        .all()
+    )
+
+    result = []
+    for r in rows:
+        total = r.total_leads or 0
+        enrolled = r.enrolled or 0
+        result.append({
+            "name": r.assigned_to,
+            "total_leads": total,
+            "enrolled": enrolled,
+            "hot_leads": r.hot_leads or 0,
+            "lost": r.lost or 0,
+            "conversion_rate": round((enrolled / total * 100), 1) if total > 0 else 0,
+            "avg_ai_score": round(r.avg_score or 0, 1),
+            "revenue": round(r.revenue or 0, 0),
+            "followups_today": r.followups_today or 0,
+            "overdue": r.overdue or 0,
+        })
+
+    # Sort by conversion rate desc
+    result.sort(key=lambda x: x["conversion_rate"], reverse=True)
+    return result
 
 # ============================================================================
 # USER MANAGEMENT ENDPOINTS
@@ -1727,7 +1947,6 @@ async def send_whatsapp(
         content=f"[WhatsApp {'Sent' if result['success'] else 'Failed'}] {request.message}",
         channel="whatsapp",
         created_by="System",
-        metadata=json.dumps(result)
     )
     db.add(note)
     db.commit()
@@ -1782,7 +2001,6 @@ async def send_email(
         content=f"[Email {'Sent' if result['success'] else 'Failed'}] Subject: {request.subject}\n\n{request.body}",
         channel="email",
         created_by="System",
-        metadata=json.dumps(result)
     )
     db.add(note)
     db.commit()
@@ -1825,10 +2043,9 @@ async def trigger_welcome(lead_id: str, db: Session = Depends(get_db)):
             content=f"[{result['channel'].title()} - Welcome Sequence] {'Sent' if result.get('success') else 'Failed'}",
             channel=result["channel"],
             created_by="System",
-            metadata=json.dumps(result)
         )
         db.add(note)
-    
+
     db.commit()
     
     return {
@@ -1869,10 +2086,9 @@ async def trigger_followup(
             content=f"[{result['channel'].title()} - Follow-up] {request.message}",
             channel=result["channel"],
             created_by="System",
-            metadata=json.dumps(result)
         )
         db.add(note)
-    
+
     db.commit()
     
     return {

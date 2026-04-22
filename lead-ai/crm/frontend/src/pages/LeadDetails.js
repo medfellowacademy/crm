@@ -46,8 +46,11 @@ const LeadDetails = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [noteForm] = Form.useForm();
+  const [lossForm] = Form.useForm();
   const [emailModal, setEmailModal] = useState(false);
   const [whatsappModal, setWhatsappModal] = useState(false);
+  const [lossModal, setLossModal] = useState(false);
+  const [pendingStatus, setPendingStatus] = useState(null);
 
   // Fetch lead details
   const { data: lead, isLoading } = useQuery({
@@ -99,7 +102,26 @@ const LeadDetails = () => {
   };
 
   const handleUpdateField = (field, value) => {
+    // Intercept status changes to loss statuses — show loss reason modal
+    if (field === 'status' && (value === 'Not Interested' || value === 'Junk')) {
+      setPendingStatus(value);
+      setLossModal(true);
+      return;
+    }
     updateLeadMutation.mutate({ [field]: value });
+  };
+
+  const handleLossSubmit = () => {
+    lossForm.validateFields().then(values => {
+      updateLeadMutation.mutate({
+        status: pendingStatus,
+        loss_reason: values.loss_reason,
+        loss_note: values.loss_note || '',
+      });
+      setLossModal(false);
+      lossForm.resetFields();
+      setPendingStatus(null);
+    });
   };
 
   if (isLoading) {
@@ -388,6 +410,14 @@ const LeadDetails = () => {
               </div>
             )}
 
+            {lead?.loss_reason && (
+              <div style={{ marginBottom: '16px', background: '#fff2f0', padding: '10px 12px', borderRadius: 6, borderLeft: '3px solid #f5222d' }}>
+                <div style={{ fontSize: '12px', color: '#f5222d', fontWeight: 600, marginBottom: 4 }}>Loss Reason</div>
+                <Tag color="red">{lead.loss_reason}</Tag>
+                {lead.loss_note && <div style={{ marginTop: 6, fontSize: 12, color: '#666' }}>{lead.loss_note}</div>}
+              </div>
+            )}
+
             <div style={{ marginBottom: '16px' }}>
               <div style={{ fontSize: '12px', color: '#8c8c8c', marginBottom: '4px' }}>Churn Risk</div>
               <Progress
@@ -504,6 +534,50 @@ const LeadDetails = () => {
           <Button type="primary" htmlType="submit" block>
             Send Email
           </Button>
+        </Form>
+      </Modal>
+
+      {/* Loss Reason Modal */}
+      <Modal
+        open={lossModal}
+        title={
+          <span>
+            <WarningOutlined style={{ color: '#f5222d', marginRight: 8 }} />
+            Why is this lead {pendingStatus}?
+          </span>
+        }
+        onCancel={() => { setLossModal(false); setPendingStatus(null); lossForm.resetFields(); }}
+        onOk={handleLossSubmit}
+        okText="Confirm & Save"
+        okButtonProps={{ danger: true }}
+        confirmLoading={updateLeadMutation.isPending}
+        width={460}
+      >
+        <div style={{ marginBottom: 12, color: '#666', fontSize: 13 }}>
+          Recording a reason helps the team learn what's not working and improve future outreach.
+        </div>
+        <Form form={lossForm} layout="vertical">
+          <Form.Item
+            name="loss_reason"
+            label="Reason"
+            rules={[{ required: true, message: 'Please select a reason' }]}
+          >
+            <Select placeholder="Select the main reason">
+              <Option value="Price too high">Price too high</Option>
+              <Option value="Went with competitor">Went with a competitor</Option>
+              <Option value="Not the right course">Not the right course</Option>
+              <Option value="Cannot take time off work">Cannot take time off work</Option>
+              <Option value="No response / Unreachable">No response / Unreachable</Option>
+              <Option value="Not eligible">Not eligible for the course</Option>
+              <Option value="Needs more time">Needs more time to decide</Option>
+              <Option value="Financial constraints">Financial constraints</Option>
+              <Option value="Already enrolled elsewhere">Already enrolled elsewhere</Option>
+              <Option value="Other">Other</Option>
+            </Select>
+          </Form.Item>
+          <Form.Item name="loss_note" label="Additional Notes (optional)">
+            <TextArea rows={3} placeholder="Any extra details about why this lead didn't convert..." />
+          </Form.Item>
         </Form>
       </Modal>
     </div>
