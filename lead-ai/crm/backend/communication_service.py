@@ -363,6 +363,57 @@ class InteraktWhatsAppService:
             except Exception as e:
                 return {"success": False, "error": str(e)}
 
+    async def send_media(
+        self,
+        to: str,
+        media_type: str,        # image | document | video | audio
+        url: str,
+        filename: Optional[str] = None,
+        caption: Optional[str] = None,
+        country_code: str = "+91"
+    ) -> Dict:
+        """Send an image, document, video, or audio file via Interakt"""
+        phone = to.replace(country_code, "").replace("+", "").strip()
+        type_map = {
+            "image": "Image",
+            "document": "Document",
+            "video": "Video",
+            "audio": "Audio",
+        }
+        interakt_type = type_map.get(media_type.lower(), "Document")
+
+        data: Dict = {"url": url}
+        if caption:
+            data["caption"] = caption
+        if filename and media_type.lower() == "document":
+            data["filename"] = filename
+
+        payload = {
+            "countryCode": country_code,
+            "phoneNumber": phone,
+            "callbackData": "crm_media",
+            "type": interakt_type,
+            "data": data,
+        }
+
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(
+                    self.base_url,
+                    headers={
+                        "Authorization": self.auth_header,
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+                resp_data = response.json()
+                if response.status_code == 200 and resp_data.get("result"):
+                    return {"success": True, "message_id": resp_data.get("id", ""), "provider": "interakt"}
+                else:
+                    return {"success": False, "error": resp_data.get("message", response.text)}
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+
     async def send_template_message(
         self,
         to: str,

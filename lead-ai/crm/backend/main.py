@@ -448,6 +448,21 @@ class DBUser(Base):
     # Self-referential relationship for hierarchy
     manager = relationship("DBUser", remote_side=[id], backref="team_members")
 
+class DBChatMessage(Base):
+    __tablename__ = "chat_messages"
+    id = Column(Integer, primary_key=True, index=True)
+    lead_db_id = Column(Integer, ForeignKey("leads.id"), index=True)
+    direction = Column(String)           # "outbound" | "inbound"
+    msg_type = Column(String, default="text")  # text | image | document | video | audio
+    content = Column(Text, nullable=True)      # text body or caption
+    media_url = Column(String, nullable=True)  # public URL for media
+    filename = Column(String, nullable=True)   # original filename (documents)
+    sender_name = Column(String, nullable=True)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    status = Column(String, default="sent")    # sent | failed | delivered | read
+    interakt_id = Column(String, nullable=True)
+
+
 # Create tables
 Base.metadata.create_all(bind=engine)
 
@@ -2705,6 +2720,196 @@ async def mark_as_training_data(
     except Exception as e:
         logger.error(f"Mark training error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# WHATSAPP LIVE CHAT (Interakt 2-way messaging)
+# ============================================================================
+
+from fastapi import UploadFile, File, Request as FARequest
+import uuid as _uuid
+
+class ChatSendRequest(BaseModel):
+    message: Optional[str] = None
+    msg_type: str = "text"          # text | image | document | video
+    media_url: Optional[str] = None # required for image/document/video
+    filename: Optional[str] = None  # for documents
+    sender_name: str = "CRM"
+    country_code: str = "+91"
+
+
+class ChatMessageResponse(BaseModel):
+    id: int
+    lead_db_id: int
+    direction: str
+    msg_type: str
+    content: Optional[str] = None
+    media_url: Optional[str] = None
+    filename: Optional[str] = None
+    sender_name: Optional[str] = None
+    timestamp: datetime
+    status: str
+    interakt_id: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+@app.get("/api/leads/{lead_id}/chat", response_model=List[ChatMessageResponse])
+async def get_chat_messages(lead_id: int, db: Session = Depends(get_db)):
+    """Get all WhatsApp chat messages for a lead"""
+    msgs = (
+        db.query(DBChatMessage)
+        .filter(DBChatMessage.lead_db_id == lead_id)
+        .order_by(DBChatMessage.timestamp.asc())
+        .all()
+    )
+    return msgs
+
+
+@app.post("/api/leads/{lead_id}/chat", response_model=ChatMessageResponse)
+async def send_chat_message(lead_id: int, req: ChatSendRequest, db: Session = Depends(get_db)):
+    """Send a WhatsApp message (text or media) to a lead via Interakt"""
+    lead = db.query(DBLead).filter(DBLead.id == lead_id).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    phone = lead.whatsapp or lead.phone
+    if not phone:
+        raise HTTPException(status_code=400, detail="Lead has no WhatsApp/phone number")
+
+    from communication_service import InteraktWhatsAppService
+    wa = InteraktWhatsAppService()
+
+    if req.msg_type == "text":
+        result = await wa.send_message(phone, req.message or "", req.country_code)
+    else:
+        result = await wa.send_media(
+            to=phone,
+            media_type=req.msg_type,
+            url=req.media_url or "",
+            filename=req.filename,
+            caption=req.message,
+            country_code=req.country_code,
+        )
+
+    msg = DBChatMessage(
+        lead_db_id=lead_id,
+        direction="outbound",
+        msg_type=req.msg_type,
+        content=req.message,
+        media_url=req.media_url,
+        filename=req.filename,
+        sender_name=req.sender_name,
+        status="sent" if result.get("success") else "failed",
+        interakt_id=result.get("message_id"),
+    )
+    db.add(msg)
+    db.commit()
+    db.refresh(msg)
+    return msg
+
+
+@app.post("/api/interakt/webhook")
+async def interakt_webhook(request: FARequest, db: Session = Depends(get_db)):
+    """Receive incoming WhatsApp messages from Interakt webhook"""
+    try:
+        payload = await request.json()
+    except Exception:
+        return {"status": "ok"}
+
+    try:
+        data = payload.get("data", {})
+        msg_data = data.get("message", {})
+        contact = data.get("contact", {})
+
+        wa_id = contact.get("wa_id", "") or msg_data.get("from", "")
+        sender_name = contact.get("profile", {}).get("name", wa_id)
+        msg_type_raw = msg_data.get("type", "text")
+        interakt_id = msg_data.get("id", "")
+
+        # Extract content
+        content = None
+        media_url = None
+        filename = None
+
+        if msg_type_raw == "text":
+            content = msg_data.get("text", {}).get("body", "")
+            msg_type = "text"
+        elif msg_type_raw == "image":
+            content = msg_data.get("image", {}).get("caption", "")
+            media_url = msg_data.get("image", {}).get("url", "")
+            msg_type = "image"
+        elif msg_type_raw == "document":
+            content = msg_data.get("document", {}).get("caption", "")
+            media_url = msg_data.get("document", {}).get("url", "")
+            filename = msg_data.get("document", {}).get("filename", "")
+            msg_type = "document"
+        elif msg_type_raw == "video":
+            content = msg_data.get("video", {}).get("caption", "")
+            media_url = msg_data.get("video", {}).get("url", "")
+            msg_type = "video"
+        elif msg_type_raw == "audio":
+            media_url = msg_data.get("audio", {}).get("url", "")
+            msg_type = "audio"
+        else:
+            content = str(msg_data)
+            msg_type = "text"
+
+        # Find lead by phone (try whatsapp field first, then phone)
+        normalized = wa_id.replace("+", "").strip()
+        lead = (
+            db.query(DBLead)
+            .filter(
+                (DBLead.whatsapp.contains(normalized[-10:])) |
+                (DBLead.phone.contains(normalized[-10:]))
+            )
+            .first()
+        )
+
+        if lead:
+            chat_msg = DBChatMessage(
+                lead_db_id=lead.id,
+                direction="inbound",
+                msg_type=msg_type,
+                content=content,
+                media_url=media_url,
+                filename=filename,
+                sender_name=sender_name,
+                status="received",
+                interakt_id=interakt_id,
+            )
+            db.add(chat_msg)
+            db.commit()
+
+    except Exception as e:
+        logger.error(f"Interakt webhook error: {e}")
+
+    return {"status": "ok"}
+
+
+@app.post("/api/upload")
+async def upload_file(file: UploadFile = File(...)):
+    """Upload a file to Supabase Storage and return its public URL"""
+    from supabase_client import supabase_manager
+
+    client = supabase_manager.client
+    if not client:
+        raise HTTPException(status_code=500, detail="Storage not available")
+
+    content = await file.read()
+    ext = file.filename.rsplit(".", 1)[-1] if "." in file.filename else "bin"
+    storage_path = f"chat/{_uuid.uuid4()}.{ext}"
+    bucket = "chat-media"
+
+    try:
+        client.storage.from_(bucket).upload(
+            storage_path,
+            content,
+            {"content-type": file.content_type or "application/octet-stream"}
+        )
+        public_url = client.storage.from_(bucket).get_public_url(storage_path)
+        return {"url": public_url, "filename": file.filename, "content_type": file.content_type}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 
 if __name__ == "__main__":

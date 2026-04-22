@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -15,8 +15,9 @@ import {
   StarOutlined, FireOutlined, ThunderboltOutlined, TeamOutlined,
   ClockCircleOutlined, SyncOutlined, ExportOutlined, ImportOutlined,
   CheckCircleOutlined, CloseCircleOutlined, UploadOutlined,
-  WarningOutlined, FunnelPlotOutlined,
+  WarningOutlined, FunnelPlotOutlined, MessageOutlined,
 } from '@ant-design/icons';
+import ChatDrawer from '../components/ChatDrawer';
 import { leadsAPI, coursesAPI, counselorsAPI, usersAPI } from '../api/api';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -129,6 +130,7 @@ const LeadsPageEnhanced = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
+  const [chatLead, setChatLead] = useState(null);
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [bulkDrawerVisible, setBulkDrawerVisible] = useState(false);
   const [filterDrawerVisible, setFilterDrawerVisible] = useState(false);
@@ -523,10 +525,18 @@ const LeadsPageEnhanced = () => {
       title: 'Actions',
       key: 'actions',
       fixed: 'right',
-      width: 100,
+      width: 120,
       render: (_, r) => (
         <Space>
           <Button type="primary" size="small" icon={<EyeOutlined />} onClick={() => navigate(`/leads/${r.lead_id}`)} />
+          <Tooltip title="WhatsApp Chat">
+            <Button
+              size="small"
+              icon={<MessageOutlined />}
+              style={{ background: '#25d366', borderColor: '#25d366', color: '#fff' }}
+              onClick={() => setChatLead(r)}
+            />
+          </Tooltip>
           <Dropdown overlay={getActionMenu(r)} trigger={['click']}>
             <Button size="small" icon={<MoreOutlined />} />
           </Dropdown>
@@ -969,6 +979,9 @@ const LeadsPageEnhanced = () => {
       </Drawer>
 
       <style>{`.overdue-row { background: #fff2f0 !important; }`}</style>
+
+      {/* WhatsApp Chat Drawer */}
+      <ChatDrawer lead={chatLead} onClose={() => setChatLead(null)} />
     </div>
   );
 };

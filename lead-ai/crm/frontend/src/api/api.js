@@ -47,6 +47,19 @@ export const leadsAPI = {
   // Communication
   sendWhatsApp: (leadId, message) => api.post(`/api/leads/${leadId}/send-whatsapp`, { message }),
   sendEmail: (leadId, subject, body) => api.post(`/api/leads/${leadId}/send-email`, { subject, body }),
+
+  // Live Chat
+  getChatMessages: (leadId) => api.get(`/api/leads/${leadId}/chat`),
+  sendChatMessage: (leadId, data) => api.post(`/api/leads/${leadId}/chat`, data),
+};
+
+// Upload API
+export const uploadAPI = {
+  uploadFile: (file) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post('/api/upload', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+  },
 };
 
 // Dashboard API
