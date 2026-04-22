@@ -1155,11 +1155,19 @@ async def get_leads(
     follow_up_to: Optional[datetime] = None,
     created_from: Optional[datetime] = None,
     created_to: Optional[datetime] = None,
+    created_on: Optional[str] = None,
+    created_after: Optional[datetime] = None,
+    created_before: Optional[datetime] = None,
+    updated_from: Optional[datetime] = None,
+    updated_to: Optional[datetime] = None,
+    updated_on: Optional[str] = None,
+    updated_after: Optional[datetime] = None,
+    updated_before: Optional[datetime] = None,
     search: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
     """Get leads with filters"""
-    
+
     # Use Supabase REST API if available
     if supabase_data.client:
         # Use Supabase REST API
@@ -1177,10 +1185,10 @@ async def get_leads(
             return leads_data
         except Exception as e:
             logger.error(f"Supabase query failed, falling back to SQLAlchemy: {e}")
-    
+
     # Fallback to SQLAlchemy
     query = db.query(DBLead)
-    
+
     # Apply filters
     if status:
         query = query.filter(DBLead.status == status)
@@ -1194,10 +1202,39 @@ async def get_leads(
         query = query.filter(DBLead.follow_up_date >= follow_up_from)
     if follow_up_to:
         query = query.filter(DBLead.follow_up_date <= follow_up_to)
-    if created_from:
+
+    # Created date filters
+    if created_on:
+        # On specific date (YYYY-MM-DD)
+        from sqlalchemy import func, cast, Date
+        query = query.filter(cast(DBLead.created_at, Date) == created_on)
+    elif created_from and created_to:
+        # Between two dates
         query = query.filter(DBLead.created_at >= created_from)
-    if created_to:
         query = query.filter(DBLead.created_at <= created_to)
+    elif created_after:
+        # After specific date
+        query = query.filter(DBLead.created_at > created_after)
+    elif created_before:
+        # Before specific date
+        query = query.filter(DBLead.created_at < created_before)
+
+    # Updated date filters
+    if updated_on:
+        # On specific date (YYYY-MM-DD)
+        from sqlalchemy import func, cast, Date
+        query = query.filter(cast(DBLead.updated_at, Date) == updated_on)
+    elif updated_from and updated_to:
+        # Between two dates
+        query = query.filter(DBLead.updated_at >= updated_from)
+        query = query.filter(DBLead.updated_at <= updated_to)
+    elif updated_after:
+        # After specific date
+        query = query.filter(DBLead.updated_at > updated_after)
+    elif updated_before:
+        # Before specific date
+        query = query.filter(DBLead.updated_at < updated_before)
+
     if search:
         search_pattern = f"%{search}%"
         query = query.filter(
@@ -1205,18 +1242,18 @@ async def get_leads(
             (DBLead.phone.ilike(search_pattern)) |
             (DBLead.email.ilike(search_pattern))
         )
-    
+
     # Order by priority and follow-up date
     query = query.order_by(DBLead.ai_score.desc(), DBLead.follow_up_date.asc())
-    
+
     # Fix N+1 queries: Eager load relationships
     query = query.options(
         joinedload(DBLead.notes)
     )
-    
+
     # Get total count for pagination (before offset/limit)
     total_count = query.count()
-    
+
     leads = query.offset(skip).limit(limit).all()
     return {
         "leads": leads,

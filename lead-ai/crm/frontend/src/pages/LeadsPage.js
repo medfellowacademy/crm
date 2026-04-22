@@ -46,6 +46,10 @@ const LeadsPage = () => {
   const [filterDrawerVisible, setFilterDrawerVisible] = useState(false);
   const [filters, setFilters] = useState({});
   const [form] = Form.useForm();
+
+  // Date filter states
+  const [createdDateType, setCreatedDateType] = useState('between');
+  const [updatedDateType, setUpdatedDateType] = useState('between');
   
   // Communication modals
   const [chatVisible, setChatVisible] = useState(false);
@@ -650,19 +654,113 @@ const LeadsPage = () => {
           </div>
 
           <div>
-            <div style={{ marginBottom: '8px', fontWeight: 500 }}>Created Date Range</div>
-            <RangePicker
-              style={{ width: '100%' }}
-              onChange={(dates) => {
-                if (dates) {
-                  handleFilter('created_from', dates[0].toISOString());
-                  handleFilter('created_to', dates[1].toISOString());
-                } else {
-                  handleFilter('created_from', undefined);
-                  handleFilter('created_to', undefined);
-                }
+            <div style={{ marginBottom: '8px', fontWeight: 500 }}>Created Date</div>
+            <Select
+              style={{ width: '100%', marginBottom: '8px' }}
+              placeholder="Select filter type"
+              value={createdDateType}
+              onChange={(value) => {
+                setCreatedDateType(value);
+                // Clear filters when type changes
+                handleFilter('created_on', undefined);
+                handleFilter('created_after', undefined);
+                handleFilter('created_before', undefined);
+                handleFilter('created_from', undefined);
+                handleFilter('created_to', undefined);
               }}
-            />
+            >
+              <Option value="on">On</Option>
+              <Option value="after">After</Option>
+              <Option value="before">Before</Option>
+              <Option value="between">Between</Option>
+            </Select>
+
+            {createdDateType === 'between' ? (
+              <RangePicker
+                style={{ width: '100%' }}
+                onChange={(dates) => {
+                  if (dates) {
+                    handleFilter('created_from', dates[0].toISOString());
+                    handleFilter('created_to', dates[1].toISOString());
+                  } else {
+                    handleFilter('created_from', undefined);
+                    handleFilter('created_to', undefined);
+                  }
+                }}
+              />
+            ) : (
+              <DatePicker
+                style={{ width: '100%' }}
+                onChange={(date) => {
+                  if (date) {
+                    if (createdDateType === 'on') {
+                      handleFilter('created_on', date.format('YYYY-MM-DD'));
+                    } else if (createdDateType === 'after') {
+                      handleFilter('created_after', date.toISOString());
+                    } else if (createdDateType === 'before') {
+                      handleFilter('created_before', date.toISOString());
+                    }
+                  } else {
+                    handleFilter(`created_${createdDateType}`, undefined);
+                  }
+                }}
+              />
+            )}
+          </div>
+
+          <div>
+            <div style={{ marginBottom: '8px', fontWeight: 500 }}>Updated Date</div>
+            <Select
+              style={{ width: '100%', marginBottom: '8px' }}
+              placeholder="Select filter type"
+              value={updatedDateType}
+              onChange={(value) => {
+                setUpdatedDateType(value);
+                // Clear filters when type changes
+                handleFilter('updated_on', undefined);
+                handleFilter('updated_after', undefined);
+                handleFilter('updated_before', undefined);
+                handleFilter('updated_from', undefined);
+                handleFilter('updated_to', undefined);
+              }}
+            >
+              <Option value="on">On</Option>
+              <Option value="after">After</Option>
+              <Option value="before">Before</Option>
+              <Option value="between">Between</Option>
+            </Select>
+
+            {updatedDateType === 'between' ? (
+              <RangePicker
+                style={{ width: '100%' }}
+                onChange={(dates) => {
+                  if (dates) {
+                    handleFilter('updated_from', dates[0].toISOString());
+                    handleFilter('updated_to', dates[1].toISOString());
+                  } else {
+                    handleFilter('updated_from', undefined);
+                    handleFilter('updated_to', undefined);
+                  }
+                }}
+              />
+            ) : (
+              <DatePicker
+                style={{ width: '100%' }}
+                onChange={(date) => {
+                  if (date) {
+                    if (updatedDateType === 'on') {
+                      handleFilter('updated_on', date.format('YYYY-MM-DD'));
+                    } else if (updatedDateType === 'after') {
+                      handleFilter('updated_after', date.toISOString());
+                    } else if (updatedDateType === 'before') {
+                      handleFilter('updated_before', date.toISOString());
+                    }
+                  } else {
+                    handleFilter(`updated_${updatedDateType}`, undefined);
+                  }
+                }}
+              />
+            )}
           </div>
 
           <div>
