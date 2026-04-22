@@ -1229,22 +1229,40 @@ async def get_leads(
 @app.get("/api/leads/{lead_id}")
 async def get_lead(lead_id: str, db: Session = Depends(get_db)):
     """Get single lead by ID"""
-    
+    from sqlalchemy.orm import joinedload
+
     # Use Supabase REST API if available
     if supabase_data.client:
         try:
             lead = supabase_data.get_lead_by_id(lead_id)
             if not lead:
                 raise HTTPException(status_code=404, detail="Lead not found")
+
+            # Fetch notes separately from database
+            db_lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
+            if db_lead:
+                lead['notes'] = [
+                    {
+                        'id': note.id,
+                        'content': note.content,
+                        'created_at': note.created_at.isoformat() if note.created_at else None,
+                        'created_by': note.created_by,
+                        'channel': note.channel
+                    }
+                    for note in db_lead.notes
+                ]
+            else:
+                lead['notes'] = []
+
             return lead
         except Exception as e:
             logger.error(f"Supabase query failed: {e}")
-    
-    # Fallback to SQLAlchemy
-    lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
+
+    # Fallback to SQLAlchemy with eager loading of notes
+    lead = db.query(DBLead).options(joinedload(DBLead.notes)).filter(DBLead.lead_id == lead_id).first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
-    
+
     return lead
 
 @app.put("/api/leads/{lead_id}")
@@ -1385,12 +1403,99 @@ async def add_note(lead_id: str, note: NoteCreate, db: Session = Depends(get_db)
 @app.get("/api/leads/{lead_id}/notes", response_model=List[NoteResponse])
 async def get_notes(lead_id: str, db: Session = Depends(get_db)):
     """Get all notes for a lead"""
-    
+
     lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
-    
+
     return lead.notes
+
+
+@app.get("/api/leads/{lead_id}/activities")
+async def get_lead_activities(lead_id: str, type: Optional[str] = None, db: Session = Depends(get_db)):
+    """Get activity timeline for a lead (notes, communications, status changes)"""
+    lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    activities = []
+
+    # Get notes as activities
+    for note in lead.notes:
+        activities.append({
+            "id": f"note-{note.id}",
+            "type": "note",
+            "title": "Note Added",
+            "description": note.content,
+            "timestamp": note.created_at.isoformat() if note.created_at else None,
+            "user": note.created_by or "System",
+            "metadata": {}
+        })
+
+    # Get chat messages as activities
+    chat_messages = db.query(DBChatMessage).filter(DBChatMessage.lead_db_id == lead.id).all()
+    for msg in chat_messages:
+        activities.append({
+            "id": f"chat-{msg.id}",
+            "type": "communication",
+            "title": f"WhatsApp {'Sent' if msg.direction == 'outbound' else 'Received'}",
+            "description": msg.content or f"{msg.msg_type} message",
+            "timestamp": msg.timestamp.isoformat() if msg.timestamp else None,
+            "user": msg.sender_name or "System",
+            "metadata": {
+                "direction": msg.direction,
+                "msg_type": msg.msg_type,
+                "status": msg.status
+            }
+        })
+
+    # Sort by timestamp desc
+    activities.sort(key=lambda x: x["timestamp"] or "", reverse=True)
+
+    # Filter by type if specified
+    if type and type != "all":
+        activities = [a for a in activities if a["type"] == type]
+
+    return activities
+
+
+@app.get("/api/leads/{lead_id}/ai-summary")
+async def get_lead_ai_summary(lead_id: str, db: Session = Depends(get_db)):
+    """Get AI-generated summary and insights for a lead"""
+    lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    # Generate basic summary from lead data
+    summary = {
+        "lead_id": lead.lead_id,
+        "summary": f"{lead.full_name} is interested in {lead.course_interested}. Currently in {lead.status} status.",
+        "key_insights": [
+            f"AI Score: {lead.ai_score}/100 - {lead.ai_segment} segment",
+            f"Conversion Probability: {int(lead.conversion_probability * 100)}%",
+            f"Expected Revenue: ₹{int(lead.expected_revenue):,}"
+        ],
+        "recommendations": [],
+        "next_best_action": lead.next_action or "Schedule follow-up call",
+        "urgency": lead.priority_level or "Medium",
+        "sentiment": "positive" if lead.ai_score > 70 else "neutral" if lead.ai_score > 40 else "negative"
+    }
+
+    # Add recommendations based on status and score
+    if lead.ai_segment == "HOT":
+        summary["recommendations"].append("🔥 High priority - Contact immediately")
+        summary["recommendations"].append("💰 High conversion probability - Focus on closing")
+    elif lead.ai_segment == "WARM":
+        summary["recommendations"].append("📞 Schedule follow-up within 24 hours")
+        summary["recommendations"].append("📧 Send course details and testimonials")
+    else:
+        summary["recommendations"].append("📅 Schedule follow-up for next week")
+        summary["recommendations"].append("🎯 Work on building interest")
+
+    if lead.follow_up_date and lead.follow_up_date < datetime.utcnow():
+        summary["recommendations"].insert(0, "⚠️ Follow-up overdue - Contact ASAP")
+
+    return summary
 
 # ============================================================================
 # API ENDPOINTS - HOSPITALS
@@ -1719,8 +1824,36 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
 
 @app.get("/api/counselors", response_model=List[CounselorResponse])
 async def get_counselors(db: Session = Depends(get_db)):
-    """Get all counselors with performance"""
-    counselors = db.query(DBCounselor).filter(DBCounselor.is_active == True).all()
+    """Get all counselors from users table"""
+    # Query users table instead of legacy counselors table
+    users = db.query(DBUser).filter(
+        DBUser.role.in_(["Counselor", "Team Leader", "Manager"]),
+        DBUser.is_active == True
+    ).all()
+
+    # Convert users to counselor format
+    counselors = []
+    for user in users:
+        # Calculate stats from leads
+        total_leads = db.query(DBLead).filter(DBLead.assigned_to == user.full_name).count()
+        total_conversions = db.query(DBLead).filter(
+            DBLead.assigned_to == user.full_name,
+            DBLead.status == LeadStatus.ENROLLED
+        ).count()
+
+        counselors.append({
+            "id": user.id,
+            "name": user.full_name,
+            "email": user.email,
+            "phone": user.phone or "",
+            "is_active": user.is_active,
+            "specialization": user.role,
+            "total_leads": total_leads,
+            "total_conversions": total_conversions,
+            "conversion_rate": (total_conversions / total_leads * 100) if total_leads > 0 else 0,
+            "created_at": user.created_at
+        })
+
     return counselors
 
 
