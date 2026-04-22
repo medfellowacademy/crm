@@ -183,6 +183,80 @@ ON CONFLICT (id) DO NOTHING;
 SELECT setval('users_id_seq', (SELECT MAX(id) FROM users));
 
 -- ============================================================
+-- SEED COURSES (46 online fellowships from medfellowacademy.com)
+-- ============================================================
+INSERT INTO courses (course_name, category, duration, price, currency, is_active)
+VALUES
+-- Cardiology
+('Fellowship in Cardiology',                       'Cardiology',               '1 Year',   450000, 'INR', TRUE),
+('Fellowship in Clinical Cardiology',               'Cardiology',               '6 Months', 350000, 'INR', TRUE),
+('Fellowship in Interventional Cardiology',         'Cardiology',               '1 Year',   500000, 'INR', TRUE),
+('Fellowship in 2D Echocardiography',               'Cardiology',               '3 Months', 150000, 'INR', TRUE),
+('Fellowship in Pediatric Echocardiography',        'Cardiology',               '3 Months', 150000, 'INR', TRUE),
+('Fellowship in Cardiothoracic Surgery',            'Surgery',                  '1 Year',   600000, 'INR', TRUE),
+-- Emergency & Critical Care
+('Fellowship in Emergency Medicine',                'Emergency Medicine',        '1 Year',   400000, 'INR', TRUE),
+('Fellowship in Critical Care Medicine',            'Critical Care',             '1 Year',   450000, 'INR', TRUE),
+-- Gynecology & Obstetrics
+('Fellowship in Gynecology & Obstetrics',           'Gynecology & Obstetrics',  '1 Year',   400000, 'INR', TRUE),
+('Fellowship in High-Risk Pregnancy',               'Gynecology & Obstetrics',  '6 Months', 300000, 'INR', TRUE),
+('Fellowship in Fetal Medicine',                    'Gynecology & Obstetrics',  '6 Months', 350000, 'INR', TRUE),
+('Fellowship in Cosmetic Gynecology',               'Gynecology & Obstetrics',  '3 Months', 200000, 'INR', TRUE),
+('Fellowship in Laparoscopy & Hysteroscopy',        'Gynecology & Obstetrics',  '6 Months', 300000, 'INR', TRUE),
+('Fellowship in Reproductive Medicine',             'Gynecology & Obstetrics',  '6 Months', 350000, 'INR', TRUE),
+-- Dental & Oral Surgery
+('Fellowship in Maxillofacial and Oral Surgery',    'Dental & Oral Surgery',    '1 Year',   350000, 'INR', TRUE),
+('Fellowship in Oral Implantology and Laser Dentistry', 'Dental & Oral Surgery','6 Months', 250000, 'INR', TRUE),
+-- Endocrinology & Diabetes
+('Fellowship in Diabetes Mellitus',                 'Endocrinology',            '6 Months', 250000, 'INR', TRUE),
+('Fellowship in Endocrinology',                     'Endocrinology',            '1 Year',   400000, 'INR', TRUE),
+('Fellowship in Pediatric Endocrinology',           'Pediatrics',               '6 Months', 300000, 'INR', TRUE),
+-- Orthopedics
+('Fellowship in Orthopedics',                       'Orthopedics',              '1 Year',   400000, 'INR', TRUE),
+('Fellowship in Arthroscopy',                       'Orthopedics',              '6 Months', 300000, 'INR', TRUE),
+('Fellowship in Arthroscopy and Arthroplasty',      'Orthopedics',              '1 Year',   450000, 'INR', TRUE),
+-- Pediatrics
+('Fellowship in Pediatrics',                        'Pediatrics',               '1 Year',   350000, 'INR', TRUE),
+('Fellowship in Neonatology',                       'Pediatrics',               '6 Months', 300000, 'INR', TRUE),
+('Fellowship in Pediatric Neurology',               'Pediatrics',               '1 Year',   400000, 'INR', TRUE),
+-- Surgery
+('Fellowship in General Surgery (1 Year)',          'Surgery',                  '1 Year',   400000, 'INR', TRUE),
+('Fellowship in Minimal Access & Robotic Surgery',  'Surgery',                  '1 Year',   500000, 'INR', TRUE),
+-- Oncology
+('Fellowship in Medical Oncology',                  'Oncology',                 '1 Year',   500000, 'INR', TRUE),
+('Fellowship in Head & Neck Oncology',              'Oncology',                 '1 Year',   450000, 'INR', TRUE),
+-- Neurology
+('Fellowship in Clinical Neurology',                'Neurology',                '1 Year',   400000, 'INR', TRUE),
+-- Gastroenterology
+('Fellowship in Gastroenterology',                  'Gastroenterology',         '1 Year',   450000, 'INR', TRUE),
+-- Nephrology
+('Fellowship in Nephrology',                        'Nephrology',               '1 Year',   400000, 'INR', TRUE),
+-- Urology
+('Fellowship in Urology',                           'Urology',                  '1 Year',   450000, 'INR', TRUE),
+-- Pulmonology
+('Fellowship in Respiratory Medicine',              'Pulmonology',              '1 Year',   350000, 'INR', TRUE),
+-- Anesthesiology
+('Fellowship in Anesthesia',                        'Anesthesiology',           '1 Year',   400000, 'INR', TRUE),
+('Fellowship in Pain Management',                   'Anesthesiology',           '6 Months', 250000, 'INR', TRUE),
+-- Radiology
+('Fellowship in Radiology',                         'Radiology',                '1 Year',   400000, 'INR', TRUE),
+('Fellowship in Interventional Radiology',          'Radiology',                '1 Year',   450000, 'INR', TRUE),
+-- Dermatology & Aesthetics
+('Fellowship in Dermatology',                       'Dermatology & Aesthetics', '6 Months', 300000, 'INR', TRUE),
+('Fellowship in Cosmetic & Aesthetic Medicine',     'Dermatology & Aesthetics', '6 Months', 300000, 'INR', TRUE),
+('Fellowship in Trichology',                        'Dermatology & Aesthetics', '3 Months', 150000, 'INR', TRUE),
+-- Psychiatry
+('Fellowship in Psychiatric Medicine',              'Psychiatry',               '1 Year',   350000, 'INR', TRUE),
+-- Rheumatology
+('Fellowship in Rheumatology',                      'Rheumatology',             '1 Year',   400000, 'INR', TRUE),
+-- Internal & Family Medicine
+('Fellowship in Internal Medicine',                 'Internal Medicine',        '1 Year',   350000, 'INR', TRUE),
+('Fellowship in Family Medicine',                   'Family Medicine',          '1 Year',   300000, 'INR', TRUE),
+-- Haematology
+('Fellowship in Clinical Haematology',              'Haematology',              '1 Year',   400000, 'INR', TRUE)
+ON CONFLICT DO NOTHING;
+
+-- ============================================================
 -- VERIFY
 -- ============================================================
 SELECT 'Tables created:' AS status;

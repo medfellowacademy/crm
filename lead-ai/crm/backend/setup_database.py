@@ -192,6 +192,77 @@ USERS = [
 ]
 
 
+COURSES = [
+    # --- Cardiology ---
+    {"course_name": "Fellowship in Cardiology",                    "category": "Cardiology",               "duration": "1 Year",   "price": 450000},
+    {"course_name": "Fellowship in Clinical Cardiology",           "category": "Cardiology",               "duration": "6 Months", "price": 350000},
+    {"course_name": "Fellowship in Interventional Cardiology",     "category": "Cardiology",               "duration": "1 Year",   "price": 500000},
+    {"course_name": "Fellowship in 2D Echocardiography",           "category": "Cardiology",               "duration": "3 Months", "price": 150000},
+    {"course_name": "Fellowship in Pediatric Echocardiography",    "category": "Cardiology",               "duration": "3 Months", "price": 150000},
+    {"course_name": "Fellowship in Cardiothoracic Surgery",        "category": "Surgery",                  "duration": "1 Year",   "price": 600000},
+    # --- Emergency & Critical Care ---
+    {"course_name": "Fellowship in Emergency Medicine",            "category": "Emergency Medicine",       "duration": "1 Year",   "price": 400000},
+    {"course_name": "Fellowship in Critical Care Medicine",        "category": "Critical Care",            "duration": "1 Year",   "price": 450000},
+    # --- Gynecology & Obstetrics ---
+    {"course_name": "Fellowship in Gynecology & Obstetrics",       "category": "Gynecology & Obstetrics",  "duration": "1 Year",   "price": 400000},
+    {"course_name": "Fellowship in High-Risk Pregnancy",           "category": "Gynecology & Obstetrics",  "duration": "6 Months", "price": 300000},
+    {"course_name": "Fellowship in Fetal Medicine",                "category": "Gynecology & Obstetrics",  "duration": "6 Months", "price": 350000},
+    {"course_name": "Fellowship in Cosmetic Gynecology",           "category": "Gynecology & Obstetrics",  "duration": "3 Months", "price": 200000},
+    {"course_name": "Fellowship in Laparoscopy & Hysteroscopy",    "category": "Gynecology & Obstetrics",  "duration": "6 Months", "price": 300000},
+    {"course_name": "Fellowship in Reproductive Medicine",         "category": "Gynecology & Obstetrics",  "duration": "6 Months", "price": 350000},
+    # --- Dental & Oral Surgery ---
+    {"course_name": "Fellowship in Maxillofacial and Oral Surgery","category": "Dental & Oral Surgery",    "duration": "1 Year",   "price": 350000},
+    {"course_name": "Fellowship in Oral Implantology and Laser Dentistry", "category": "Dental & Oral Surgery", "duration": "6 Months", "price": 250000},
+    # --- Endocrinology & Diabetes ---
+    {"course_name": "Fellowship in Diabetes Mellitus",             "category": "Endocrinology",            "duration": "6 Months", "price": 250000},
+    {"course_name": "Fellowship in Endocrinology",                 "category": "Endocrinology",            "duration": "1 Year",   "price": 400000},
+    {"course_name": "Fellowship in Pediatric Endocrinology",       "category": "Pediatrics",               "duration": "6 Months", "price": 300000},
+    # --- Orthopedics ---
+    {"course_name": "Fellowship in Orthopedics",                   "category": "Orthopedics",              "duration": "1 Year",   "price": 400000},
+    {"course_name": "Fellowship in Arthroscopy",                   "category": "Orthopedics",              "duration": "6 Months", "price": 300000},
+    {"course_name": "Fellowship in Arthroscopy and Arthroplasty",  "category": "Orthopedics",              "duration": "1 Year",   "price": 450000},
+    # --- Pediatrics ---
+    {"course_name": "Fellowship in Pediatrics",                    "category": "Pediatrics",               "duration": "1 Year",   "price": 350000},
+    {"course_name": "Fellowship in Neonatology",                   "category": "Pediatrics",               "duration": "6 Months", "price": 300000},
+    {"course_name": "Fellowship in Pediatric Neurology",           "category": "Pediatrics",               "duration": "1 Year",   "price": 400000},
+    # --- Surgery ---
+    {"course_name": "Fellowship in General Surgery (1 Year)",      "category": "Surgery",                  "duration": "1 Year",   "price": 400000},
+    {"course_name": "Fellowship in Minimal Access & Robotic Surgery","category": "Surgery",                "duration": "1 Year",   "price": 500000},
+    # --- Oncology ---
+    {"course_name": "Fellowship in Medical Oncology",              "category": "Oncology",                 "duration": "1 Year",   "price": 500000},
+    {"course_name": "Fellowship in Head & Neck Oncology",          "category": "Oncology",                 "duration": "1 Year",   "price": 450000},
+    # --- Neurology ---
+    {"course_name": "Fellowship in Clinical Neurology",            "category": "Neurology",                "duration": "1 Year",   "price": 400000},
+    # --- Gastroenterology ---
+    {"course_name": "Fellowship in Gastroenterology",              "category": "Gastroenterology",         "duration": "1 Year",   "price": 450000},
+    # --- Nephrology ---
+    {"course_name": "Fellowship in Nephrology",                    "category": "Nephrology",               "duration": "1 Year",   "price": 400000},
+    # --- Urology ---
+    {"course_name": "Fellowship in Urology",                       "category": "Urology",                  "duration": "1 Year",   "price": 450000},
+    # --- Pulmonology ---
+    {"course_name": "Fellowship in Respiratory Medicine",          "category": "Pulmonology",              "duration": "1 Year",   "price": 350000},
+    # --- Anesthesiology ---
+    {"course_name": "Fellowship in Anesthesia",                    "category": "Anesthesiology",           "duration": "1 Year",   "price": 400000},
+    {"course_name": "Fellowship in Pain Management",               "category": "Anesthesiology",           "duration": "6 Months", "price": 250000},
+    # --- Radiology ---
+    {"course_name": "Fellowship in Radiology",                     "category": "Radiology",                "duration": "1 Year",   "price": 400000},
+    {"course_name": "Fellowship in Interventional Radiology",      "category": "Radiology",                "duration": "1 Year",   "price": 450000},
+    # --- Dermatology & Aesthetics ---
+    {"course_name": "Fellowship in Dermatology",                   "category": "Dermatology & Aesthetics", "duration": "6 Months", "price": 300000},
+    {"course_name": "Fellowship in Cosmetic & Aesthetic Medicine", "category": "Dermatology & Aesthetics", "duration": "6 Months", "price": 300000},
+    {"course_name": "Fellowship in Trichology",                    "category": "Dermatology & Aesthetics", "duration": "3 Months", "price": 150000},
+    # --- Psychiatry ---
+    {"course_name": "Fellowship in Psychiatric Medicine",          "category": "Psychiatry",               "duration": "1 Year",   "price": 350000},
+    # --- Rheumatology ---
+    {"course_name": "Fellowship in Rheumatology",                  "category": "Rheumatology",             "duration": "1 Year",   "price": 400000},
+    # --- Internal & Family Medicine ---
+    {"course_name": "Fellowship in Internal Medicine",             "category": "Internal Medicine",        "duration": "1 Year",   "price": 350000},
+    {"course_name": "Fellowship in Family Medicine",               "category": "Family Medicine",          "duration": "1 Year",   "price": 300000},
+    # --- Haematology ---
+    {"course_name": "Fellowship in Clinical Haematology",          "category": "Haematology",              "duration": "1 Year",   "price": 400000},
+]
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 def main():
     print("\n📦 Creating all tables...")
@@ -230,6 +301,24 @@ def main():
         print("  Manager     : michael.chen@crm.com   / manager123")
         print("  Team Leader : david.martinez@crm.com / leader123")
         print("  Counselor   : james.wilson@crm.com   / counselor123")
+
+        # Seed courses
+        existing_courses = db.query(DBCourse).count()
+        if existing_courses > 0:
+            print(f"\n⚠️  Courses table already has {existing_courses} records — skipping seed.")
+        else:
+            print("\n📚 Seeding courses...")
+            for c in COURSES:
+                db.add(DBCourse(
+                    course_name=c["course_name"],
+                    category=c["category"],
+                    duration=c["duration"],
+                    price=c["price"],
+                    currency="INR",
+                    is_active=True,
+                ))
+            db.commit()
+            print(f"✅ {len(COURSES)} courses seeded!")
 
     except Exception as e:
         db.rollback()

@@ -119,12 +119,30 @@ const CoursesPage = () => {
           </Form.Item>
 
           <Form.Item name="category" label="Category" rules={[{ required: true }]}>
-            <Select placeholder="Select category">
-              <Option value="Emergency Medicine">Emergency Medicine</Option>
-              <Option value="Critical Care">Critical Care</Option>
-              <Option value="Pediatrics">Pediatrics</Option>
-              <Option value="Cardiology">Cardiology</Option>
+            <Select placeholder="Select category" showSearch>
               <Option value="Anesthesiology">Anesthesiology</Option>
+              <Option value="Cardiology">Cardiology</Option>
+              <Option value="Critical Care">Critical Care</Option>
+              <Option value="Dental & Oral Surgery">Dental & Oral Surgery</Option>
+              <Option value="Dermatology & Aesthetics">Dermatology & Aesthetics</Option>
+              <Option value="Emergency Medicine">Emergency Medicine</Option>
+              <Option value="Endocrinology">Endocrinology</Option>
+              <Option value="Family Medicine">Family Medicine</Option>
+              <Option value="Gastroenterology">Gastroenterology</Option>
+              <Option value="Gynecology & Obstetrics">Gynecology & Obstetrics</Option>
+              <Option value="Haematology">Haematology</Option>
+              <Option value="Internal Medicine">Internal Medicine</Option>
+              <Option value="Nephrology">Nephrology</Option>
+              <Option value="Neurology">Neurology</Option>
+              <Option value="Oncology">Oncology</Option>
+              <Option value="Orthopedics">Orthopedics</Option>
+              <Option value="Pediatrics">Pediatrics</Option>
+              <Option value="Psychiatry">Psychiatry</Option>
+              <Option value="Pulmonology">Pulmonology</Option>
+              <Option value="Radiology">Radiology</Option>
+              <Option value="Rheumatology">Rheumatology</Option>
+              <Option value="Surgery">Surgery</Option>
+              <Option value="Urology">Urology</Option>
             </Select>
           </Form.Item>
 

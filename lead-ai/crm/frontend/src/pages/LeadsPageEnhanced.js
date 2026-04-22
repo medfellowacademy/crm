@@ -175,7 +175,10 @@ const LeadsPageEnhanced = () => {
   // ── Computed filter options ────────────────────────────────────────────────
   const uniqueStatuses   = [...new Set(leads.map(l => l.status))].filter(Boolean).sort();
   const uniqueCountries  = [...new Set(leads.map(l => l.country))].filter(Boolean).sort();
-  const uniqueCourses    = [...new Set(leads.map(l => l.course_interested))].filter(Boolean).sort();
+  const uniqueCourses    = [...new Set([
+    ...courses.map(c => c.course_name),
+    ...leads.map(l => l.course_interested),
+  ])].filter(Boolean).sort();
   const uniqueAssigned   = [...new Set(leads.map(l => l.assigned_to))].filter(Boolean).sort();
   const uniqueSources    = [...new Set(leads.map(l => l.source))].filter(Boolean).sort();
   const uniqueSegments   = ['Hot', 'Warm', 'Cold', 'Junk'];
