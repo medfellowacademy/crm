@@ -1003,13 +1003,16 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
     if not user.is_active:
         raise HTTPException(status_code=401, detail="Account is inactive")
 
-    # Verify password - supports both plain text (legacy seed) and bcrypt hashed
+    # Verify password using raw bcrypt (passlib breaks with bcrypt>=4.0)
     password_valid = False
     if user.password:
         if user.password.startswith('$2b$') or user.password.startswith('$2a$'):
-            # bcrypt hashed password
             try:
-                password_valid = pwd_context.verify(request.password, user.password)
+                import bcrypt as _bcrypt
+                password_valid = _bcrypt.checkpw(
+                    request.password.encode('utf-8'),
+                    user.password.encode('utf-8')
+                )
             except Exception:
                 password_valid = False
         else:
