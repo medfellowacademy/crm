@@ -606,15 +606,15 @@ class CourseCreate(BaseModel):
 class CourseResponse(BaseModel):
     id: int
     course_name: str
-    category: str
-    duration: str
-    eligibility: Optional[str]
-    price: float
-    currency: str
-    description: Optional[str]
-    is_active: bool
-    created_at: datetime
-    
+    category: Optional[str] = None
+    duration: Optional[str] = None
+    eligibility: Optional[str] = None
+    price: float = 0.0
+    currency: Optional[str] = "INR"
+    description: Optional[str] = None
+    is_active: bool = True
+    created_at: Optional[datetime] = None
+
     model_config = ConfigDict(from_attributes=True)
 
 class CounselorResponse(BaseModel):

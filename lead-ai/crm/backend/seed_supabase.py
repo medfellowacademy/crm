@@ -1,127 +1,103 @@
 """
-Seed Supabase database with sample data
-This runs on Render automatically at startup if tables are empty
+Seed Supabase database with sample data.
+Runs on Render at startup ONLY if courses table is empty.
+Users are pre-seeded manually — this script never touches users.
 """
 
-import os
-import sys
-from datetime import datetime, timedelta
-import random
-
-# Add parent directory to path
+import os, sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from supabase_client import supabase_manager
 from logger_config import logger
-from courses_data import FELLOWSHIP_COURSES, ALL_COUNTRIES
+
+# ── 46 correct fellowships from medfellowacademy.com ─────────────────────────
+COURSES = [
+    ("Fellowship in Cardiology",                        "Cardiology",               "1 Year",   450000),
+    ("Fellowship in Clinical Cardiology",                "Cardiology",               "6 Months", 350000),
+    ("Fellowship in Interventional Cardiology",          "Cardiology",               "1 Year",   500000),
+    ("Fellowship in 2D Echocardiography",                "Cardiology",               "3 Months", 150000),
+    ("Fellowship in Pediatric Echocardiography",         "Cardiology",               "3 Months", 150000),
+    ("Fellowship in Cardiothoracic Surgery",             "Surgery",                  "1 Year",   600000),
+    ("Fellowship in Emergency Medicine",                 "Emergency Medicine",        "1 Year",   400000),
+    ("Fellowship in Critical Care Medicine",             "Critical Care",             "1 Year",   450000),
+    ("Fellowship in Gynecology & Obstetrics",            "Gynecology & Obstetrics",  "1 Year",   400000),
+    ("Fellowship in High-Risk Pregnancy",                "Gynecology & Obstetrics",  "6 Months", 300000),
+    ("Fellowship in Fetal Medicine",                     "Gynecology & Obstetrics",  "6 Months", 350000),
+    ("Fellowship in Cosmetic Gynecology",                "Gynecology & Obstetrics",  "3 Months", 200000),
+    ("Fellowship in Laparoscopy & Hysteroscopy",         "Gynecology & Obstetrics",  "6 Months", 300000),
+    ("Fellowship in Reproductive Medicine",              "Gynecology & Obstetrics",  "6 Months", 350000),
+    ("Fellowship in Maxillofacial and Oral Surgery",     "Dental & Oral Surgery",    "1 Year",   350000),
+    ("Fellowship in Oral Implantology and Laser Dentistry","Dental & Oral Surgery",  "6 Months", 250000),
+    ("Fellowship in Diabetes Mellitus",                  "Endocrinology",            "6 Months", 250000),
+    ("Fellowship in Endocrinology",                      "Endocrinology",            "1 Year",   400000),
+    ("Fellowship in Pediatric Endocrinology",            "Pediatrics",               "6 Months", 300000),
+    ("Fellowship in Orthopedics",                        "Orthopedics",              "1 Year",   400000),
+    ("Fellowship in Arthroscopy",                        "Orthopedics",              "6 Months", 300000),
+    ("Fellowship in Arthroscopy and Arthroplasty",       "Orthopedics",              "1 Year",   450000),
+    ("Fellowship in Pediatrics",                         "Pediatrics",               "1 Year",   350000),
+    ("Fellowship in Neonatology",                        "Pediatrics",               "6 Months", 300000),
+    ("Fellowship in Pediatric Neurology",                "Pediatrics",               "1 Year",   400000),
+    ("Fellowship in General Surgery (1 Year)",           "Surgery",                  "1 Year",   400000),
+    ("Fellowship in Minimal Access & Robotic Surgery",   "Surgery",                  "1 Year",   500000),
+    ("Fellowship in Medical Oncology",                   "Oncology",                 "1 Year",   500000),
+    ("Fellowship in Head & Neck Oncology",               "Oncology",                 "1 Year",   450000),
+    ("Fellowship in Clinical Neurology",                 "Neurology",                "1 Year",   400000),
+    ("Fellowship in Gastroenterology",                   "Gastroenterology",         "1 Year",   450000),
+    ("Fellowship in Nephrology",                         "Nephrology",               "1 Year",   400000),
+    ("Fellowship in Urology",                            "Urology",                  "1 Year",   450000),
+    ("Fellowship in Respiratory Medicine",               "Pulmonology",              "1 Year",   350000),
+    ("Fellowship in Anesthesia",                         "Anesthesiology",           "1 Year",   400000),
+    ("Fellowship in Pain Management",                    "Anesthesiology",           "6 Months", 250000),
+    ("Fellowship in Radiology",                          "Radiology",                "1 Year",   400000),
+    ("Fellowship in Interventional Radiology",           "Radiology",                "1 Year",   450000),
+    ("Fellowship in Dermatology",                        "Dermatology & Aesthetics", "6 Months", 300000),
+    ("Fellowship in Cosmetic & Aesthetic Medicine",      "Dermatology & Aesthetics", "6 Months", 300000),
+    ("Fellowship in Trichology",                         "Dermatology & Aesthetics", "3 Months", 150000),
+    ("Fellowship in Psychiatric Medicine",               "Psychiatry",               "1 Year",   350000),
+    ("Fellowship in Rheumatology",                       "Rheumatology",             "1 Year",   400000),
+    ("Fellowship in Internal Medicine",                  "Internal Medicine",        "1 Year",   350000),
+    ("Fellowship in Family Medicine",                    "Family Medicine",          "1 Year",   300000),
+    ("Fellowship in Clinical Haematology",               "Haematology",              "1 Year",   400000),
+]
+
 
 def seed_supabase_data():
-    """Seed Supabase with sample data if tables are empty"""
-    
+    """Seed courses only — never overwrites users or leads."""
     client = supabase_manager.get_client()
     if not client:
         logger.error("❌ Supabase client not available")
         return False
-    
-    logger.info("🌱 Starting Supabase data seeding...")
-    
+
+    logger.info("🌱 Checking if courses need seeding…")
+
     try:
-        # Check if data already exists
-        leads_count = client.table('leads').select('count', count='exact').limit(0).execute()
-        if leads_count.count > 0:
-            logger.info(f"✅ Database already has {leads_count.count} leads - skipping seed")
+        # Only seed if courses table is empty
+        courses_count = client.table('courses').select('count', count='exact').limit(0).execute()
+        if courses_count.count > 0:
+            logger.info(f"✅ Courses already seeded ({courses_count.count} rows) — skipping")
             return True
-        
-        # 1. Seed Courses
-        logger.info("📚 Seeding courses...")
-        courses = []
-        for course in FELLOWSHIP_COURSES:
-            courses.append({
-                "course_name": course["course_name"],
-                "category": course["category"],
-                "duration": course["duration"],
-                "price": course["price"],
-                "eligibility": course.get("eligibility", "MBBS"),
-                "description": course.get("description", ""),
-                "is_active": True
-            })
-        
-        client.table('courses').insert(courses).execute()
-        logger.info(f"✅ Created {len(courses)} courses")
-        
-        # 2. Seed Hospitals
-        logger.info("🏥 Seeding hospitals...")
-        hospitals = [
-            {"hospital_name": "Apollo Hospitals", "country": "India", "city": "Chennai", "contact_person": "Dr. Rajesh Kumar", "email": "rajesh@apollo.com", "phone": "+91-9876543210", "partnership_status": "Active"},
-            {"hospital_name": "Max Healthcare", "country": "India", "city": "Delhi", "contact_person": "Dr. Priya Sharma", "email": "priya@max.com", "phone": "+91-9876543211", "partnership_status": "Active"},
-            {"hospital_name": "Fortis Hospital", "country": "India", "city": "Mumbai", "contact_person": "Dr. Amit Patel", "email": "amit@fortis.com", "phone": "+91-9876543212", "partnership_status": "Active"},
-        ]
-        client.table('hospitals').insert(hospitals).execute()
-        logger.info(f"✅ Created {len(hospitals)} hospitals")
-        
-        # 3. Seed Users
-        logger.info("👥 Seeding users...")
-        users = [
-            {"full_name": "Admin User", "email": "admin@example.com", "phone": "+91-9999999001", "password": "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5lWZdCEAJ4VPe", "role": "admin", "is_active": True},
-            {"full_name": "Priya Singh", "email": "priya@example.com", "phone": "+91-9999999002", "password": "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5lWZdCEAJ4VPe", "role": "counselor", "is_active": True},
-            {"full_name": "Rahul Verma", "email": "rahul@example.com", "phone": "+91-9999999003", "password": "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5lWZdCEAJ4VPe", "role": "counselor", "is_active": True},
-        ]
-        client.table('users').insert(users).execute()
-        logger.info(f"✅ Created {len(users)} users")
-        
-        # 4. Seed Counselors
-        logger.info("👨‍💼 Seeding counselors...")
-        counselors = [
-            {"full_name": "Priya Singh", "email": "priya@example.com", "phone": "+91-9999999002", "specialization": "Closer", "is_active": True},
-            {"full_name": "Rahul Verma", "email": "rahul@example.com", "phone": "+91-9999999003", "specialization": "General", "is_active": True},
-        ]
-        client.table('counselors').insert(counselors).execute()
-        logger.info(f"✅ Created {len(counselors)} counselors")
-        
-        # 5. Seed Sample Leads
-        logger.info("📊 Seeding sample leads...")
-        sources = ["Facebook", "Instagram", "Google Ads", "Website", "Referral"]
-        statuses = ["Follow Up", "Interested", "Negotiation", "Enrolled", "Not Interested"]
-        segments = ["Hot", "Warm", "Cold"]
-        
-        leads = []
-        for i in range(50):
-            lead = {
-                "lead_id": f"LEAD{i+1:05d}",
-                "full_name": f"Sample Lead {i+1}",
-                "email": f"lead{i+1}@example.com",
-                "phone": f"+91-98765{i+10000:05d}",
-                "whatsapp": f"+91-98765{i+10000:05d}",
-                "country": random.choice(ALL_COUNTRIES),
-                "source": random.choice(sources),
-                "course_interested": random.choice([c["course_name"] for c in FELLOWSHIP_COURSES]),
-                "status": random.choice(statuses),
-                "assigned_to": random.choice(["Priya Singh", "Rahul Verma"]),
-                "ai_score": round(random.uniform(0.3, 0.95), 2),
-                "ai_segment": random.choice(segments),
-                "conversion_probability": round(random.uniform(0.2, 0.9), 2),
-                "expected_revenue": random.choice([c["price"] for c in FELLOWSHIP_COURSES]),
-                "actual_revenue": 0,
-                "follow_up_date": (datetime.now() + timedelta(days=random.randint(1, 14))).isoformat(),
+
+        logger.info("📚 Seeding 46 courses…")
+        rows = [
+            {
+                "course_name": name,
+                "category":    category,
+                "duration":    duration,
+                "price":       float(price),
+                "currency":    "INR",
+                "is_active":   True,
             }
-            leads.append(lead)
-        
-        # Insert in batches of 10
-        for i in range(0, len(leads), 10):
-            batch = leads[i:i+10]
-            client.table('leads').insert(batch).execute()
-        
-        logger.info(f"✅ Created {len(leads)} sample leads")
-        
-        logger.info("🎉 Database seeding completed successfully!")
+            for name, category, duration, price in COURSES
+        ]
+        client.table('courses').insert(rows).execute()
+        logger.info(f"✅ {len(rows)} courses seeded")
         return True
-        
+
     except Exception as e:
         logger.error(f"❌ Seeding failed: {e}")
-        import traceback
-        traceback.print_exc()
+        import traceback; traceback.print_exc()
         return False
 
+
 if __name__ == "__main__":
-    success = seed_supabase_data()
-    sys.exit(0 if success else 1)
+    sys.exit(0 if seed_supabase_data() else 1)
