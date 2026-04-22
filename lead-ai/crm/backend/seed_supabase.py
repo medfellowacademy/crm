@@ -5,6 +5,7 @@ Users are pre-seeded manually — this script never touches users.
 """
 
 import os, sys
+from datetime import datetime
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from supabase_client import supabase_manager
@@ -78,6 +79,7 @@ def seed_supabase_data():
             return True
 
         logger.info("📚 Seeding 46 courses…")
+        now_str = datetime.utcnow().isoformat()
         rows = [
             {
                 "course_name": name,
@@ -86,6 +88,7 @@ def seed_supabase_data():
                 "price":       float(price),
                 "currency":    "INR",
                 "is_active":   True,
+                "created_at":  now_str,
             }
             for name, category, duration, price in COURSES
         ]
