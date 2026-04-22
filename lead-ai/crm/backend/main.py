@@ -246,11 +246,14 @@ app.add_middleware(ErrorHandlingMiddleware)
 app.add_middleware(PerformanceMonitoringMiddleware)
 app.add_middleware(LoggingMiddleware)
 
-# CORS middleware
+# CORS middleware - allow all Vercel preview deployments + explicit origins
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+ALLOWED_ORIGIN_REGEX = r"https://medfellow-.*\.vercel\.app"
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=ALLOWED_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
