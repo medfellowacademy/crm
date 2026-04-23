@@ -401,7 +401,7 @@ class DBLead(Base):
     country = Column(String, index=True)
     source = Column(String)
     course_interested = Column(String)
-    status = Column(SQLEnum(LeadStatus), default=LeadStatus.FOLLOW_UP)
+    status = Column(SQLEnum(LeadStatus), default=LeadStatus.FRESH)
     
     # AI Scoring
     ai_score = Column(Float, default=0)
@@ -1226,7 +1226,7 @@ async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, db: S
         source=lead.source,
         course_interested=lead.course_interested,
         assigned_to=lead.assigned_to,
-        status=LeadStatus.FOLLOW_UP
+        status=LeadStatus.FRESH
     )
     
     db.add(db_lead)
