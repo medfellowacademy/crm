@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { authAPI } from '../api/api';
+import { useAuth } from '../context/AuthContext';
 
 const LoginPage = () => {
   const navigate = useNavigate();
+  const { login } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -17,7 +19,8 @@ const LoginPage = () => {
     try {
       const res = await authAPI.login(username.trim(), password);
       const { user, access_token } = res.data;
-      localStorage.setItem('user', JSON.stringify({ ...user, token: access_token }));
+      // Update AuthContext state (also persists to localStorage)
+      login({ ...user, token: access_token });
       navigate('/dashboard', { replace: true });
     } catch (err) {
       const msg = err.response?.data?.detail || 'Login failed. Check your credentials.';
