@@ -43,7 +43,7 @@ from exceptions import (
 )
 
 # Authentication
-from auth import get_current_user, oauth2_scheme, decode_access_token
+from auth import get_current_user, oauth2_scheme, decode_access_token, create_access_token
 from deps import get_db as _shared_get_db  # used by auth.py via deps.py
 
 # Rate limiting
@@ -1141,8 +1141,12 @@ async def login(request: Request, body: LoginRequest, db: Session = Depends(get_
     if not password_valid:
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
+    access_token = create_access_token({"sub": user.email, "role": user.role})
+
     return {
         "success": True,
+        "access_token": access_token,
+        "token_type": "bearer",
         "user": {
             "id": user.id,
             "full_name": user.full_name,
@@ -2069,11 +2073,11 @@ async def get_counselor_performance(db: Session = Depends(get_db)):
 # USER MANAGEMENT ENDPOINTS
 # ============================================================================
 
-@app.get("/api/users", response_model=List[UserResponse])
+@app.get("/api/users")
 async def get_users(db: Session = Depends(get_db)):
     """Get all users in the organization"""
-    users = db.query(DBUser).all()
-    return users
+    users = db.query(DBUser).order_by(DBUser.id).all()
+    return {"users": users, "total": len(users)}
 
 @app.get("/api/users/{user_id}", response_model=UserResponse)
 async def get_user(user_id: int, db: Session = Depends(get_db)):
@@ -2101,7 +2105,9 @@ async def create_user(user: UserCreate, db: Session = Depends(get_db)):
         password=hashed_password,
         role=user.role,
         reports_to=user.reports_to,
-        is_active=user.is_active
+        is_active=user.is_active,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
     )
     
     db.add(db_user)

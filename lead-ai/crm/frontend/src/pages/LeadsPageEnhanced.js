@@ -171,7 +171,7 @@ const LeadsPageEnhanced = () => {
 
   const { data: users = [] } = useQuery({
     queryKey: ['users'],
-    queryFn: async () => { try { return (await usersAPI.getAll()).data || []; } catch { return []; } },
+    queryFn: async () => { try { return (await usersAPI.getAll()).data?.users || []; } catch { return []; } },
   });
 
   // ── Computed filter options ────────────────────────────────────────────────

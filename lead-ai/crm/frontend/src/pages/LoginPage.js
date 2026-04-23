@@ -16,8 +16,8 @@ const LoginPage = () => {
 
     try {
       const res = await authAPI.login(username.trim(), password);
-      const { user } = res.data;
-      localStorage.setItem('user', JSON.stringify(user));
+      const { user, access_token } = res.data;
+      localStorage.setItem('user', JSON.stringify({ ...user, token: access_token }));
       navigate('/dashboard', { replace: true });
     } catch (err) {
       const msg = err.response?.data?.detail || 'Login failed. Check your credentials.';

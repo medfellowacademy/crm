@@ -41,22 +41,11 @@ import {
   ApartmentOutlined,
   StarOutlined,
 } from '@ant-design/icons';
-import axios from 'axios';
-import { leadsAPI } from '../api/api';
+import { leadsAPI, usersAPI } from '../api/api';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
 const { TabPane } = Tabs;
-
-const API_URL = `${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/api`;
-
-// User API
-const usersAPI = {
-  getAll: () => axios.get(`${API_URL}/users`),
-  create: (data) => axios.post(`${API_URL}/users`, data),
-  update: (id, data) => axios.put(`${API_URL}/users/${id}`, data),
-  delete: (id) => axios.delete(`${API_URL}/users/${id}`),
-};
 
 const UsersPage = () => {
   const queryClient = useQueryClient();

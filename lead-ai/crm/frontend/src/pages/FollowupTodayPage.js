@@ -280,7 +280,7 @@ export default function FollowupTodayPage() {
 
   const { data: users = [] } = useQuery({
     queryKey: ['users'],
-    queryFn: () => usersAPI.getAll().then(r => r.data || []),
+    queryFn: () => usersAPI.getAll().then(r => r.data?.users || []),
     staleTime: 60000,
   });
 

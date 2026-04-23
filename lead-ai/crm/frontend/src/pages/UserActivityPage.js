@@ -66,7 +66,7 @@ const UserActivityPage = () => {
   });
   const { data: usersData, isLoading: usersLoading } = useQuery({
     queryKey: ['users'],
-    queryFn: usersAPI.getAll
+    queryFn: () => usersAPI.getAll().then(res => res.data)
   });
 
   // Filter leads by date range

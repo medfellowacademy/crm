@@ -9,6 +9,20 @@ const api = axios.create({
   },
 });
 
+// Attach the JWT token from localStorage to every outgoing request.
+api.interceptors.request.use((config) => {
+  try {
+    const stored = localStorage.getItem('user');
+    const token = stored ? JSON.parse(stored)?.token : null;
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+  } catch {
+    // localStorage unavailable or JSON malformed — continue without token
+  }
+  return config;
+});
+
 // Redirect to login if server returns 401 (expired or invalid token).
 // We clear localStorage directly here because the interceptor runs outside
 // React's render cycle (no access to AuthContext).  AuthContext reads from

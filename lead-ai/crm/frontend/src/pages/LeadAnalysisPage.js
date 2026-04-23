@@ -56,6 +56,7 @@ import {
 import dayjs from 'dayjs';
 import duration from 'dayjs/plugin/duration';
 import relativeTime from 'dayjs/plugin/relativeTime';
+import { leadsAPI, usersAPI, coursesAPI } from '../api/api';
 
 dayjs.extend(duration);
 dayjs.extend(relativeTime);
@@ -64,8 +65,6 @@ const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
 const { Option } = Select;
 const { TabPane } = Tabs;
-
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
 const LeadAnalysisPage = () => {
   const [selectedCountry, setSelectedCountry] = useState('all');
@@ -79,25 +78,17 @@ const LeadAnalysisPage = () => {
   // Fetch data
   const { data: leadsData, isLoading: leadsLoading, refetch: refetchLeads } = useQuery({
     queryKey: ['leads'],
-    queryFn: async () => {
-      const response = await fetch(`${API_BASE_URL}/api/leads`);
-      return response.json();
-    }
+    queryFn: () => leadsAPI.getAll().then(res => res.data)
   });
 
   const { data: usersData, isLoading: usersLoading } = useQuery({
     queryKey: ['users'],
-    queryFn: async () => {
-      const response = await fetch(`${API_BASE_URL}/api/users`);
-      return response.json();
-    }
+    queryFn: () => usersAPI.getAll().then(res => res.data)
   });
 
   const { data: coursesData, isLoading: coursesLoading } = useQuery({
     queryKey: ['courses'],
-    queryFn: async () => {
-      const response = await fetch(`${API_BASE_URL}/api/courses`);
-      return response.json();
+    queryFn: () => coursesAPI.getAll().then(res => res.data)
     }
   });
 
