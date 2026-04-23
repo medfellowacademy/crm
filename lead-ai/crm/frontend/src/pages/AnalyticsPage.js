@@ -19,7 +19,7 @@ const AnalyticsPage = () => {
 
   const { data: leads } = useQuery({
     queryKey: ['allLeads'],
-    queryFn: () => leadsAPI.getAll().then(res => res.data)
+    queryFn: () => leadsAPI.getAll().then(res => res.data?.leads || [])
   });
 
   const { data: counselors } = useQuery({

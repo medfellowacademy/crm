@@ -215,7 +215,7 @@ const DragDropPipeline = () => {
   // Fetch leads
   const { data: leads, isLoading } = useQuery({
     queryKey: ['leads'],
-    queryFn: () => leadsAPI.getAll().then(res => res.data),
+    queryFn: () => leadsAPI.getAll().then(res => res.data?.leads || []),
     onSuccess: (data) => {
       // Group leads by stage
       const grouped = PIPELINE_STAGES.reduce((acc, stage) => {

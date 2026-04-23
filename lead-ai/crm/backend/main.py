@@ -726,6 +726,8 @@ class CounselorResponse(BaseModel):
     
     model_config = ConfigDict(from_attributes=True)
 
+VALID_ROLES = {"Super Admin", "Manager", "Team Leader", "Counselor"}
+
 class UserCreate(BaseModel):
     full_name: str
     email: EmailStr
@@ -733,7 +735,21 @@ class UserCreate(BaseModel):
     password: str
     role: str  # Super Admin, Manager, Team Leader, Counselor
     reports_to: Optional[int] = None
-    is_active: bool = True
+    is_active: Optional[bool] = True
+
+    @field_validator('phone', mode='before')
+    @classmethod
+    def _empty_str_to_none(cls, v):
+        if isinstance(v, str) and v.strip() == '':
+            return None
+        return v
+
+    @field_validator('role', mode='before')
+    @classmethod
+    def _validate_role(cls, v):
+        if v not in VALID_ROLES:
+            raise ValueError(f'role must be one of: {", ".join(sorted(VALID_ROLES))}')
+        return v
 
 class UserUpdate(BaseModel):
     full_name: Optional[str] = None
@@ -743,6 +759,13 @@ class UserUpdate(BaseModel):
     role: Optional[str] = None
     reports_to: Optional[int] = None
     is_active: Optional[bool] = None
+
+    @field_validator('phone', mode='before')
+    @classmethod
+    def _empty_str_to_none(cls, v):
+        if isinstance(v, str) and v.strip() == '':
+            return None
+        return v
 
 class UserResponse(BaseModel):
     id: int

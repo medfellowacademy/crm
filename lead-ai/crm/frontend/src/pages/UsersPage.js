@@ -82,7 +82,13 @@ const UsersPage = () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
     },
     onError: (error) => {
-      message.error(`Failed to create user: ${error.message}`);
+      const detail = error.response?.data?.detail;
+      if (Array.isArray(detail)) {
+        const msgs = detail.map(d => `${d.loc?.slice(-1)[0] ?? 'field'}: ${d.msg}`).join('; ');
+        message.error(`Validation error — ${msgs}`);
+      } else {
+        message.error(detail || error.message || 'Failed to create user');
+      }
     },
   });
 
@@ -96,7 +102,13 @@ const UsersPage = () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
     },
     onError: (error) => {
-      message.error(`Failed to update user: ${error.message}`);
+      const detail = error.response?.data?.detail;
+      if (Array.isArray(detail)) {
+        const msgs = detail.map(d => `${d.loc?.slice(-1)[0] ?? 'field'}: ${d.msg}`).join('; ');
+        message.error(`Validation error — ${msgs}`);
+      } else {
+        message.error(detail || error.message || 'Failed to update user');
+      }
     },
   });
 
@@ -687,13 +699,13 @@ const UsersPage = () => {
               allowClear
               showSearch
               filterOption={(input, option) =>
-                option.children.toLowerCase().includes(input.toLowerCase())
+                (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
               }
             >
               {users
                 .filter(u => u.id !== editingUser?.id) // Don't allow self-reporting
                 .map(user => (
-                  <Option key={user.id} value={user.id}>
+                  <Option key={user.id} value={user.id} label={`${user.full_name} (${user.role})`}>
                     <Avatar 
                       size="small" 
                       style={{ backgroundColor: getRoleColor(user.role), marginRight: 8 }}

@@ -37,7 +37,7 @@ const Dashboard = () => {
 
   const { data: recentLeads } = useQuery({
     queryKey: ['recentLeads'],
-    queryFn: () => leadsAPI.getAll({ limit: 5 }).then(res => res.data)
+    queryFn: () => leadsAPI.getAll({ limit: 5 }).then(res => res.data?.leads || [])
   });
 
   if (statsLoading) {

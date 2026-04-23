@@ -62,7 +62,7 @@ const UserActivityPage = () => {
 
   const { data: leadsData, isLoading: leadsLoading } = useQuery({
     queryKey: ['leads'],
-    queryFn: leadsAPI.getAll
+    queryFn: () => leadsAPI.getAll().then(res => res.data)
   });
   const { data: usersData, isLoading: usersLoading } = useQuery({
     queryKey: ['users'],

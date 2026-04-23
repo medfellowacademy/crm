@@ -22,6 +22,7 @@ import { leadsAPI, coursesAPI, counselorsAPI, usersAPI } from '../api/api';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import isBetween from 'dayjs/plugin/isBetween';
+import * as XLSX from 'xlsx';
 
 dayjs.extend(relativeTime);
 dayjs.extend(isBetween);
@@ -110,15 +111,18 @@ const makeDateFilter = (fieldKey) => ({
   filterIcon: filtered => <CalendarOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
 });
 
-// ── CSV parser ──────────────────────────────────────────────────────────────
-const parseCSV = (text) => {
-  const lines = text.trim().split('\n');
-  const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, '').toLowerCase().replace(/ /g, '_'));
-  return lines.slice(1).map(line => {
-    const vals = line.split(',').map(v => v.trim().replace(/"/g, ''));
-    const obj = {};
-    headers.forEach((h, i) => { obj[h] = vals[i] || ''; });
-    return obj;
+// ── File parser (CSV, Excel, ODS) ──────────────────────────────────────────
+const parseSpreadsheet = (data, isBinary) => {
+  const workbook = XLSX.read(data, { type: isBinary ? 'binary' : 'string' });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  // Normalize header keys: lowercase + spaces → underscores
+  return rows.map(row => {
+    const normalized = {};
+    Object.keys(row).forEach(k => {
+      normalized[k.trim().toLowerCase().replace(/\s+/g, '_')] = String(row[k] ?? '');
+    });
+    return normalized;
   }).filter(r => r.full_name || r.name);
 };
 
@@ -158,7 +162,7 @@ const LeadsPageEnhanced = () => {
       if (quickFilter === 'today') params.created_today = true;
       if (quickFilter === 'overdue') params.overdue = true;
       if (searchText) params.search = searchText;
-      try { return (await leadsAPI.getAll(params)).data || []; } catch { return []; }
+      try { return (await leadsAPI.getAll(params)).data?.leads || []; } catch { return []; }
     },
     refetchInterval: 30000,
     retry: 1,
@@ -245,39 +249,49 @@ const LeadsPageEnhanced = () => {
   });
 
   // ── Import handlers ────────────────────────────────────────────────────────
+  const processImportRows = (rows) => {
+    const errors = [];
+    const valid = [];
+    rows.forEach((row, i) => {
+      const missing = REQUIRED_COLS.filter(c => !row[c] && !row[c === 'full_name' ? 'name' : c]);
+      if (missing.length) { errors.push({ row: i + 2, msg: `Missing: ${missing.join(', ')}` }); }
+      else {
+        valid.push({
+          full_name: row.full_name || row.name,
+          email: row.email || '',
+          phone: row.phone || row.mobile || '',
+          whatsapp: row.whatsapp || row.phone || row.mobile || '',
+          country: row.country || 'India',
+          source: row.source || 'Import',
+          course_interested: row.course_interested || row.course || '',
+          status: STATUS_OPTIONS.includes(row.status) ? row.status : 'Fresh',
+          assigned_to: row.assigned_to || row.counselor || '',
+          expected_revenue: parseFloat(row.expected_revenue || row.revenue || 0) || 0,
+        });
+      }
+    });
+    setImportData(valid);
+    setImportErrors(errors);
+    setImportStep(1);
+  };
+
   const handleFileRead = (file) => {
+    const ext = file.name.split('.').pop().toLowerCase();
+    const isCsv = ext === 'csv';
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
-        const rows = parseCSV(e.target.result);
-        const errors = [];
-        const valid = [];
-        rows.forEach((row, i) => {
-          const missing = REQUIRED_COLS.filter(c => !row[c] && !row[c === 'full_name' ? 'name' : c]);
-          if (missing.length) { errors.push({ row: i + 2, msg: `Missing: ${missing.join(', ')}` }); }
-          else {
-            valid.push({
-              full_name: row.full_name || row.name,
-              email: row.email || '',
-              phone: row.phone || row.mobile || '',
-              whatsapp: row.whatsapp || row.phone || row.mobile || '',
-              country: row.country || 'India',
-              source: row.source || 'Import',
-              course_interested: row.course_interested || row.course || '',
-              status: STATUS_OPTIONS.includes(row.status) ? row.status : 'Fresh',
-              assigned_to: row.assigned_to || row.counselor || '',
-              expected_revenue: parseFloat(row.expected_revenue || row.revenue || 0) || 0,
-            });
-          }
-        });
-        setImportData(valid);
-        setImportErrors(errors);
-        setImportStep(1);
+        const rows = parseSpreadsheet(e.target.result, !isCsv);
+        processImportRows(rows);
       } catch {
-        message.error('Could not parse file. Ensure it is a valid CSV.');
+        message.error('Could not parse file. Please check the format and try again.');
       }
     };
-    reader.readAsText(file);
+    if (isCsv) {
+      reader.readAsText(file);
+    } else {
+      reader.readAsBinaryString(file);
+    }
     return false;
   };
 
@@ -656,7 +670,7 @@ const LeadsPageEnhanced = () => {
         {importStep === 0 && (
           <div>
             <Alert type="info" showIcon style={{ marginBottom: 16 }}
-              message="CSV Format"
+              message="Supported Formats: CSV, Excel (.xlsx, .xls), ODS"
               description={
                 <div>
                   Required columns: <Text code>full_name</Text>, <Text code>phone</Text><br />
@@ -667,10 +681,10 @@ const LeadsPageEnhanced = () => {
                 </div>
               }
             />
-            <Dragger beforeUpload={handleFileRead} accept=".csv" showUploadList={false}>
+            <Dragger beforeUpload={handleFileRead} accept=".csv,.xlsx,.xls,.ods" showUploadList={false}>
               <p className="ant-upload-drag-icon"><UploadOutlined style={{ fontSize: 48, color: '#1890ff' }} /></p>
-              <p className="ant-upload-text">Click or drag CSV file here</p>
-              <p className="ant-upload-hint">Supports .csv files only. Max 5,000 rows.</p>
+              <p className="ant-upload-text">Click or drag file here to upload</p>
+              <p className="ant-upload-hint">Supports CSV, Excel (.xlsx, .xls), and ODS. Max 5,000 rows.</p>
             </Dragger>
           </div>
         )}

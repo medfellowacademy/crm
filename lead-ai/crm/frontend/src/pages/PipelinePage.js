@@ -24,7 +24,7 @@ const PipelinePage = () => {
 
   const { data: leadsData, isLoading, refetch } = useQuery({
     queryKey: ['leads'],
-    queryFn: leadsAPI.getAll
+    queryFn: () => leadsAPI.getAll().then(res => res.data)
   });
 
   // Pipeline stages configuration

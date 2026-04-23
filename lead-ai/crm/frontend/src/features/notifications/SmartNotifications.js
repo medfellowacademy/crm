@@ -33,7 +33,7 @@ const SmartNotifications = () => {
       
       const response = await fetch(`${API_BASE_URL}/api/notifications?${params}`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Authorization': `Bearer ${JSON.parse(localStorage.getItem('user') || '{}')?.token}`,
         },
       });
       if (!response.ok) throw new Error('Failed to fetch notifications');
@@ -48,7 +48,7 @@ const SmartNotifications = () => {
     if (!isFeatureEnabled('WEBSOCKET_NOTIFICATIONS')) return;
 
     const wsUrl = API_BASE_URL.replace('https://', 'wss://').replace('http://', 'ws://');
-    const ws = new WebSocket(`${wsUrl}/ws/notifications?token=${localStorage.getItem('token')}`);
+    const ws = new WebSocket(`${wsUrl}/ws/notifications?token=${JSON.parse(localStorage.getItem('user') || '{}')?.token}`);
     
     ws.onmessage = (event) => {
       const notification = JSON.parse(event.data);

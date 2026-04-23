@@ -61,7 +61,7 @@ const LeadsPage = () => {
   // Fetch data
   const { data: leads, isLoading, refetch } = useQuery({
     queryKey: ['leads', filters],
-    queryFn: () => leadsAPI.getAll(filters).then(res => res.data),
+    queryFn: () => leadsAPI.getAll(filters).then(res => res.data?.leads || []),
     keepPreviousData: true
   });
 
