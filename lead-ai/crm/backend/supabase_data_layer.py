@@ -18,7 +18,7 @@ class SupabaseDataLayer:
     def get_leads(
         self,
         skip: int = 0,
-        limit: int = 100,
+        limit: int = 1000,
         status: Optional[str] = None,
         country: Optional[str] = None,
         segment: Optional[str] = None,
@@ -39,48 +39,11 @@ class SupabaseDataLayer:
     ) -> Dict[str, Any]:
         """Get leads with filters. Returns a paginated response dict."""
         try:
-            # ---- count query (no range) ----
-            count_query = self.client.table('leads').select("*", count='exact')
+            # Single query: data + exact count together (supabase-py v2 style)
+            # count='exact' tells PostgREST to return Content-Range with total
+            query = self.client.table('leads').select("*", count='exact')
 
-            if status:
-                count_query = count_query.eq('status', status)
-            if country:
-                count_query = count_query.eq('country', country)
-            if segment:
-                count_query = count_query.eq('ai_segment', segment)
-            if assigned_to:
-                count_query = count_query.eq('assigned_to', assigned_to)
-            if search:
-                count_query = count_query.or_(
-                    f"full_name.ilike.%{search}%,"
-                    f"email.ilike.%{search}%,"
-                    f"phone.ilike.%{search}%"
-                )
-
-            if created_on:
-                count_query = count_query.gte('created_at', f"{created_on}T00:00:00").lt('created_at', f"{created_on}T23:59:59")
-            elif created_from and created_to:
-                count_query = count_query.gte('created_at', created_from).lte('created_at', created_to)
-            elif created_after:
-                count_query = count_query.gt('created_at', created_after)
-            elif created_before:
-                count_query = count_query.lt('created_at', created_before)
-
-            if updated_on:
-                count_query = count_query.gte('updated_at', f"{updated_on}T00:00:00").lt('updated_at', f"{updated_on}T23:59:59")
-            elif updated_from and updated_to:
-                count_query = count_query.gte('updated_at', updated_from).lte('updated_at', updated_to)
-            elif updated_after:
-                count_query = count_query.gt('updated_at', updated_after)
-            elif updated_before:
-                count_query = count_query.lt('updated_at', updated_before)
-
-            count_response = count_query.limit(0).execute()
-            total = count_response.count if hasattr(count_response, 'count') and count_response.count is not None else 0
-
-            # ---- data query (with range) ----
-            query = self.client.table('leads').select("*")
-
+            # ---- apply filters ----
             if status:
                 query = query.eq('status', status)
             if country:
@@ -97,7 +60,7 @@ class SupabaseDataLayer:
                 )
 
             if created_on:
-                query = query.gte('created_at', f"{created_on}T00:00:00").lt('created_at', f"{created_on}T23:59:59")
+                query = query.gte('created_at', f"{created_on}T00:00:00").lte('created_at', f"{created_on}T23:59:59")
             elif created_from and created_to:
                 query = query.gte('created_at', created_from).lte('created_at', created_to)
             elif created_after:
@@ -106,7 +69,7 @@ class SupabaseDataLayer:
                 query = query.lt('created_at', created_before)
 
             if updated_on:
-                query = query.gte('updated_at', f"{updated_on}T00:00:00").lt('updated_at', f"{updated_on}T23:59:59")
+                query = query.gte('updated_at', f"{updated_on}T00:00:00").lte('updated_at', f"{updated_on}T23:59:59")
             elif updated_from and updated_to:
                 query = query.gte('updated_at', updated_from).lte('updated_at', updated_to)
             elif updated_after:
@@ -114,25 +77,32 @@ class SupabaseDataLayer:
             elif updated_before:
                 query = query.lt('updated_at', updated_before)
 
-            query = query.order('ai_score', desc=True)
-            if skip:
-                query = query.range(skip, skip + limit - 1)
+            # ---- order + pagination ----
+            # Cap limit at 1000 (Supabase free-tier max_rows default)
+            effective_limit = min(limit, 1000)
+            # AI-scored leads first; fall back to newest-first for unscored leads
+            query = query.order('ai_score', desc=True, nullsfirst=False).order('created_at', desc=True)
+
+            if skip > 0:
+                query = query.range(skip, skip + effective_limit - 1)
             else:
-                query = query.limit(limit)
+                query = query.limit(effective_limit)
 
             response = query.execute()
             leads = response.data if response.data else []
+            # response.count is the TOTAL matching rows (not capped by limit)
+            total = response.count if hasattr(response, 'count') and response.count is not None else len(leads)
 
             return {
                 "leads": leads,
                 "total": total,
                 "skip": skip,
-                "limit": limit,
-                "has_more": (skip + limit) < total,
+                "limit": effective_limit,
+                "has_more": (skip + effective_limit) < total,
             }
 
         except Exception as e:
-            logger.error(f"Error fetching leads: {e}")
+            logger.error(f"Error fetching leads from Supabase: {e}", exc_info=True)
             return {"leads": [], "total": 0, "skip": skip, "limit": limit, "has_more": False}
     
     def get_lead_by_id(self, lead_id: str) -> Optional[Dict[str, Any]]:

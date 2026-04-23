@@ -1260,11 +1260,18 @@ async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, db: S
                 "course_interested": db_lead.course_interested,
                 "assigned_to": db_lead.assigned_to,
                 "status": db_lead.status.value if hasattr(db_lead.status, 'value') else db_lead.status,
-                "ai_score": db_lead.ai_score,
-                "ai_segment": db_lead.ai_segment,
+                "ai_score": db_lead.ai_score or 0.0,
+                "ai_segment": db_lead.ai_segment.value if hasattr(db_lead.ai_segment, 'value') else db_lead.ai_segment,
                 "ai_recommendation": db_lead.ai_recommendation,
+                # Required float fields in LeadResponse — send 0.0 defaults so
+                # FastAPI response validation doesn't fail when we return the dict.
+                "conversion_probability": db_lead.conversion_probability or 0.0,
+                "expected_revenue": db_lead.expected_revenue or 0.0,
+                "actual_revenue": db_lead.actual_revenue or 0.0,
+                "buying_signal_strength": db_lead.buying_signal_strength or 0.0,
+                "churn_risk": db_lead.churn_risk or 0.0,
             }
-            # strip None values
+            # strip None values (keep 0.0 floats)
             payload = {k: v for k, v in payload.items() if v is not None}
             created = supabase_data.create_lead(payload)
             if created:
@@ -1430,8 +1437,15 @@ async def get_leads(
     query = query.options(joinedload(DBLead.notes))
 
     leads = query.offset(skip).limit(limit).all()
+    # Serialize ORM objects to dicts (raw DBLead objects are not JSON-serializable)
+    leads_list = []
+    for lead in leads:
+        try:
+            leads_list.append(LeadResponse.model_validate(lead).model_dump(mode='json'))
+        except Exception as serial_err:
+            logger.warning(f"Skipping lead serialization error: {serial_err}")
     return {
-        "leads": leads,
+        "leads": leads_list,
         "total": total_count,
         "skip": skip,
         "limit": limit,
