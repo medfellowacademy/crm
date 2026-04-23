@@ -19,6 +19,7 @@ import {
 } from '@ant-design/icons';
 import ChatDrawer from '../components/ChatDrawer';
 import { leadsAPI, coursesAPI, counselorsAPI, usersAPI } from '../api/api';
+import { useAuth } from '../context/AuthContext';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import isBetween from 'dayjs/plugin/isBetween';
@@ -133,6 +134,8 @@ const STATUS_OPTIONS = ['Fresh', 'Follow Up', 'Warm', 'Hot', 'Not Interested', '
 const LeadsPageEnhanced = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { user: authUser } = useAuth();
+  const isCounselor = authUser?.role === 'Counselor';
 
   const [chatLead, setChatLead] = useState(null);
   const [drawerVisible, setDrawerVisible] = useState(false);
@@ -185,7 +188,9 @@ const LeadsPageEnhanced = () => {
     ...courses.map(c => c.course_name),
     ...leads.map(l => l.course_interested),
   ])].filter(Boolean).sort();
-  const uniqueAssigned   = [...new Set(leads.map(l => l.assigned_to))].filter(Boolean).sort();
+  const uniqueAssigned   = isCounselor
+    ? (authUser?.full_name ? [authUser.full_name] : [])
+    : [...new Set(leads.map(l => l.assigned_to))].filter(Boolean).sort();
   const uniqueSources    = [...new Set(leads.map(l => l.source))].filter(Boolean).sort();
   const uniqueSegments   = ['Hot', 'Warm', 'Cold', 'Junk'];
 
@@ -253,22 +258,34 @@ const LeadsPageEnhanced = () => {
     const errors = [];
     const valid = [];
     rows.forEach((row, i) => {
-      const missing = REQUIRED_COLS.filter(c => !row[c] && !row[c === 'full_name' ? 'name' : c]);
-      if (missing.length) { errors.push({ row: i + 2, msg: `Missing: ${missing.join(', ')}` }); }
-      else {
-        valid.push({
-          full_name: row.full_name || row.name,
-          email: row.email || '',
-          phone: row.phone || row.mobile || '',
-          whatsapp: row.whatsapp || row.phone || row.mobile || '',
-          country: row.country || 'India',
-          source: row.source || 'Import',
-          course_interested: row.course_interested || row.course || '',
-          status: STATUS_OPTIONS.includes(row.status) ? row.status : 'Fresh',
-          assigned_to: row.assigned_to || row.counselor || '',
-          expected_revenue: parseFloat(row.expected_revenue || row.revenue || 0) || 0,
-        });
+      // Normalise: trim all string values
+      const r = {};
+      Object.keys(row).forEach(k => { r[k.trim().toLowerCase().replace(/\s+/g, '_')] = String(row[k] ?? '').trim(); });
+
+      const name = r.full_name || r.name || '';
+      const phone = r.phone || r.mobile || r.phone_number || '';
+
+      if (!name || !phone) {
+        errors.push({ row: i + 2, msg: `Missing: ${!name ? 'full_name ' : ''}${!phone ? 'phone' : ''}`.trim() });
+        return;
       }
+
+      // Only send fields that LeadCreate accepts; strip unknown keys
+      const lead = {
+        full_name: name,
+        phone,
+        email: r.email || undefined,
+        whatsapp: r.whatsapp || phone,
+        country: r.country || 'India',
+        source: r.source || 'Import',
+        course_interested: r.course_interested || r.course || r.fellowship || 'Not Specified',
+        assigned_to: isCounselor
+          ? (authUser?.full_name || undefined)
+          : (r.assigned_to || r.counselor || undefined),
+      };
+      // Remove undefined keys so FastAPI validation doesn't choke
+      Object.keys(lead).forEach(k => { if (lead[k] === undefined || lead[k] === '') delete lead[k]; });
+      valid.push(lead);
     });
     setImportData(valid);
     setImportErrors(errors);
@@ -456,8 +473,11 @@ const LeadsPageEnhanced = () => {
       onFilter: (v, r) => v === '__none__' ? !r.assigned_to : r.assigned_to === v,
       render: (val, r) => (
         <Select value={val || undefined} placeholder="Assign..." size="small" style={{ width: '100%' }} allowClear
+          disabled={isCounselor}
           onChange={v => updateMutation.mutate({ leadId: r.lead_id, data: { assigned_to: v || null } })}
-          options={users.map(u => ({ label: u.full_name, value: u.full_name }))} />
+          options={isCounselor
+            ? (authUser?.full_name ? [{ label: authUser.full_name, value: authUser.full_name }] : [])
+            : users.map(u => ({ label: u.full_name, value: u.full_name }))} />
       ),
     },
     {
@@ -848,8 +868,11 @@ const LeadsPageEnhanced = () => {
           </Row>
           <Form.Item name="assigned_to" label="Assign To">
             <Select placeholder="Select counselor" allowClear showSearch
+              disabled={isCounselor}
               filterOption={(i, o) => o.label.toLowerCase().includes(i.toLowerCase())}
-              options={users.map(u => ({ label: `${u.full_name} (${u.role})`, value: u.full_name }))} />
+              options={isCounselor
+                ? (authUser?.full_name ? [{ label: `${authUser.full_name} (Counselor)`, value: authUser.full_name }] : [])
+                : users.map(u => ({ label: `${u.full_name} (${u.role})`, value: u.full_name }))} />
           </Form.Item>
           <Form.Item name="notes" label="Notes">
             <Input.TextArea rows={3} placeholder="Initial notes..." showCount maxLength={500} />
@@ -951,6 +974,7 @@ const LeadsPageEnhanced = () => {
           <div>
             <Text strong>Assigned To</Text>
             <Select mode="multiple" style={{ width: '100%', marginTop: 6 }} placeholder="Any counselor" showSearch
+              disabled={isCounselor}
               value={advFilters.assigned || []} onChange={v => setAdvFilters(f => ({ ...f, assigned: v }))}>
               {uniqueAssigned.map(u => <Option key={u} value={u}>{u}</Option>)}
             </Select>

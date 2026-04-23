@@ -1267,6 +1267,7 @@ async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, db: S
 
 @app.get("/api/leads")
 async def get_leads(
+    request: Request,
     skip: int = 0,
     limit: int = 100,
     status: Optional[LeadStatus] = None,
@@ -1288,7 +1289,17 @@ async def get_leads(
     search: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
-    """Get leads with filters"""
+    """Get leads with filters. Counselors are restricted to their own leads."""
+
+    # Enforce Counselor scope: they may only see leads assigned to themselves.
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token_data = decode_access_token(auth_header.split(" ", 1)[1])
+        if token_data.role == "Counselor":
+            # Look up their full_name from the DB so the filter is accurate
+            caller = db.query(DBUser).filter(DBUser.email == token_data.email).first()
+            if caller:
+                assigned_to = caller.full_name  # override any client-supplied value
 
     # Use Supabase REST API if available
     if supabase_data.client:
@@ -1841,8 +1852,17 @@ async def get_audit_logs(page: int = 1, limit: int = 50, db: Session = Depends(g
 
 
 @app.get("/api/leads/followups/today")
-async def get_followups_today(assigned_to: Optional[str] = None, db: Session = Depends(get_db)):
+async def get_followups_today(request: Request, assigned_to: Optional[str] = None, db: Session = Depends(get_db)):
     """All leads with follow_up_date = today + overdue, for the daily work view"""
+    # Counselors may only see their own follow-ups
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token_data = decode_access_token(auth_header.split(" ", 1)[1])
+        if token_data.role == "Counselor":
+            caller = db.query(DBUser).filter(DBUser.email == token_data.email).first()
+            if caller:
+                assigned_to = caller.full_name
+
     today = datetime.utcnow().date()
     active_statuses = ["Enrolled", "Not Interested", "Junk"]
 
