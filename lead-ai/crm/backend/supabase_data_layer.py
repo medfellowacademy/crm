@@ -115,7 +115,10 @@ class SupabaseDataLayer:
                 query = query.lt('updated_at', updated_before)
 
             query = query.order('ai_score', desc=True)
-            query = query.range(skip, skip + limit - 1)
+            if skip:
+                query = query.range(skip, skip + limit - 1)
+            else:
+                query = query.limit(limit)
 
             response = query.execute()
             leads = response.data if response.data else []

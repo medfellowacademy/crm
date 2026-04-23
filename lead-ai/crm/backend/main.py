@@ -1292,14 +1292,16 @@ async def get_leads(
     """Get leads with filters. Counselors are restricted to their own leads."""
 
     # Enforce Counselor scope: they may only see leads assigned to themselves.
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Bearer "):
-        token_data = decode_access_token(auth_header.split(" ", 1)[1])
-        if token_data.role == "Counselor":
-            # Look up their full_name from the DB so the filter is accurate
-            caller = db.query(DBUser).filter(DBUser.email == token_data.email).first()
-            if caller:
-                assigned_to = caller.full_name  # override any client-supplied value
+    try:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token_data = decode_access_token(auth_header.split(" ", 1)[1])
+            if token_data and token_data.role == "Counselor":
+                caller = db.query(DBUser).filter(DBUser.email == token_data.email).first()
+                if caller:
+                    assigned_to = caller.full_name
+    except Exception:
+        pass  # token errors already handled by _verify_token; never crash the endpoint
 
     # Use Supabase REST API if available
     if supabase_data.client:
@@ -1391,13 +1393,11 @@ async def get_leads(
     # Order by priority and follow-up date
     query = query.order_by(DBLead.ai_score.desc(), DBLead.follow_up_date.asc())
 
-    # Fix N+1 queries: Eager load relationships
-    query = query.options(
-        joinedload(DBLead.notes)
-    )
-
-    # Get total count for pagination (before offset/limit)
+    # Count BEFORE adding joinedload (SA2: joinedload + count() incompatible)
     total_count = query.count()
+
+    # Eager load notes AFTER count
+    query = query.options(joinedload(DBLead.notes))
 
     leads = query.offset(skip).limit(limit).all()
     return {
@@ -1855,13 +1855,16 @@ async def get_audit_logs(page: int = 1, limit: int = 50, db: Session = Depends(g
 async def get_followups_today(request: Request, assigned_to: Optional[str] = None, db: Session = Depends(get_db)):
     """All leads with follow_up_date = today + overdue, for the daily work view"""
     # Counselors may only see their own follow-ups
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Bearer "):
-        token_data = decode_access_token(auth_header.split(" ", 1)[1])
-        if token_data.role == "Counselor":
-            caller = db.query(DBUser).filter(DBUser.email == token_data.email).first()
-            if caller:
-                assigned_to = caller.full_name
+    try:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token_data = decode_access_token(auth_header.split(" ", 1)[1])
+            if token_data and token_data.role == "Counselor":
+                caller = db.query(DBUser).filter(DBUser.email == token_data.email).first()
+                if caller:
+                    assigned_to = caller.full_name
+    except Exception:
+        pass
 
     today = datetime.utcnow().date()
     active_statuses = ["Enrolled", "Not Interested", "Junk"]
