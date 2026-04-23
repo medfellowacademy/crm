@@ -1,22 +1,28 @@
--- Fix NULL created_at and updated_at values in users table
+-- Reset users table: delete all existing users and insert single Super Admin
 -- Run this directly in Supabase SQL editor
 
-UPDATE users
-SET created_at = NOW()
-WHERE created_at IS NULL;
+-- Step 1: Clear dependent foreign keys first (reports_to self-ref)
+UPDATE public.users SET reports_to = NULL;
 
-UPDATE users
-SET updated_at = NOW()
-WHERE updated_at IS NULL;
+-- Step 2: Delete all existing users
+DELETE FROM public.users;
 
--- Verify the fix
-SELECT
-    COUNT(*) as total_users,
-    COUNT(created_at) as users_with_created_at,
-    COUNT(updated_at) as users_with_updated_at
-FROM users;
+-- Step 3: Reset the ID sequence so IDs start from 1
+ALTER SEQUENCE public.users_id_seq RESTART WITH 1;
 
--- Show any remaining NULL values
-SELECT id, full_name, email, created_at, updated_at
-FROM users
-WHERE created_at IS NULL OR updated_at IS NULL;
+-- Step 4: Insert Super Admin
+INSERT INTO public.users (full_name, email, phone, password, role, reports_to, is_active, created_at, updated_at)
+VALUES (
+    'Santhosh Reddy',
+    'santhosh@medfellow.in',
+    '8220952369',
+    '$2b$12$sU1tBXnBXVeFGYnGAZyfXOuax2f35GFA7LYOQ72CWihqKZBPltkym',
+    'Super Admin',
+    NULL,
+    TRUE,
+    NOW(),
+    NOW()
+);
+
+-- Step 5: Verify
+SELECT id, full_name, email, phone, role, is_active FROM public.users;

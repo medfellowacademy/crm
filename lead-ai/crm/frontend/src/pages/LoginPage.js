@@ -79,9 +79,7 @@ const LoginPage = () => {
         </form>
 
         <div style={styles.hint}>
-          <strong>Demo credentials:</strong><br />
-          Admin: sarah.johnson@crm.com / admin123<br />
-          Counselor: james.wilson@crm.com / counselor123
+          Login with your admin credentials
         </div>
       </div>
     </div>
