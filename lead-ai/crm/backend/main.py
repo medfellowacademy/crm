@@ -1210,12 +1210,19 @@ async def root():
 @app.post("/api/leads", response_model=LeadResponse)
 async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """Create a new lead with AI scoring"""
-    
-    # Generate unique lead ID
-    lead_count = db.query(DBLead).count()
+
+    # Generate unique lead ID based on Supabase count if available, else SQLite
+    if supabase_data.client:
+        try:
+            count_resp = supabase_data.client.table('leads').select("lead_id", count='exact').limit(0).execute()
+            lead_count = count_resp.count or 0
+        except Exception:
+            lead_count = db.query(DBLead).count()
+    else:
+        lead_count = db.query(DBLead).count()
     lead_id = f"LEAD{lead_count + 1:05d}"
-    
-    # Create lead
+
+    # Build a temporary ORM object just for AI scoring (not yet persisted)
     db_lead = DBLead(
         lead_id=lead_id,
         full_name=lead.full_name,
@@ -1228,28 +1235,52 @@ async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, db: S
         assigned_to=lead.assigned_to,
         status=LeadStatus.FRESH
     )
-    
-    db.add(db_lead)
-    db.commit()
-    db.refresh(db_lead)
-    
+
     # AI scoring
     ai_scorer.load_course_prices(db)
     score_result = ai_scorer.score_lead(db_lead, [])
-    
-    # Update with AI insights
     for key, value in score_result.items():
         if key == 'feature_importance' and value:
-            # Serialize feature importance dict to JSON
             import json
             setattr(db_lead, key, json.dumps(value))
         else:
             setattr(db_lead, key, value)
-    
+
+    # ── Save to Supabase (primary store) ──────────────────────────────────
+    if supabase_data.client:
+        try:
+            payload = {
+                "lead_id": db_lead.lead_id,
+                "full_name": db_lead.full_name,
+                "email": db_lead.email,
+                "phone": db_lead.phone,
+                "whatsapp": db_lead.whatsapp,
+                "country": db_lead.country,
+                "source": db_lead.source,
+                "course_interested": db_lead.course_interested,
+                "assigned_to": db_lead.assigned_to,
+                "status": db_lead.status.value if hasattr(db_lead.status, 'value') else db_lead.status,
+                "ai_score": db_lead.ai_score,
+                "ai_segment": db_lead.ai_segment,
+                "ai_recommendation": db_lead.ai_recommendation,
+            }
+            # strip None values
+            payload = {k: v for k, v in payload.items() if v is not None}
+            created = supabase_data.create_lead(payload)
+            if created:
+                # Invalidate caches
+                invalidate_cache(STATS_CACHE)
+                invalidate_cache(LEAD_CACHE)
+                return created
+            # fall through to SQLite if Supabase insert returned nothing
+        except Exception as e:
+            logger.error(f"Supabase create_lead failed, falling back to SQLite: {e}")
+
+    # ── Fallback: save to SQLite ───────────────────────────────────────────
+    db.add(db_lead)
     db.commit()
     db.refresh(db_lead)
-    
-    # Create activity
+
     activity = DBActivity(
         lead_id=db_lead.id,
         activity_type="lead_created",
@@ -1258,11 +1289,10 @@ async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, db: S
     )
     db.add(activity)
     db.commit()
-    
-    # Invalidate stats cache (new lead affects dashboard stats)
+
     invalidate_cache(STATS_CACHE)
     invalidate_cache(LEAD_CACHE)
-    
+
     return db_lead
 
 @app.get("/api/leads")
