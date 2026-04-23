@@ -89,7 +89,6 @@ const LeadAnalysisPage = () => {
   const { data: coursesData, isLoading: coursesLoading } = useQuery({
     queryKey: ['courses'],
     queryFn: () => coursesAPI.getAll().then(res => res.data)
-    }
   });
 
   const leads = leadsData?.leads || [];
