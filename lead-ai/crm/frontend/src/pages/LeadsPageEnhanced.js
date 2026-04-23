@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Table, Button, Tag, Progress, Space, Input, Select, DatePicker,
   Drawer, Form, message, Row, Col, Card, Statistic, Avatar, Tooltip,
-  Dropdown, Menu, Segmented, Empty, Typography, Divider, Checkbox,
+  Dropdown, Segmented, Empty, Typography, Divider, Checkbox,
   Radio, InputNumber, Alert, Modal, Upload, Steps, Badge,
 } from 'antd';
 import {
@@ -356,28 +356,19 @@ const LeadsPageEnhanced = () => {
   };
 
   // ── Action menu ────────────────────────────────────────────────────────────
-  const getActionMenu = (record) => (
-    <Menu>
-      <Menu.Item key="view" icon={<EyeOutlined />} onClick={() => navigate(`/leads/${record.lead_id}`)}>View Details</Menu.Item>
-      <Menu.Item key="edit" icon={<EditOutlined />} onClick={() => { form.setFieldsValue({ ...record, follow_up_date: record.follow_up_date ? dayjs(record.follow_up_date) : null }); setDrawerVisible(true); }}>Edit</Menu.Item>
-      <Menu.Item key="whatsapp" icon={<WhatsAppOutlined />} onClick={() => window.open(`https://wa.me/${record.phone?.replace(/[^0-9]/g, '')}`)}>WhatsApp</Menu.Item>
-      <Menu.Item key="email" icon={<MailOutlined />} onClick={() => window.location.href = `mailto:${record.email}`}>Email</Menu.Item>
-      <Menu.Divider />
-      <Menu.Item key="delete" icon={<DeleteOutlined />} danger onClick={() => deleteMutation.mutate(record.lead_id)}>Delete</Menu.Item>
-    </Menu>
-  );
+  const getActionMenu = (record) => ({
+    items: [
+      { key: 'view', icon: <EyeOutlined />, label: 'View Details', onClick: () => navigate(`/leads/${record.lead_id}`) },
+      { key: 'edit', icon: <EditOutlined />, label: 'Edit', onClick: () => { form.setFieldsValue({ ...record, follow_up_date: record.follow_up_date ? dayjs(record.follow_up_date) : null }); setDrawerVisible(true); } },
+      { key: 'whatsapp', icon: <WhatsAppOutlined />, label: 'WhatsApp', onClick: () => window.open(`https://wa.me/${record.phone?.replace(/[^0-9]/g, '')}`) },
+      { key: 'email', icon: <MailOutlined />, label: 'Email', onClick: () => { window.location.href = `mailto:${record.email}`; } },
+      { type: 'divider' },
+      { key: 'delete', icon: <DeleteOutlined />, label: 'Delete', danger: true, onClick: () => deleteMutation.mutate(record.lead_id) },
+    ],
+  });
 
   // ── Table columns ──────────────────────────────────────────────────────────
   const columns = [
-    {
-      title: '',
-      key: 'sel',
-      width: 40,
-      render: (_, r) => (
-        <Checkbox checked={selectedRows.includes(r.lead_id)}
-          onChange={e => setSelectedRows(e.target.checked ? [...selectedRows, r.lead_id] : selectedRows.filter(id => id !== r.lead_id))} />
-      ),
-    },
     {
       title: 'Lead',
       key: 'lead_info',
@@ -571,7 +562,7 @@ const LeadsPageEnhanced = () => {
               onClick={() => setChatLead(r)}
             />
           </Tooltip>
-          <Dropdown overlay={getActionMenu(r)} trigger={['click']}>
+          <Dropdown menu={getActionMenu(r)} trigger={['click']}>
             <Button size="small" icon={<MoreOutlined />} />
           </Dropdown>
         </Space>
@@ -647,6 +638,7 @@ const LeadsPageEnhanced = () => {
             message={
               <Space>
                 <Text strong>{selectedRows.length} selected</Text>
+                <Button size="small" onClick={() => setSelectedRows(filteredLeads.map(l => l.lead_id))}>Select All {filteredLeads.length}</Button>
                 <Button size="small" onClick={() => setSelectedRows([])}>Clear</Button>
                 <Button size="small" type="primary" onClick={() => setBulkDrawerVisible(true)}>Bulk Update</Button>
                 <Button size="small" danger onClick={() => {
@@ -667,9 +659,15 @@ const LeadsPageEnhanced = () => {
           rowKey="lead_id"
           scroll={{ x: 1800 }}
           size="middle"
+          rowSelection={{
+            selectedRowKeys: selectedRows,
+            onChange: (keys) => setSelectedRows(keys),
+            preserveSelectedRowKeys: true,
+          }}
           pagination={{ total: filteredLeads.length, pageSize: 25, showSizeChanger: true, pageSizeOptions: ['10','25','50','100'], showTotal: t => `${t} leads`, position: ['bottomCenter'] }}
           locale={{ emptyText: <Empty description="No leads found"><Button type="primary" icon={<PlusOutlined />} onClick={() => setDrawerVisible(true)}>Add First Lead</Button></Empty> }}
           rowClassName={r => r.follow_up_date && dayjs(r.follow_up_date).isBefore(dayjs(), 'day') ? 'overdue-row' : ''}
+        />
         />
       </Card>
 
