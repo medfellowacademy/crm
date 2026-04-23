@@ -1269,7 +1269,7 @@ async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, db: S
 async def get_leads(
     request: Request,
     skip: int = 0,
-    limit: int = 100,
+    limit: int = 5000,
     status: Optional[LeadStatus] = None,
     country: Optional[str] = None,
     segment: Optional[LeadSegment] = None,

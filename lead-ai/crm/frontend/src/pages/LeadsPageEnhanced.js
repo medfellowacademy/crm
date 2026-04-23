@@ -165,7 +165,7 @@ const LeadsPageEnhanced = () => {
       if (quickFilter === 'today') params.created_today = true;
       if (quickFilter === 'overdue') params.overdue = true;
       if (searchText) params.search = searchText;
-      try { return (await leadsAPI.getAll(params)).data?.leads || []; } catch { return []; }
+      try { return (await leadsAPI.getAll({ ...params, limit: 5000 })).data?.leads || []; } catch { return []; }
     },
     refetchInterval: 30000,
     retry: 1,
@@ -664,7 +664,7 @@ const LeadsPageEnhanced = () => {
             onChange: (keys) => setSelectedRows(keys),
             preserveSelectedRowKeys: true,
           }}
-          pagination={{ total: filteredLeads.length, pageSize: 25, showSizeChanger: true, pageSizeOptions: ['10','25','50','100'], showTotal: t => `${t} leads`, position: ['bottomCenter'] }}
+          pagination={{ total: filteredLeads.length, pageSize: 50, showSizeChanger: true, pageSizeOptions: ['25','50','100','250','500'], showTotal: t => `${t} leads`, position: ['bottomCenter'] }}
           locale={{ emptyText: <Empty description="No leads found"><Button type="primary" icon={<PlusOutlined />} onClick={() => setDrawerVisible(true)}>Add First Lead</Button></Empty> }}
           rowClassName={r => r.follow_up_date && dayjs(r.follow_up_date).isBefore(dayjs(), 'day') ? 'overdue-row' : ''}
         />
