@@ -14,50 +14,25 @@ import {
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+import api, { userStatsAPI, dashboardAPI } from '../../api/api';
 
 const CounselorDashboard = ({ user }) => {
   // Fetch counselor's personal stats
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['counselor-stats', user.id],
-    queryFn: async () => {
-      const response = await fetch(`${API_BASE_URL}/api/users/${user.id}/stats`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-        },
-      });
-      if (!response.ok) throw new Error('Failed to fetch stats');
-      return response.json();
-    },
+    queryFn: () => userStatsAPI.getStats(user.id).then(res => res.data),
   });
 
-  // Fetch today's follow-ups
+  // Fetch today's follow-ups (using dashboardAPI which handles assigned_to param)
   const { data: followUps = [], isLoading: followUpsLoading } = useQuery({
     queryKey: ['today-followups', user.id],
-    queryFn: async () => {
-      const response = await fetch(`${API_BASE_URL}/api/leads/followups/today?userId=${user.id}`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-        },
-      });
-      if (!response.ok) throw new Error('Failed to fetch follow-ups');
-      return response.json();
-    },
+    queryFn: () => api.get('/api/leads/followups/today', { params: { assigned_to: user.id } }).then(res => res.data),
   });
 
   // Fetch performance trend (last 7 days)
   const { data: performanceTrend = [] } = useQuery({
     queryKey: ['performance-trend', user.id],
-    queryFn: async () => {
-      const response = await fetch(`${API_BASE_URL}/api/users/${user.id}/performance?days=7`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-        },
-      });
-      if (!response.ok) throw new Error('Failed to fetch performance');
-      return response.json();
-    },
+    queryFn: () => userStatsAPI.getPerformance(user.id, 7).then(res => res.data),
   });
 
   const statCards = [

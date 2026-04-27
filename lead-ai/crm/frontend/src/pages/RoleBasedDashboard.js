@@ -3,6 +3,7 @@ import { ROLES } from '../config/rbac';
 import AdminDashboard from '../features/dashboards/AdminDashboard';
 import CounselorDashboard from '../features/dashboards/CounselorDashboard';
 import ProfessionalDashboard from '../pages/ProfessionalDashboard';
+import FinanceDashboard from '../features/dashboards/FinanceDashboard';
 
 const RoleBasedDashboard = () => {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
@@ -26,7 +27,7 @@ const RoleBasedDashboard = () => {
     
     case ROLES.FINANCE:
       // Finance gets specialized revenue dashboard
-      return <AdminDashboard />; // Can create FinanceDashboard later
+      return <FinanceDashboard />;
     
     default:
       // Fallback to professional dashboard

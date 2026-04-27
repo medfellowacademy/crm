@@ -72,7 +72,7 @@ const SmartNotifications = () => {
       const response = await fetch(`${API_BASE_URL}/api/notifications/${notificationId}/read`, {
         method: 'PATCH',
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Authorization': `Bearer ${JSON.parse(localStorage.getItem('user') || '{}')?.token}`,
         },
       });
       if (!response.ok) throw new Error('Failed to mark as read');
@@ -90,7 +90,7 @@ const SmartNotifications = () => {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Authorization': `Bearer ${JSON.parse(localStorage.getItem('user') || '{}')?.token}`,
         },
         body: JSON.stringify({ hours }),
       });
@@ -108,7 +108,7 @@ const SmartNotifications = () => {
       const response = await fetch(`${API_BASE_URL}/api/notifications/read-all`, {
         method: 'PATCH',
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Authorization': `Bearer ${JSON.parse(localStorage.getItem('user') || '{}')?.token}`,
         },
       });
       if (!response.ok) throw new Error('Failed to mark all as read');

@@ -24,7 +24,7 @@ const CounsellorDashboard = ({ user }) => {
     queryFn: async () => {
       const response = await fetch(`${API_BASE_URL}/api/users/${user.id}/stats`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Authorization': `Bearer ${JSON.parse(localStorage.getItem('user') || '{}')?.token}`,
         },
       });
       if (!response.ok) throw new Error('Failed to fetch stats');
@@ -38,7 +38,7 @@ const CounsellorDashboard = ({ user }) => {
     queryFn: async () => {
       const response = await fetch(`${API_BASE_URL}/api/leads/followups/today?userId=${user.id}`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Authorization': `Bearer ${JSON.parse(localStorage.getItem('user') || '{}')?.token}`,
         },
       });
       if (!response.ok) throw new Error('Failed to fetch follow-ups');
@@ -52,7 +52,7 @@ const CounsellorDashboard = ({ user }) => {
     queryFn: async () => {
       const response = await fetch(`${API_BASE_URL}/api/users/${user.id}/performance?days=7`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Authorization': `Bearer ${JSON.parse(localStorage.getItem('user') || '{}')?.token}`,
         },
       });
       if (!response.ok) throw new Error('Failed to fetch performance');

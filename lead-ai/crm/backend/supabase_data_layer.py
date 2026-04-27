@@ -20,9 +20,21 @@ class SupabaseDataLayer:
         skip: int = 0,
         limit: int = 1000,
         status: Optional[str] = None,
+        status_in: Optional[str] = None,
         country: Optional[str] = None,
+        country_in: Optional[str] = None,
         segment: Optional[str] = None,
+        segment_in: Optional[str] = None,
         assigned_to: Optional[str] = None,
+        assigned_to_in: Optional[str] = None,
+        course_interested: Optional[str] = None,
+        source: Optional[str] = None,
+        min_score: Optional[float] = None,
+        max_score: Optional[float] = None,
+        follow_up_from: Optional[str] = None,
+        follow_up_to: Optional[str] = None,
+        created_today: bool = False,
+        overdue: bool = False,
         search: Optional[str] = None,
         # Date filters for created_at
         created_on: Optional[str] = None,
@@ -44,14 +56,59 @@ class SupabaseDataLayer:
             query = self.client.table('leads').select("*", count='exact')
 
             # ---- apply filters ----
+            if status_in and not status:
+                status = status_in
+            if country_in and not country:
+                country = country_in
+            if segment_in and not segment:
+                segment = segment_in
+            if assigned_to_in and not assigned_to:
+                assigned_to = assigned_to_in
+
             if status:
-                query = query.eq('status', status)
+                if ',' in status:
+                    query = query.in_('status', [s.strip() for s in status.split(',') if s.strip()])
+                else:
+                    query = query.eq('status', status)
             if country:
-                query = query.eq('country', country)
+                if ',' in country:
+                    query = query.in_('country', [c.strip() for c in country.split(',') if c.strip()])
+                else:
+                    query = query.eq('country', country)
             if segment:
-                query = query.eq('ai_segment', segment)
+                if ',' in segment:
+                    query = query.in_('ai_segment', [s.strip() for s in segment.split(',') if s.strip()])
+                else:
+                    query = query.eq('ai_segment', segment)
             if assigned_to:
-                query = query.eq('assigned_to', assigned_to)
+                if ',' in assigned_to:
+                    query = query.in_('assigned_to', [a.strip() for a in assigned_to.split(',') if a.strip()])
+                else:
+                    query = query.eq('assigned_to', assigned_to)
+            if course_interested:
+                if ',' in course_interested:
+                    query = query.in_('course_interested', [c.strip() for c in course_interested.split(',') if c.strip()])
+                else:
+                    query = query.eq('course_interested', course_interested)
+            if source:
+                if ',' in source:
+                    query = query.in_('source', [s.strip() for s in source.split(',') if s.strip()])
+                else:
+                    query = query.eq('source', source)
+            if min_score is not None:
+                query = query.gte('ai_score', min_score)
+            if max_score is not None:
+                query = query.lte('ai_score', max_score)
+            if follow_up_from:
+                query = query.gte('follow_up_date', follow_up_from)
+            if follow_up_to:
+                query = query.lte('follow_up_date', follow_up_to)
+            if created_today:
+                today = datetime.utcnow().date().isoformat()
+                query = query.gte('created_at', f"{today}T00:00:00").lte('created_at', f"{today}T23:59:59")
+            if overdue:
+                now_iso = datetime.utcnow().isoformat()
+                query = query.lt('follow_up_date', now_iso)
             if search:
                 query = query.or_(
                     f"full_name.ilike.%{search}%,"

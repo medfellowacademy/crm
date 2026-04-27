@@ -32,7 +32,7 @@ const ChatInterface = ({ visible, onClose, lead, type = 'whatsapp' }) => {
         `${API_BASE_URL}/api/communications/${lead.lead_id}/history?type=${type}`,
         {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`
+            'Authorization': `Bearer ${JSON.parse(localStorage.getItem('user') || '{}')?.token}`
           }
         }
       );
@@ -50,7 +50,7 @@ const ChatInterface = ({ visible, onClose, lead, type = 'whatsapp' }) => {
         messageData,
         {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`
+            'Authorization': `Bearer ${JSON.parse(localStorage.getItem('user') || '{}')?.token}`
           }
         }
       );

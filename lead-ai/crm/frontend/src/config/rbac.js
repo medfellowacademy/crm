@@ -1,8 +1,10 @@
 // RBAC Configuration
+// Role values must match exactly what the backend stores in the database
 export const ROLES = {
-  ADMIN: 'admin',
-  COUNSELLOR: 'counselor',
-  MANAGER: 'manager',
+  ADMIN: 'Super Admin',
+  COUNSELLOR: 'Counselor',
+  MANAGER: 'Manager',
+  TEAM_LEADER: 'Team Leader',
   FINANCE: 'finance',
 };
 
@@ -84,6 +86,18 @@ export const rolePermissions = {
     PERMISSIONS.EXPORT_REPORTS,
   ],
   
+  [ROLES.TEAM_LEADER]: [
+    // Team lead - between counselor and manager
+    PERMISSIONS.VIEW_ALL_LEADS,
+    PERMISSIONS.CREATE_LEAD,
+    PERMISSIONS.EDIT_LEAD,
+    PERMISSIONS.ASSIGN_LEAD,
+    PERMISSIONS.VIEW_USERS,
+    PERMISSIONS.VIEW_ALL_REVENUE,
+    PERMISSIONS.VIEW_TEAM_ANALYTICS,
+    PERMISSIONS.EXPORT_REPORTS,
+  ],
+
   [ROLES.FINANCE]: [
     // Financial focus
     PERMISSIONS.VIEW_ALL_LEADS, // Read-only

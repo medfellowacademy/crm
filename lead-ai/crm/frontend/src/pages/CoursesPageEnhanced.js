@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Card,
   Table,
@@ -19,6 +19,11 @@ import {
   Modal,
   Timeline,
   List,
+  Drawer,
+  Form,
+  InputNumber,
+  Popconfirm,
+  message,
 } from 'antd';
 import {
   BookOutlined,
@@ -33,6 +38,9 @@ import {
   EyeOutlined,
   CheckCircleOutlined,
   InfoCircleOutlined,
+  PlusOutlined,
+  EditOutlined,
+  DeleteOutlined,
 } from '@ant-design/icons';
 import { coursesAPI } from '../api/api';
 
@@ -41,17 +49,61 @@ const { Option } = Select;
 const { TabPane } = Tabs;
 
 const CoursesPageEnhanced = () => {
+  const queryClient = useQueryClient();
   const [searchText, setSearchText] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [viewMode, setViewMode] = useState('grid');
   const [selectedCourse, setSelectedCourse] = useState(null);
   const [modalVisible, setModalVisible] = useState(false);
+  const [drawerVisible, setDrawerVisible] = useState(false);
+  const [editingCourse, setEditingCourse] = useState(null);
+  const [form] = Form.useForm();
 
   // Fetch courses
   const { data: courses = [], isLoading } = useQuery({
     queryKey: ['courses'],
     queryFn: () => coursesAPI.getAll().then(res => res.data || [])
   });
+
+  // Mutations
+  const createMutation = useMutation({
+    mutationFn: (data) => coursesAPI.create(data),
+    onSuccess: () => {
+      message.success('Course created!');
+      setDrawerVisible(false);
+      form.resetFields();
+      queryClient.invalidateQueries({ queryKey: ['courses'] });
+    },
+    onError: () => message.error('Failed to create course'),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }) => coursesAPI.update(id, data),
+    onSuccess: () => {
+      message.success('Course updated!');
+      setDrawerVisible(false);
+      setEditingCourse(null);
+      form.resetFields();
+      queryClient.invalidateQueries({ queryKey: ['courses'] });
+    },
+    onError: () => message.error('Failed to update course'),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id) => coursesAPI.delete(id),
+    onSuccess: () => {
+      message.success('Course deleted!');
+      queryClient.invalidateQueries({ queryKey: ['courses'] });
+    },
+    onError: () => message.error('Failed to delete course'),
+  });
+
+  const openAdd = () => { setEditingCourse(null); form.resetFields(); setDrawerVisible(true); };
+  const openEdit = (course) => { setEditingCourse(course); form.setFieldsValue(course); setDrawerVisible(true); };
+  const handleFormSubmit = (values) => {
+    if (editingCourse) updateMutation.mutate({ id: editingCourse.id, data: values });
+    else createMutation.mutate(values);
+  };
 
   // Calculate statistics
   const stats = {
@@ -186,6 +238,24 @@ const CoursesPageEnhanced = () => {
             {record.currency}
           </div>
         </div>
+      ),
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      width: 140,
+      fixed: 'right',
+      render: (_, record) => (
+        <Space>
+          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>Edit</Button>
+          <Popconfirm
+            title="Delete this course?"
+            onConfirm={() => deleteMutation.mutate(record.id)}
+            okText="Delete" okButtonProps={{ danger: true }} cancelText="Cancel"
+          >
+            <Button size="small" danger icon={<DeleteOutlined />} loading={deleteMutation.isPending}>Del</Button>
+          </Popconfirm>
+        </Space>
       ),
     },
   ];
@@ -487,6 +557,9 @@ const CoursesPageEnhanced = () => {
               Fellowship Programs Catalog
             </Title>
             <Space>
+              <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>
+                Add Course
+              </Button>
               <Button
                 type={viewMode === 'grid' ? 'primary' : 'default'}
                 icon={<AppstoreOutlined />}
@@ -618,6 +691,54 @@ const CoursesPageEnhanced = () => {
       </Card>
 
       <CourseDetailsModal />
+
+      {/* Add / Edit Course Drawer */}
+      <Drawer
+        title={editingCourse ? 'Edit Course' : 'Add New Course'}
+        width={520}
+        open={drawerVisible}
+        onClose={() => { setDrawerVisible(false); setEditingCourse(null); form.resetFields(); }}
+      >
+        <Form form={form} layout="vertical" onFinish={handleFormSubmit}>
+          <Form.Item name="course_name" label="Course Name" rules={[{ required: true }]}>
+            <Input placeholder="Fellowship in Cardiology" />
+          </Form.Item>
+          <Form.Item name="category" label="Category" rules={[{ required: true }]}>
+            <Select placeholder="Select category">
+              {['Pediatrics','Orthopaedics','Radiology','Dermatology','Obs & Gynae',
+                'Cardiology','Oncology','Endocrinology','Surgery','Medicine',
+                'Urology','Gastroenterology','Dental','Reproductive'].map(c => (
+                <Select.Option key={c} value={c}>{c}</Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
+          <Form.Item name="duration" label="Duration" rules={[{ required: true }]}>
+            <Input placeholder="12 Months" />
+          </Form.Item>
+          <Form.Item name="price" label="Price (₹)" rules={[{ required: true }]}>
+            <InputNumber min={0} style={{ width: '100%' }} placeholder="500000" />
+          </Form.Item>
+          <Form.Item name="currency" label="Currency" initialValue="INR">
+            <Select>
+              <Select.Option value="INR">INR</Select.Option>
+              <Select.Option value="USD">USD</Select.Option>
+              <Select.Option value="AED">AED</Select.Option>
+            </Select>
+          </Form.Item>
+          <Form.Item name="eligibility" label="Eligibility">
+            <Input placeholder="MBBS or equivalent" />
+          </Form.Item>
+          <Form.Item name="description" label="Description">
+            <Input.TextArea rows={3} placeholder="Brief description..." />
+          </Form.Item>
+          <Button
+            type="primary" htmlType="submit" block
+            loading={createMutation.isPending || updateMutation.isPending}
+          >
+            {editingCourse ? 'Update Course' : 'Add Course'}
+          </Button>
+        </Form>
+      </Drawer>
     </div>
   );
 };

@@ -18,7 +18,11 @@ import {
   WarningOutlined, FunnelPlotOutlined, MessageOutlined,
 } from '@ant-design/icons';
 import ChatDrawer from '../components/ChatDrawer';
-import { leadsAPI, coursesAPI, counselorsAPI, usersAPI } from '../api/api';
+import LeadHoverPreview from '../components/leads/LeadHoverPreview';
+import DuplicateDetectionModal from '../components/leads/DuplicateDetectionModal';
+import FieldMappingModal from '../components/leads/FieldMappingModal';
+import WhatsAppTemplateDrawer from '../components/whatsapp/WhatsAppTemplateDrawer';
+import { leadsAPI, coursesAPI, counselorsAPI, usersAPI, duplicatesAPI, decayAPI } from '../api/api';
 import { useAuth } from '../context/AuthContext';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -146,43 +150,125 @@ const LeadsPageEnhanced = () => {
   const [importData, setImportData] = useState([]);
   const [importErrors, setImportErrors] = useState([]);
   const [importProgress, setImportProgress] = useState(0);
+  
+  // Field mapping state
+  const [mappingVisible, setMappingVisible] = useState(false);
+  const [rawFileData, setRawFileData] = useState({ columns: [], rows: [] });
+  const [fieldMapping, setFieldMapping] = useState({});
   const [filters, setFilters] = useState({});
   const [searchText, setSearchText] = useState('');
   const [selectedRows, setSelectedRows] = useState([]);
   const [quickFilter, setQuickFilter] = useState('all');
   const [advFilters, setAdvFilters] = useState({});
+  const [pageSize, setPageSize] = useState(50);
+  const [currentPage, setCurrentPage] = useState(1);
   const [form] = Form.useForm();
   const [bulkForm] = Form.useForm();
   const fileInputRef = useRef(null);
 
+  // ── Hover preview state ────────────────────────────────────────────────────
+  const [hoveredLead, setHoveredLead] = useState(null);
+  const [hoverPos,    setHoverPos]    = useState({ x: 0, y: 0 });
+
+  // Duplicate detection
+  const [dupModalOpen,    setDupModalOpen]    = useState(false);
+  const [dupCandidates,   setDupCandidates]   = useState([]);
+  const [pendingLeadData, setPendingLeadData] = useState(null);
+
+  // WhatsApp template drawer (for quick-send from table row)
+  const [templateLead,    setTemplateLead]    = useState(null);
+  const showTimerRef = useRef(null);
+  const hideTimerRef = useRef(null);
+
+  // Reset to first page when filters or search changes
+  React.useEffect(() => {
+    setCurrentPage(1);
+  }, [filters, searchText, quickFilter, advFilters]);
+
   // ── Queries ────────────────────────────────────────────────────────────────
-  const { data: leads = [], isLoading, refetch } = useQuery({
-    queryKey: ['leads', filters, searchText, quickFilter],
+  const leadQueryParams = React.useMemo(() => {
+    const params = {
+      ...filters,
+      skip: (currentPage - 1) * pageSize,
+      limit: pageSize,
+    };
+
+    if (quickFilter === 'hot') params.segment = 'Hot';
+    if (quickFilter === 'warm') params.segment = 'Warm';
+    if (quickFilter === 'today') params.created_today = true;
+    if (quickFilter === 'overdue') params.overdue = true;
+    if (searchText) params.search = searchText;
+
+    if (advFilters.status?.length) params.status_in = advFilters.status.join(',');
+    if (advFilters.segment?.length) params.segment_in = advFilters.segment.join(',');
+    if (advFilters.country?.length) params.country_in = advFilters.country.join(',');
+    if (advFilters.assigned?.length) params.assigned_to_in = advFilters.assigned.join(',');
+    if (advFilters.course?.length === 1) params.course_interested = advFilters.course[0];
+    if (advFilters.source?.length === 1) params.source = advFilters.source[0];
+    if (advFilters.minScore != null) params.min_score = advFilters.minScore;
+    if (advFilters.maxScore != null) params.max_score = advFilters.maxScore;
+
+    if (advFilters.followUp) {
+      const { mode, date, range } = advFilters.followUp;
+      if (mode === 'today') {
+        params.follow_up_from = dayjs().startOf('day').toISOString();
+        params.follow_up_to = dayjs().endOf('day').toISOString();
+      } else if (mode === 'overdue') {
+        params.overdue = true;
+      } else if (mode === 'on' && date) {
+        params.follow_up_from = dayjs(date).startOf('day').toISOString();
+        params.follow_up_to = dayjs(date).endOf('day').toISOString();
+      } else if (mode === 'before' && date) {
+        params.follow_up_to = dayjs(date).endOf('day').toISOString();
+      } else if (mode === 'after' && date) {
+        params.follow_up_from = dayjs(date).startOf('day').toISOString();
+      } else if (mode === 'between' && range?.length === 2) {
+        params.follow_up_from = dayjs(range[0]).startOf('day').toISOString();
+        params.follow_up_to = dayjs(range[1]).endOf('day').toISOString();
+      }
+    }
+
+    return params;
+  }, [filters, quickFilter, searchText, advFilters, currentPage, pageSize]);
+
+  const { data: leadsResponse = { leads: [], total: 0 }, isLoading, refetch } = useQuery({
+    queryKey: ['leads', leadQueryParams],
     queryFn: async () => {
-      let params = { ...filters };
-      if (quickFilter === 'hot') params.ai_segment = 'Hot';
-      if (quickFilter === 'warm') params.ai_segment = 'Warm';
-      if (quickFilter === 'today') params.created_today = true;
-      if (quickFilter === 'overdue') params.overdue = true;
-      if (searchText) params.search = searchText;
-      try { return (await leadsAPI.getAll({ ...params, limit: 5000 })).data?.leads || []; } catch { return []; }
+      try {
+        return (await leadsAPI.getAll(leadQueryParams)).data || { leads: [], total: 0 };
+      } catch {
+        return { leads: [], total: 0 };
+      }
     },
-    refetchInterval: 30000,
+    staleTime: 2 * 60 * 1000,
+    refetchInterval: false,
     retry: 1,
   });
+
+  const leads = leadsResponse?.leads || [];
+  const totalLeads = leadsResponse?.total || 0;
 
   const { data: courses = [] } = useQuery({
     queryKey: ['courses'],
     queryFn: async () => { try { return (await coursesAPI.getAll()).data || []; } catch { return []; } },
   });
 
-  const { data: users = [] } = useQuery({
+  const { data: usersData } = useQuery({
     queryKey: ['users'],
-    queryFn: async () => { try { return (await usersAPI.getAll()).data?.users || []; } catch { return []; } },
+    queryFn: async () => { try { return (await usersAPI.getAll()).data; } catch (err) { console.error('Users fetch error:', err); return { users: [] }; } },
+  });
+
+  const users = Array.isArray(usersData) ? usersData : (usersData?.users || []);
+
+  // Decay config — used to compute "at risk" badges in the table
+  const { data: decayConfig } = useQuery({
+    queryKey: ['decay-config'],
+    queryFn: async () => { try { return (await decayAPI.getConfig()).data; } catch { return null; } },
+    staleTime: 10 * 60 * 1000,
   });
 
   // ── Computed filter options ────────────────────────────────────────────────
-  const uniqueStatuses   = [...new Set(leads.map(l => l.status))].filter(Boolean).sort();
+  const uniqueStatuses   = STATUS_OPTIONS;
   const uniqueCountries  = [...new Set(leads.map(l => l.country))].filter(Boolean).sort();
   const uniqueCourses    = [...new Set([
     ...courses.map(c => c.course_name),
@@ -194,33 +280,12 @@ const LeadsPageEnhanced = () => {
   const uniqueSources    = [...new Set(leads.map(l => l.source))].filter(Boolean).sort();
   const uniqueSegments   = ['Hot', 'Warm', 'Cold', 'Junk'];
 
-  // ── Client-side advanced filter ────────────────────────────────────────────
-  const filteredLeads = leads.filter(l => {
-    if (advFilters.status?.length && !advFilters.status.includes(l.status)) return false;
-    if (advFilters.segment?.length && !advFilters.segment.includes(l.ai_segment)) return false;
-    if (advFilters.country?.length && !advFilters.country.includes(l.country)) return false;
-    if (advFilters.course?.length && !advFilters.course.includes(l.course_interested)) return false;
-    if (advFilters.source?.length && !advFilters.source.includes(l.source)) return false;
-    if (advFilters.assigned?.length && !advFilters.assigned.includes(l.assigned_to)) return false;
-    if (advFilters.minScore != null && (l.ai_score || 0) < advFilters.minScore) return false;
-    if (advFilters.maxScore != null && (l.ai_score || 0) > advFilters.maxScore) return false;
-    // Follow-up date filters
-    if (advFilters.followUp) {
-      const { mode, date, range } = advFilters.followUp;
-      const d = l.follow_up_date ? dayjs(l.follow_up_date) : null;
-      if (mode === 'today' && (!d || !d.isSame(dayjs(), 'day'))) return false;
-      if (mode === 'overdue' && (!d || !d.isBefore(dayjs(), 'day'))) return false;
-      if (mode === 'on' && date && (!d || !d.isSame(dayjs(date), 'day'))) return false;
-      if (mode === 'before' && date && (!d || !d.isBefore(dayjs(date), 'day'))) return false;
-      if (mode === 'after' && date && (!d || !d.isAfter(dayjs(date), 'day'))) return false;
-      if (mode === 'between' && range?.length === 2 && (!d || !d.isBetween(dayjs(range[0]).startOf('day'), dayjs(range[1]).endOf('day'), null, '[]'))) return false;
-    }
-    return true;
-  });
+  // Server-side filtering: table data is already filtered by API.
+  const filteredLeads = leads;
 
   // ── Stats ──────────────────────────────────────────────────────────────────
   const stats = {
-    total: leads.length,
+    total: totalLeads,
     hot: leads.filter(l => l.ai_segment === 'Hot').length,
     warm: leads.filter(l => l.ai_segment === 'Warm').length,
     enrolled: leads.filter(l => l.status === 'Enrolled').length,
@@ -234,7 +299,16 @@ const LeadsPageEnhanced = () => {
   const createMutation = useMutation({
     mutationFn: (d) => leadsAPI.create(d),
     onSuccess: () => { message.success('Lead created!'); setDrawerVisible(false); form.resetFields(); queryClient.invalidateQueries(['leads']); },
-    onError: (e) => message.error(`Failed: ${e.message}`),
+    onError: (e) => {
+      console.error('Create lead error:', e);
+      const detail = e.response?.data?.detail;
+      if (Array.isArray(detail)) {
+        const msgs = detail.map(d => `${d.loc?.slice(-1)[0] || 'field'}: ${d.msg}`).join('; ');
+        message.error(`Validation error: ${msgs}`);
+      } else {
+        message.error(`Failed to create lead: ${detail || e.message}`);
+      }
+    },
   });
 
   const updateMutation = useMutation({
@@ -253,45 +327,7 @@ const LeadsPageEnhanced = () => {
     onSuccess: () => { message.success(`${selectedRows.length} leads updated!`); setSelectedRows([]); setBulkDrawerVisible(false); bulkForm.resetFields(); queryClient.invalidateQueries(['leads']); },
   });
 
-  // ── Import handlers ────────────────────────────────────────────────────────
-  const processImportRows = (rows) => {
-    const errors = [];
-    const valid = [];
-    rows.forEach((row, i) => {
-      // Normalise: trim all string values
-      const r = {};
-      Object.keys(row).forEach(k => { r[k.trim().toLowerCase().replace(/\s+/g, '_')] = String(row[k] ?? '').trim(); });
-
-      const name = r.full_name || r.name || '';
-      const phone = r.phone || r.mobile || r.phone_number || '';
-
-      if (!name || !phone) {
-        errors.push({ row: i + 2, msg: `Missing: ${!name ? 'full_name ' : ''}${!phone ? 'phone' : ''}`.trim() });
-        return;
-      }
-
-      // Only send fields that LeadCreate accepts; strip unknown keys
-      const lead = {
-        full_name: name,
-        phone,
-        email: r.email || undefined,
-        whatsapp: r.whatsapp || phone,
-        country: r.country || 'India',
-        source: r.source || 'Import',
-        course_interested: r.course_interested || r.course || r.fellowship || 'Not Specified',
-        assigned_to: isCounselor
-          ? (authUser?.full_name || undefined)
-          : (r.assigned_to || r.counselor || undefined),
-      };
-      // Remove undefined keys so FastAPI validation doesn't choke
-      Object.keys(lead).forEach(k => { if (lead[k] === undefined || lead[k] === '') delete lead[k]; });
-      valid.push(lead);
-    });
-    setImportData(valid);
-    setImportErrors(errors);
-    setImportStep(1);
-  };
-
+  // ── Bulk Import with Field Mapping ────────────────────────────────────────
   const handleFileRead = (file) => {
     const ext = file.name.split('.').pop().toLowerCase();
     const isCsv = ext === 'csv';
@@ -299,8 +335,21 @@ const LeadsPageEnhanced = () => {
     reader.onload = (e) => {
       try {
         const rows = parseSpreadsheet(e.target.result, !isCsv);
-        processImportRows(rows);
-      } catch {
+        if (!rows || rows.length === 0) {
+          message.warning('No data found in file');
+          return;
+        }
+        
+        // Extract columns and store raw data
+        const columns = Object.keys(rows[0]);
+        setRawFileData({ columns, rows });
+        
+        // Show field mapping modal
+        setImportVisible(false);
+        setMappingVisible(true);
+        
+      } catch (err) {
+        console.error('File parse error:', err);
         message.error('Could not parse file. Please check the format and try again.');
       }
     };
@@ -312,21 +361,151 @@ const LeadsPageEnhanced = () => {
     return false;
   };
 
+  const handleMappingConfirm = (mapping) => {
+    setFieldMapping(mapping);
+    setMappingVisible(false);
+    
+    // Process rows with the user-confirmed mapping
+    processImportRowsWithMapping(rawFileData.rows, mapping);
+    
+    // Show import modal with processed data
+    setImportVisible(true);
+  };
+
+  const processImportRowsWithMapping = (rows, mapping) => {
+    if (!rows || rows.length === 0) {
+      message.warning('No data found in file');
+      return;
+    }
+    
+    const errors = [];
+    const valid = [];
+    
+    rows.forEach((row, i) => {
+      const mappedLead = {};
+      
+      // Apply user-defined mapping
+      Object.entries(mapping).forEach(([excelCol, crmField]) => {
+        if (crmField && row[excelCol] !== undefined) {
+          const value = String(row[excelCol] ?? '').trim();
+          if (value) {
+            mappedLead[crmField] = value;
+          }
+        }
+      });
+      
+      // Validate required fields
+      const name = mappedLead.full_name || '';
+      const phone = mappedLead.phone || '';
+      
+      if (!name || !phone) {
+        errors.push({ 
+          row: i + 2, 
+          msg: `Missing required: ${!name ? 'Full Name ' : ''}${!phone ? 'Phone' : ''}`.trim() 
+        });
+        return;
+      }
+      
+      // Ensure defaults and fallbacks
+      // Only include fields accepted by LeadCreate schema
+      const lead = {
+        full_name: mappedLead.full_name,
+        phone: mappedLead.phone,
+        email: mappedLead.email || undefined,
+        whatsapp: mappedLead.whatsapp || mappedLead.phone,
+        country: mappedLead.country || 'India',
+        source: mappedLead.source || 'Import',
+        course_interested: mappedLead.course_interested || 'Not Specified',
+        assigned_to: isCounselor
+          ? (authUser?.full_name || undefined)
+          : (mappedLead.assigned_to || undefined),
+      };
+      
+      // Remove undefined/empty keys
+      Object.keys(lead).forEach(k => { 
+        if (lead[k] === undefined || lead[k] === '') delete lead[k]; 
+      });
+      
+      valid.push(lead);
+    });
+    
+    setImportData(valid);
+    setImportErrors(errors);
+    setImportStep(1);
+  };
+
   const handleImportSubmit = async () => {
     if (!importData.length) return;
     setImportStep(2);
-    let done = 0;
-    for (const lead of importData) {
-      try { await leadsAPI.create(lead); } catch { /* skip errors */ }
-      done++;
-      setImportProgress(Math.round((done / importData.length) * 100));
+    setImportProgress(0);
+    
+    // Simulate progress while waiting for backend
+    const progressInterval = setInterval(() => {
+      setImportProgress(prev => {
+        if (prev >= 90) return prev; // Stop at 90% until real response
+        return prev + 10;
+      });
+    }, 200);
+    
+    try {
+      // Use bulk create endpoint for efficiency
+      const response = await leadsAPI.bulkCreate(importData);
+      clearInterval(progressInterval);
+      
+      const { results } = response.data;
+      
+      setImportProgress(100);
+      setImportStep(3);
+      
+      // Update import errors with failed leads
+      if (results.failed && results.failed.length > 0) {
+        const failedErrors = results.failed.map(f => ({
+          row: f.index + 2,
+          msg: `${f.name}: ${f.error}`
+        }));
+        setImportErrors(prev => [...prev, ...failedErrors]);
+      }
+      
+      queryClient.invalidateQueries(['leads']);
+      
+      if (results.failed.length === 0) {
+        message.success(`All ${results.success.length} leads imported successfully!`);
+      } else {
+        message.warning(`${results.success.length} succeeded, ${results.failed.length} failed. Check errors below.`);
+      }
+    } catch (error) {
+      clearInterval(progressInterval);
+      console.error('Bulk import error:', error);
+      setImportStep(1);
+      
+      // Handle validation errors properly
+      let errorMsg = 'Import failed';
+      if (error.response?.data?.detail) {
+        const detail = error.response.data.detail;
+        if (Array.isArray(detail)) {
+          // FastAPI validation errors
+          errorMsg = detail.map(e => `${e.loc?.join('.') || 'field'}: ${e.msg}`).join('; ');
+        } else if (typeof detail === 'string') {
+          errorMsg = detail;
+        } else {
+          errorMsg = JSON.stringify(detail);
+        }
+      } else if (error.message) {
+        errorMsg = error.message;
+      }
+      
+      message.error(`Import failed: ${errorMsg}`);
     }
-    setImportStep(3);
-    queryClient.invalidateQueries(['leads']);
-    message.success(`${done} leads imported successfully!`);
   };
 
-  const resetImport = () => { setImportStep(0); setImportData([]); setImportErrors([]); setImportProgress(0); };
+  const resetImport = () => { 
+    setImportStep(0); 
+    setImportData([]); 
+    setImportErrors([]); 
+    setImportProgress(0);
+    setRawFileData({ columns: [], rows: [] });
+    setFieldMapping({});
+  };
 
   // ── Export ─────────────────────────────────────────────────────────────────
   const handleExport = () => {
@@ -361,6 +540,7 @@ const LeadsPageEnhanced = () => {
       { key: 'view', icon: <EyeOutlined />, label: 'View Details', onClick: () => navigate(`/leads/${record.lead_id}`) },
       { key: 'edit', icon: <EditOutlined />, label: 'Edit', onClick: () => { form.setFieldsValue({ ...record, follow_up_date: record.follow_up_date ? dayjs(record.follow_up_date) : null }); setDrawerVisible(true); } },
       { key: 'whatsapp', icon: <WhatsAppOutlined />, label: 'WhatsApp', onClick: () => window.open(`https://wa.me/${record.phone?.replace(/[^0-9]/g, '')}`) },
+      { key: 'wa-template', icon: <span>📋</span>, label: 'Send Template', onClick: () => setTemplateLead(record) },
       { key: 'email', icon: <MailOutlined />, label: 'Email', onClick: () => { window.location.href = `mailto:${record.email}`; } },
       { type: 'divider' },
       { key: 'delete', icon: <DeleteOutlined />, label: 'Delete', danger: true, onClick: () => deleteMutation.mutate(record.lead_id) },
@@ -386,20 +566,45 @@ const LeadsPageEnhanced = () => {
       ),
       onFilter: (v, r) => (r.full_name + ' ' + r.phone).toLowerCase().includes(v.toLowerCase()),
       filterIcon: f => <SearchOutlined style={{ color: f ? '#1890ff' : undefined }} />,
-      render: (_, r) => (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <Avatar size={42} style={{ backgroundColor: r.ai_segment === 'Hot' ? '#ff4d4f' : r.ai_segment === 'Warm' ? '#faad14' : '#52c41a', flexShrink: 0 }}>
-            {r.full_name?.charAt(0)?.toUpperCase()}
-          </Avatar>
-          <div style={{ minWidth: 0 }}>
-            <a onClick={() => navigate(`/leads/${r.lead_id}`)} style={{ fontWeight: 600, fontSize: 13 }}>{r.full_name}</a>
-            <Tag style={{ marginLeft: 4 }} color={r.ai_segment === 'Hot' ? 'red' : r.ai_segment === 'Warm' ? 'orange' : 'green'}>
-              {r.ai_segment === 'Hot' ? '🔥' : r.ai_segment === 'Warm' ? '⚡' : '❄️'} {r.ai_segment}
-            </Tag>
-            <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}><PhoneOutlined /> {r.phone}</div>
+      render: (_, r) => {
+        // Compute decay risk badge
+        let decayBadge = null;
+        if (decayConfig?.enabled && r.last_contact_date) {
+          const hoursSilent = (Date.now() - new Date(r.last_contact_date).getTime()) / 3600000;
+          if (r.ai_segment === 'Hot') {
+            const threshold = decayConfig.hot_to_warm_hours || 48;
+            if (hoursSilent >= threshold) {
+              decayBadge = <Tooltip title={`No contact for ${Math.round(hoursSilent)}h — will decay to Warm on next engine cycle`}><Tag color="red" style={{ margin: '0 0 0 4px', fontSize: 10, cursor: 'help' }}>🔻 Overdue</Tag></Tooltip>;
+            } else if (hoursSilent >= threshold * 0.75) {
+              decayBadge = <Tooltip title={`${Math.round(threshold - hoursSilent)}h left before decay to Warm`}><Tag color="orange" style={{ margin: '0 0 0 4px', fontSize: 10, cursor: 'help' }}>⚠️ At Risk</Tag></Tooltip>;
+            }
+          } else if (r.ai_segment === 'Warm') {
+            const threshold = decayConfig.warm_to_stale_hours || 168;
+            if (hoursSilent >= threshold) {
+              decayBadge = <Tooltip title={`No contact for ${Math.round(hoursSilent / 24)}d — will decay to Follow Up`}><Tag color="orange" style={{ margin: '0 0 0 4px', fontSize: 10, cursor: 'help' }}>🔻 Overdue</Tag></Tooltip>;
+            } else if (hoursSilent >= threshold * 0.75) {
+              decayBadge = <Tooltip title={`${Math.round((threshold - hoursSilent) / 24)}d left before decay to Follow Up`}><Tag style={{ margin: '0 0 0 4px', fontSize: 10, cursor: 'help', background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' }}>⚠️ At Risk</Tag></Tooltip>;
+            }
+          }
+        }
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Avatar size={42} style={{ backgroundColor: r.ai_segment === 'Hot' ? '#ff4d4f' : r.ai_segment === 'Warm' ? '#faad14' : '#52c41a', flexShrink: 0 }}>
+              {r.full_name?.charAt(0)?.toUpperCase()}
+            </Avatar>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
+                <a onClick={() => navigate(`/leads/${r.lead_id}`)} style={{ fontWeight: 600, fontSize: 13 }}>{r.full_name}</a>
+                <Tag style={{ marginLeft: 2 }} color={r.ai_segment === 'Hot' ? 'red' : r.ai_segment === 'Warm' ? 'orange' : 'green'}>
+                  {r.ai_segment === 'Hot' ? '🔥' : r.ai_segment === 'Warm' ? '⚡' : '❄️'} {r.ai_segment}
+                </Tag>
+                {decayBadge}
+              </div>
+              <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}><PhoneOutlined /> {r.phone}</div>
+            </div>
           </div>
-        </div>
-      ),
+        );
+      },
     },
     {
       title: 'Country',
@@ -576,6 +781,20 @@ const LeadsPageEnhanced = () => {
   return (
     <div style={{ padding: 24, background: '#f0f2f5', minHeight: '100vh' }}>
 
+      {/* ══════════════════════════════════════════════════════════════════════
+          FIELD MAPPING MODAL (NEW)
+      ══════════════════════════════════════════════════════════════════════ */}
+      <FieldMappingModal
+        visible={mappingVisible}
+        onCancel={() => {
+          setMappingVisible(false);
+          setRawFileData({ columns: [], rows: [] });
+        }}
+        fileColumns={rawFileData.columns}
+        previewData={rawFileData.rows}
+        onConfirm={handleMappingConfirm}
+      />
+
       {/* ── Stats Row ── */}
       <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
         {[
@@ -602,7 +821,7 @@ const LeadsPageEnhanced = () => {
         title={
           <Space>
             <Title level={4} style={{ margin: 0 }}>Lead Management</Title>
-            <Badge count={filteredLeads.length} style={{ backgroundColor: '#1890ff' }} />
+            <Badge count={totalLeads} style={{ backgroundColor: '#1890ff' }} />
           </Space>
         }
         extra={
@@ -664,10 +883,44 @@ const LeadsPageEnhanced = () => {
             onChange: (keys) => setSelectedRows(keys),
             preserveSelectedRowKeys: true,
           }}
-          pagination={{ total: filteredLeads.length, pageSize: 50, showSizeChanger: true, pageSizeOptions: ['25','50','100','250','500'], showTotal: t => `${t} leads`, position: ['bottomCenter'] }}
+          onRow={(record) => ({
+            onMouseEnter: (e) => {
+              clearTimeout(hideTimerRef.current);
+              clearTimeout(showTimerRef.current);
+              const { clientX: x, clientY: y } = e;
+              showTimerRef.current = setTimeout(() => {
+                setHoveredLead(record);
+                setHoverPos({ x, y });
+              }, 120);
+            },
+            onMouseMove: (e) => {
+              if (hoveredLead?.lead_id === record.lead_id) {
+                setHoverPos({ x: e.clientX, y: e.clientY });
+              }
+            },
+            onMouseLeave: () => {
+              clearTimeout(showTimerRef.current);
+              hideTimerRef.current = setTimeout(() => setHoveredLead(null), 180);
+            },
+          })}
+          pagination={{
+            total: totalLeads,
+            pageSize: pageSize,
+            current: currentPage,
+            showSizeChanger: true,
+            pageSizeOptions: ['25','50','100','250','500'],
+            showTotal: t => `${t} leads`,
+            position: ['bottomCenter'],
+            onChange: (page, size) => {
+              setCurrentPage(page);
+              if (size !== pageSize) {
+                setPageSize(size);
+                setCurrentPage(1);
+              }
+            }
+          }}
           locale={{ emptyText: <Empty description="No leads found"><Button type="primary" icon={<PlusOutlined />} onClick={() => setDrawerVisible(true)}>Add First Lead</Button></Empty> }}
           rowClassName={r => r.follow_up_date && dayjs(r.follow_up_date).isBefore(dayjs(), 'day') ? 'overdue-row' : ''}
-        />
         />
       </Card>
 
@@ -766,18 +1019,52 @@ const LeadsPageEnhanced = () => {
         {/* Step 2: Importing */}
         {importStep === 2 && (
           <div style={{ textAlign: 'center', padding: 40 }}>
-            <Progress type="circle" percent={importProgress} />
-            <p style={{ marginTop: 16 }}>Importing {importData.length} leads...</p>
+            <Progress type="circle" percent={importProgress} status={importProgress < 100 ? 'active' : 'success'} />
+            <p style={{ marginTop: 16, fontSize: 16 }}>
+              {importProgress < 100 ? 'Processing bulk import...' : 'Import complete!'}
+            </p>
+            <p style={{ color: '#8c8c8c' }}>Importing {importData.length} leads with AI scoring</p>
           </div>
         )}
 
         {/* Step 3: Done */}
         {importStep === 3 && (
-          <div style={{ textAlign: 'center', padding: 40 }}>
-            <CheckCircleOutlined style={{ fontSize: 64, color: '#52c41a' }} />
-            <Title level={3} style={{ marginTop: 16 }}>Import Complete!</Title>
-            <p>{importData.length} leads imported successfully.</p>
-            <Space>
+          <div>
+            <div style={{ textAlign: 'center', padding: '20px 0' }}>
+              <CheckCircleOutlined style={{ fontSize: 64, color: '#52c41a' }} />
+              <Title level={3} style={{ marginTop: 16 }}>Import Complete!</Title>
+              <p style={{ fontSize: 16, marginBottom: 24 }}>
+                <Text strong>{importData.length - importErrors.filter(e => e.msg.includes(':')).length}</Text> leads imported successfully
+                {importErrors.filter(e => e.msg.includes(':')).length > 0 && (
+                  <span>, <Text type="danger" strong>{importErrors.filter(e => e.msg.includes(':')).length}</Text> failed</span>
+                )}
+              </p>
+            </div>
+            
+            {importErrors.filter(e => e.msg.includes(':')).length > 0 && (
+              <>
+                <Divider />
+                <Alert
+                  type="warning"
+                  showIcon
+                  message={`${importErrors.filter(e => e.msg.includes(':')).length} leads failed to import`}
+                  description={
+                    <div style={{ maxHeight: 200, overflow: 'auto' }}>
+                      <ul style={{ marginBottom: 0, paddingLeft: 20 }}>
+                        {importErrors.filter(e => e.msg.includes(':')).map((e, i) => (
+                          <li key={i} style={{ marginBottom: 4 }}>
+                            <Text code>Row {e.row}</Text>: {e.msg.split(':').slice(1).join(':').trim()}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  }
+                  style={{ marginBottom: 24, textAlign: 'left' }}
+                />
+              </>
+            )}
+            
+            <Space style={{ justifyContent: 'center', display: 'flex' }}>
               <Button onClick={() => { setImportVisible(false); resetImport(); }}>Close</Button>
               <Button type="primary" onClick={() => { setImportVisible(false); resetImport(); refetch(); }}>View Leads</Button>
             </Space>
@@ -801,7 +1088,42 @@ const LeadsPageEnhanced = () => {
         }
       >
         <Form form={form} layout="vertical"
-          onFinish={v => createMutation.mutate({ ...v, follow_up_date: v.follow_up_date?.format('YYYY-MM-DD') || null })}>
+          onFinish={async v => {
+            // Only check duplicates when creating (no lead_id on form = new record)
+            const isNew = !v.lead_id;
+            const leadData = {
+              full_name: v.full_name,
+              email: v.email || null,
+              phone: v.phone,
+              whatsapp: v.whatsapp || v.phone,
+              country: v.country,
+              source: v.source || 'Direct',
+              course_interested: v.course_interested,
+              assigned_to: v.assigned_to || null,
+            };
+
+            if (isNew) {
+              try {
+                const res = await duplicatesAPI.check({
+                  phone: leadData.phone,
+                  email: leadData.email,
+                  full_name: leadData.full_name,
+                  country: leadData.country,
+                });
+                const dupes = res.data?.duplicates || [];
+                if (dupes.length > 0) {
+                  setPendingLeadData(leadData);
+                  setDupCandidates(dupes);
+                  setDupModalOpen(true);
+                  return; // don't create yet — wait for user decision
+                }
+              } catch {
+                // If duplicate-check fails, proceed with creation normally
+              }
+            }
+
+            createMutation.mutate(leadData);
+          }}>
           <Form.Item name="full_name" label="Full Name" rules={[{ required: true }]}>
             <Input prefix={<UserOutlined />} placeholder="John Doe" size="large" />
           </Form.Item>
@@ -820,8 +1142,23 @@ const LeadsPageEnhanced = () => {
           <Row gutter={16}>
             <Col span={12}>
               <Form.Item name="country" label="Country" rules={[{ required: true }]}>
-                <Select placeholder="Select country" showSearch>
-                  {['India','USA','UK','Canada','Australia','UAE','Singapore','Germany','Nepal','Sri Lanka'].map(c => <Option key={c} value={c}>{c}</Option>)}
+                <Select placeholder="Select country" showSearch filterOption={(input, option) => 
+                  option.children.toLowerCase().includes(input.toLowerCase())
+                }>
+                  {[
+                    'India', 'USA', 'UK', 'Canada', 'Australia', 'UAE', 'Singapore', 'Germany', 'France', 'Italy',
+                    'Spain', 'Netherlands', 'Belgium', 'Switzerland', 'Sweden', 'Norway', 'Denmark', 'Finland',
+                    'Poland', 'Austria', 'Ireland', 'Portugal', 'Greece', 'Czech Republic', 'Romania', 'Hungary',
+                    'Japan', 'South Korea', 'China', 'Hong Kong', 'Taiwan', 'Thailand', 'Malaysia', 'Indonesia',
+                    'Philippines', 'Vietnam', 'Bangladesh', 'Pakistan', 'Nepal', 'Sri Lanka', 'Myanmar', 'Cambodia',
+                    'New Zealand', 'Fiji', 'Papua New Guinea', 'Solomon Islands', 'Vanuatu',
+                    'Saudi Arabia', 'Qatar', 'Kuwait', 'Bahrain', 'Oman', 'Jordan', 'Lebanon', 'Israel', 'Turkey',
+                    'Egypt', 'South Africa', 'Nigeria', 'Kenya', 'Ghana', 'Ethiopia', 'Morocco', 'Algeria', 'Tunisia',
+                    'Tanzania', 'Uganda', 'Zambia', 'Zimbabwe', 'Botswana', 'Namibia', 'Mauritius', 'Seychelles',
+                    'Brazil', 'Mexico', 'Argentina', 'Chile', 'Colombia', 'Peru', 'Venezuela', 'Ecuador', 'Bolivia',
+                    'Paraguay', 'Uruguay', 'Costa Rica', 'Panama', 'Guatemala', 'Honduras', 'El Salvador', 'Nicaragua',
+                    'Russia', 'Ukraine', 'Belarus', 'Kazakhstan', 'Uzbekistan', 'Azerbaijan', 'Georgia', 'Armenia'
+                  ].sort().map(c => <Option key={c} value={c}>{c}</Option>)}
                 </Select>
               </Form.Item>
             </Col>
@@ -1018,6 +1355,32 @@ const LeadsPageEnhanced = () => {
 
       {/* WhatsApp Chat Drawer */}
       <ChatDrawer lead={chatLead} onClose={() => setChatLead(null)} />
+
+      {/* Lead hover preview portal */}
+      <LeadHoverPreview lead={hoveredLead} pos={hoverPos} />
+
+      {/* WhatsApp Template Drawer (from table row action) */}
+      <WhatsAppTemplateDrawer
+        open={!!templateLead}
+        onClose={() => setTemplateLead(null)}
+        lead={templateLead}
+      />
+
+      {/* Duplicate Detection Modal */}
+      <DuplicateDetectionModal
+        open={dupModalOpen}
+        onClose={() => { setDupModalOpen(false); setPendingLeadData(null); setDupCandidates([]); }}
+        newLead={pendingLeadData}
+        duplicates={dupCandidates}
+        onCreateAnyway={(leadData) => {
+          createMutation.mutate(leadData);
+        }}
+        onMerged={() => {
+          setDrawerVisible(false);
+          form.resetFields();
+          queryClient.invalidateQueries(['leads']);
+        }}
+      />
     </div>
   );
 };

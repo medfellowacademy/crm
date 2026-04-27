@@ -39,7 +39,7 @@ const CallInterface = ({ visible, onClose, lead }) => {
         },
         {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`
+            'Authorization': `Bearer ${JSON.parse(localStorage.getItem('user') || '{}')?.token}`
           }
         }
       );

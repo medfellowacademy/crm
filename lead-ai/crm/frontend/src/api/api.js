@@ -53,6 +53,7 @@ export const leadsAPI = {
   getAll: (params) => api.get('/api/leads', { params }),
   getById: (leadId) => api.get(`/api/leads/${leadId}`),
   create: (data) => api.post('/api/leads', data),
+  bulkCreate: (leads) => api.post('/api/leads/bulk-create', leads),
   update: (leadId, data) => api.put(`/api/leads/${leadId}`, data),
   delete: (leadId) => api.delete(`/api/leads/${leadId}`),
   bulkUpdate: (leadIds, updates) => api.post('/api/leads/bulk-update', { lead_ids: leadIds, updates }),
@@ -97,12 +98,16 @@ export const analyticsAPI = {
 export const hospitalsAPI = {
   getAll: (params) => api.get('/api/hospitals', { params }),
   create: (data) => api.post('/api/hospitals', data),
+  update: (id, data) => api.put('/api/hospitals/' + id, data),
+  delete: (id) => api.delete('/api/hospitals/' + id),
 };
 
 // Courses API
 export const coursesAPI = {
   getAll: (params) => api.get('/api/courses', { params }),
   create: (data) => api.post('/api/courses', data),
+  update: (id, data) => api.put('/api/courses/' + id, data),
+  delete: (id) => api.delete('/api/courses/' + id),
 };
 
 // Counselors API
@@ -119,5 +124,86 @@ export const usersAPI = {
   update: (userId, data) => api.put(`/api/users/${userId}`, data),
   delete: (userId) => api.delete(`/api/users/${userId}`),
 };
+
+
+// Admin API
+export const adminAPI = {
+  getStats: () => api.get('/api/admin/stats'),
+  getTeamPerformance: () => api.get('/api/admin/team-performance'),
+  getFunnelAnalysis: () => api.get('/api/admin/funnel-analysis'),
+  getRevenueTrend: (days = 30) => api.get(`/api/admin/revenue-trend?days=${days}`),
+};
+
+// User Stats API
+export const userStatsAPI = {
+  getStats: (userId) => api.get(`/api/users/${userId}/stats`),
+  getPerformance: (userId, days = 7) => api.get(`/api/users/${userId}/performance?days=${days}`),
+  changePassword: (userId, data) => api.put(`/api/users/${userId}/password`, data),
+};
+
+// Notification actions API
+export const notificationActionsAPI = {
+  markRead: (id) => api.patch(`/api/notifications/${id}/read`),
+  snooze: (id, hours = 1) => api.patch(`/api/notifications/${id}/snooze?hours=${hours}`),
+  markAllRead: () => api.post('/api/notifications/read-all'),
+};
+
+// AI Search API
+export const aiSearchAPI = {
+  search: (query) => api.post('/api/ai/search', { query }),
+};
+
+// Source Attribution API
+export const sourceAnalyticsAPI = {
+  getSourceAnalytics: () => api.get('/api/admin/source-analytics'),
+};
+
+// Conversion Time API
+export const conversionTimeAPI = {
+  getConversionTime: () => api.get('/api/admin/conversion-time'),
+};
+
+// Cohort Analysis API
+export const cohortAPI = {
+  getCohorts: () => api.get('/api/admin/cohort-analysis'),
+};
+
+// SLA API
+export const slaAPI = {
+  getConfig:     ()     => api.get('/api/admin/sla-config'),
+  updateConfig:  (data) => api.put('/api/admin/sla-config', data),
+  getCompliance: ()     => api.get('/api/admin/sla-compliance'),
+};
+
+// Call Timing API
+export const callTimingAPI = {
+  getCallTiming: (country) =>
+    api.get('/api/analytics/call-timing', country ? { params: { country } } : {}),
+};
+
+// Duplicate Detection API
+export const duplicatesAPI = {
+  check:  (data)    => api.post('/api/leads/check-duplicates', data),
+  merge:  (payload) => api.post('/api/leads/merge', payload),
+};
+
+// Score Decay Engine API
+export const decayAPI = {
+  getConfig:   ()       => api.get('/api/admin/decay-config'),
+  updateConfig:(data)   => api.put('/api/admin/decay-config', data),
+  runNow:      ()       => api.post('/api/admin/run-decay'),
+  getLog:      (params) => api.get('/api/admin/decay-log', { params }),
+  getPreview:  ()       => api.get('/api/admin/decay-preview'),
+};
+
+// WhatsApp Template Library API
+export const waTemplatesAPI = {
+  list:        (category) => api.get('/api/wa-templates', category ? { params: { category } } : {}),
+  create:      (data)     => api.post('/api/wa-templates', data),
+  update:      (id, data) => api.put(`/api/wa-templates/${id}`, data),
+  delete:      (id)       => api.delete(`/api/wa-templates/${id}`),
+  send:        (leadId, payload) => api.post(`/api/leads/${leadId}/send-wa-template`, payload),
+};
+
 
 export default api;

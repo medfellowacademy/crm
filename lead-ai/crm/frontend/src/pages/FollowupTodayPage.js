@@ -278,12 +278,13 @@ export default function FollowupTodayPage() {
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
   const isAdmin     = ['Super Admin', 'Manager', 'Team Leader'].includes(currentUser.role);
 
-  const { data: users = [] } = useQuery({
+  const { data: usersData = {} } = useQuery({
     queryKey: ['users'],
-    queryFn: () => usersAPI.getAll().then(r => r.data?.users || []),
+    queryFn: () => usersAPI.getAll().then(r => r.data),
     staleTime: 60000,
   });
 
+  const users = usersData?.users || [];
   const counselors = users.filter(u => u.role === 'Counselor' || u.role === 'Team Leader');
 
   const assignedToFilter = isAdmin ? filterUser : currentUser.full_name;

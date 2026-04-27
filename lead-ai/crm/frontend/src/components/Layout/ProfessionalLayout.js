@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
+import { Drawer } from 'antd';
 import {
   LayoutDashboard,
   Users,
@@ -16,15 +18,141 @@ import {
   Shield,
   LogOut,
   CalendarClock,
+  DollarSign,
+  Settings,
+  Timer,
+  Users2,
+  ShieldCheck,
+  TrendingDown,
 } from 'lucide-react';
 import SmartNotifications from '../../features/notifications/SmartNotifications';
 import { isFeatureEnabled } from '../../config/featureFlags';
-import { authAPI } from '../../api/api';
+import { authAPI, aiSearchAPI, leadsAPI, usersAPI, dashboardAPI, coursesAPI } from '../../api/api';
+import { hasPermission, ROLES } from '../../config/rbac';
+
+
+// Global Search Component
+const SearchBar = () => {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const navigate = useNavigate();
+
+  const handleSearch = async (value) => {
+    if (value.trim().length === 0) {
+      setResults([]);
+      setDrawerOpen(false);
+      return;
+    }
+
+    setSearching(true);
+    try {
+      const response = await aiSearchAPI.search(value);
+      setResults(response.data?.results || []);
+      setDrawerOpen(true);
+    } catch (error) {
+      console.error('Search error:', error);
+      setResults([]);
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const handleResultClick = (leadId) => {
+    navigate(`/leads/${leadId}`);
+    setDrawerOpen(false);
+    setQuery('');
+  };
+
+  return (
+    <>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '8px 16px',
+        background: 'var(--bg-secondary)',
+        borderRadius: 8,
+        width: 320,
+      }}>
+        <Search size={16} style={{ color: 'var(--text-tertiary)' }} />
+        <input
+          type="text"
+          placeholder="Search leads..."
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              handleSearch(query);
+            }
+          }}
+          style={{
+            border: 'none',
+            background: 'transparent',
+            outline: 'none',
+            fontSize: 'var(--text-sm)',
+            color: 'var(--text-primary)',
+            width: '100%',
+          }}
+        />
+      </div>
+
+      <Drawer
+        title="Search Results"
+        placement="right"
+        onClose={() => setDrawerOpen(false)}
+        open={drawerOpen}
+        width={400}
+      >
+        {searching ? (
+          <div style={{ textAlign: 'center', padding: '24px' }}>
+            <p>Searching...</p>
+          </div>
+        ) : results.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>
+            {query ? 'No results found' : 'Enter a search query'}
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {results.map((result) => (
+              <motion.div
+                key={result.lead_id}
+                whileHover={{ x: 4 }}
+                onClick={() => handleResultClick(result.lead_id)}
+                style={{
+                  padding: '12px',
+                  background: 'var(--bg-secondary)',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  border: '1px solid var(--border-color)',
+                }}
+              >
+                <div style={{ fontWeight: '600', marginBottom: '4px' }}>
+                  {result.full_name}
+                </div>
+                <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                  {result.course || 'No course'}
+                </div>
+                {result.score && (
+                  <div style={{ fontSize: '11px', color: 'var(--text-tertiary)' }}>
+                    Match score: {(result.score * 100).toFixed(0)}%
+                  </div>
+                )}
+              </motion.div>
+            ))}
+          </div>
+        )}
+      </Drawer>
+    </>
+  );
+};
 
 const ProfessionalLayout = ({ children }) => {
   const [collapsed, setCollapsed] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+  const queryClient = useQueryClient();
 
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
   const initials = currentUser.full_name
@@ -34,6 +162,41 @@ const ProfessionalLayout = ({ children }) => {
   const handleLogout = () => {
     authAPI.logout();
   };
+
+  const userRole = JSON.parse(localStorage.getItem('user') || '{}')?.role;
+
+  // Prefetch the most-used data when user hovers a nav item
+  const prefetchRoute = useCallback((route) => {
+    const stale = 10 * 60 * 1000;
+    if (route === '/leads' || route === '/pipeline' || route === '/lead-analysis') {
+      queryClient.prefetchQuery({
+        queryKey: ['prefetch', 'leads'],
+        queryFn: () => leadsAPI.getAll().then(r => r.data),
+        staleTime: stale,
+      });
+    }
+    if (route === '/dashboard' || route === '/followups') {
+      queryClient.prefetchQuery({
+        queryKey: ['prefetch', 'dashboard-stats'],
+        queryFn: () => dashboardAPI.getStats().then(r => r.data),
+        staleTime: stale,
+      });
+    }
+    if (route === '/users' || route === '/user-activity' || route === '/lead-analysis') {
+      queryClient.prefetchQuery({
+        queryKey: ['prefetch', 'users'],
+        queryFn: () => usersAPI.getAll().then(r => r.data),
+        staleTime: stale,
+      });
+    }
+    if (route === '/courses') {
+      queryClient.prefetchQuery({
+        queryKey: ['prefetch', 'courses'],
+        queryFn: () => coursesAPI.getAll().then(r => r.data),
+        staleTime: stale,
+      });
+    }
+  }, [queryClient]);
 
   const menuItems = [
     { key: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
@@ -46,8 +209,35 @@ const ProfessionalLayout = ({ children }) => {
     { key: '/users', icon: UserPlus, label: 'Team' },
     { key: '/user-activity', icon: Activity, label: 'User Activity' },
     { key: '/analytics', icon: BarChart3, label: 'Analytics' },
+    { key: '/conversion-time', icon: Timer, label: 'Conversion Time' },
+    { key: '/cohort-analysis', icon: Users2, label: 'Cohort Analysis' },
+    { key: '/sla', icon: ShieldCheck, label: 'SLA Tracker' },
+    { key: '/score-decay', icon: TrendingDown, label: 'Score Decay' },
     { key: '/audit-logs', icon: Shield, label: 'Audit Logs' },
+    { key: '/payments', icon: DollarSign, label: 'Payments' },
+    { key: '/settings', icon: Settings, label: 'Settings' },
   ];
+
+  // Filter menu items based on user role
+  // ROLES values are lowercase: 'admin', 'manager', 'finance', 'counselor'
+  const roleMenuItems = menuItems.filter(item => {
+    const visibleToAllRoles = ['/dashboard', '/followups', '/leads', '/pipeline', '/settings'];
+    const adminManagerFinance = ['/lead-analysis', '/analytics', '/payments', '/conversion-time', '/cohort-analysis', '/sla', '/score-decay'];
+    const adminManager = ['/hospitals', '/courses', '/user-activity'];
+    const adminOnly = ['/users', '/audit-logs'];
+
+    if (visibleToAllRoles.includes(item.key)) return true;
+    if (adminManagerFinance.includes(item.key)) {
+      return [ROLES.ADMIN, ROLES.MANAGER, ROLES.TEAM_LEADER, ROLES.FINANCE].includes(userRole);
+    }
+    if (adminManager.includes(item.key)) {
+      return [ROLES.ADMIN, ROLES.MANAGER, ROLES.TEAM_LEADER].includes(userRole);
+    }
+    if (adminOnly.includes(item.key)) {
+      return userRole === ROLES.ADMIN;
+    }
+    return false;
+  });
 
   return (
     <div style={{ display: 'flex', height: '100vh', background: 'var(--bg-secondary)' }}>
@@ -102,7 +292,7 @@ const ProfessionalLayout = ({ children }) => {
 
         {/* Navigation */}
         <nav style={{ flex: 1, padding: '16px 8px', overflowY: 'auto' }}>
-          {menuItems.map((item) => {
+          {roleMenuItems.map((item) => {
             const Icon = item.icon;
             const isActive = location.pathname === item.key;
             
@@ -110,6 +300,7 @@ const ProfessionalLayout = ({ children }) => {
               <motion.button
                 key={item.key}
                 onClick={() => navigate(item.key)}
+                onMouseEnter={() => prefetchRoute(item.key)}
                 whileHover={{ x: 2 }}
                 whileTap={{ scale: 0.98 }}
                 style={{
@@ -176,34 +367,12 @@ const ProfessionalLayout = ({ children }) => {
           padding: '0 24px',
         }}>
           <h1 style={{ fontSize: 'var(--text-xl)', fontWeight: 600, color: 'var(--text-primary)' }}>
-            {menuItems.find(item => item.key === location.pathname)?.label || 'Dashboard'}
+            {roleMenuItems.find(item => item.key === location.pathname)?.label || 'Dashboard'}
           </h1>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
             {/* Search */}
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '8px 16px',
-              background: 'var(--bg-secondary)',
-              borderRadius: 8,
-              width: 320,
-            }}>
-              <Search size={16} style={{ color: 'var(--text-tertiary)' }} />
-              <input
-                type="text"
-                placeholder="Search..."
-                style={{
-                  border: 'none',
-                  background: 'transparent',
-                  outline: 'none',
-                  fontSize: 'var(--text-sm)',
-                  color: 'var(--text-primary)',
-                  width: '100%',
-                }}
-              />
-            </div>
+            <SearchBar />
 
             {/* Smart Notifications */}
             {isFeatureEnabled('SMART_NOTIFICATIONS') && <SmartNotifications />}

@@ -85,7 +85,14 @@ const LeadsPage = () => {
       queryClient.invalidateQueries({ queryKey: ['leads'] });
     },
     onError: (error) => {
-      message.error(`Failed to create lead: ${error.message}`);
+      console.error('Create lead error:', error);
+      const detail = error.response?.data?.detail;
+      if (Array.isArray(detail)) {
+        const msgs = detail.map(d => `${d.loc?.slice(-1)[0] || 'field'}: ${d.msg}`).join('; ');
+        message.error(`Validation error: ${msgs}`);
+      } else {
+        message.error(`Failed to create lead: ${detail || error.message}`);
+      }
     },
   });
 
@@ -102,7 +109,17 @@ const LeadsPage = () => {
   });
 
   const handleCreateLead = (values) => {
-    createLeadMutation.mutate(values);
+    const leadData = {
+      full_name: values.full_name,
+      email: values.email || null,
+      phone: values.phone,
+      whatsapp: values.whatsapp || values.phone,
+      country: values.country,
+      source: values.source,
+      course_interested: values.course_interested,
+      assigned_to: values.assigned_to || null,
+    };
+    createLeadMutation.mutate(leadData);
   };
 
   const handleFilter = (key, value) => {
@@ -496,15 +513,23 @@ const LeadsPage = () => {
             label="Country"
             rules={[{ required: true, message: 'Please select country' }]}
           >
-            <Select placeholder="Select country">
-              <Option value="India">India</Option>
-              <Option value="UAE">UAE</Option>
-              <Option value="Saudi Arabia">Saudi Arabia</Option>
-              <Option value="Kuwait">Kuwait</Option>
-              <Option value="Oman">Oman</Option>
-              <Option value="Qatar">Qatar</Option>
-              <Option value="USA">USA</Option>
-              <Option value="UK">UK</Option>
+            <Select placeholder="Select country" showSearch filterOption={(input, option) => 
+              option.children.toLowerCase().includes(input.toLowerCase())
+            }>
+              {[
+                'India', 'USA', 'UK', 'Canada', 'Australia', 'UAE', 'Singapore', 'Germany', 'France', 'Italy',
+                'Spain', 'Netherlands', 'Belgium', 'Switzerland', 'Sweden', 'Norway', 'Denmark', 'Finland',
+                'Poland', 'Austria', 'Ireland', 'Portugal', 'Greece', 'Czech Republic', 'Romania', 'Hungary',
+                'Japan', 'South Korea', 'China', 'Hong Kong', 'Taiwan', 'Thailand', 'Malaysia', 'Indonesia',
+                'Philippines', 'Vietnam', 'Bangladesh', 'Pakistan', 'Nepal', 'Sri Lanka', 'Myanmar', 'Cambodia',
+                'New Zealand', 'Fiji', 'Papua New Guinea', 'Solomon Islands', 'Vanuatu',
+                'Saudi Arabia', 'Qatar', 'Kuwait', 'Bahrain', 'Oman', 'Jordan', 'Lebanon', 'Israel', 'Turkey',
+                'Egypt', 'South Africa', 'Nigeria', 'Kenya', 'Ghana', 'Ethiopia', 'Morocco', 'Algeria', 'Tunisia',
+                'Tanzania', 'Uganda', 'Zambia', 'Zimbabwe', 'Botswana', 'Namibia', 'Mauritius', 'Seychelles',
+                'Brazil', 'Mexico', 'Argentina', 'Chile', 'Colombia', 'Peru', 'Venezuela', 'Ecuador', 'Bolivia',
+                'Paraguay', 'Uruguay', 'Costa Rica', 'Panama', 'Guatemala', 'Honduras', 'El Salvador', 'Nicaragua',
+                'Russia', 'Ukraine', 'Belarus', 'Kazakhstan', 'Uzbekistan', 'Azerbaijan', 'Georgia', 'Armenia'
+              ].sort().map(c => <Option key={c} value={c}>{c}</Option>)}
             </Select>
           </Form.Item>
 

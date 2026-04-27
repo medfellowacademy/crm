@@ -36,6 +36,8 @@ import {
 import { leadsAPI, coursesAPI, counselorsAPI } from '../api/api';
 import dayjs from 'dayjs';
 import ActivityTimeline from '../features/activity/ActivityTimeline';
+import CallTimeWidget from '../components/leads/CallTimeWidget';
+import WhatsAppTemplateDrawer from '../components/whatsapp/WhatsAppTemplateDrawer';
 import { isFeatureEnabled } from '../config/featureFlags';
 
 const { TextArea } = Input;
@@ -49,6 +51,7 @@ const LeadDetails = () => {
   const [lossForm] = Form.useForm();
   const [emailModal, setEmailModal] = useState(false);
   const [whatsappModal, setWhatsappModal] = useState(false);
+  const [templateDrawer, setTemplateDrawer] = useState(false);
   const [lossModal, setLossModal] = useState(false);
   const [pendingStatus, setPendingStatus] = useState(null);
 
@@ -156,13 +159,25 @@ const LeadDetails = () => {
           >
             Call
           </Button>
-          <Button
-            icon={<WhatsAppOutlined />}
-            style={{ background: '#25D366', borderColor: '#25D366', color: '#fff' }}
-            onClick={() => setWhatsappModal(true)}
-          >
-            WhatsApp
-          </Button>
+          <Button.Group>
+            <Button
+              icon={<WhatsAppOutlined />}
+              style={{ background: '#25D366', borderColor: '#25D366', color: '#fff' }}
+              onClick={() => setWhatsappModal(true)}
+            >
+              WhatsApp
+            </Button>
+            <Button
+              style={{
+                background: '#1ebe57', borderColor: '#1ebe57', color: '#fff',
+                borderLeft: '1px solid rgba(255,255,255,0.35)',
+              }}
+              onClick={() => setTemplateDrawer(true)}
+              title="Template library"
+            >
+              📋
+            </Button>
+          </Button.Group>
           <Button
             icon={<MailOutlined />}
             type="primary"
@@ -463,6 +478,19 @@ const LeadDetails = () => {
             )}
           </Card>
 
+          {/* Best Time to Call */}
+          <Card
+            title={
+              <span>
+                <PhoneOutlined style={{ marginRight: 8, color: '#10b981' }} />
+                Best Time to Call
+              </span>
+            }
+            style={{ marginBottom: '24px' }}
+          >
+            <CallTimeWidget country={lead?.country} />
+          </Card>
+
           {/* Recommended Script */}
           {lead?.recommended_script && (
             <Card title="Recommended Script" style={{ marginBottom: '24px' }}>
@@ -536,6 +564,13 @@ const LeadDetails = () => {
           </Button>
         </Form>
       </Modal>
+
+      {/* WhatsApp Template Drawer */}
+      <WhatsAppTemplateDrawer
+        open={templateDrawer}
+        onClose={() => setTemplateDrawer(false)}
+        lead={lead}
+      />
 
       {/* Loss Reason Modal */}
       <Modal

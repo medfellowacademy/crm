@@ -14,64 +14,32 @@ import {
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+import { adminAPI } from '../../api/api';
+import SLAWidget from '../../components/dashboard/SLAWidget';
 
 const AdminDashboard = () => {
   // Fetch admin stats
   const { data: stats } = useQuery({
     queryKey: ['admin-stats'],
-    queryFn: async () => {
-      const response = await fetch(`${API_BASE_URL}/api/admin/stats`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-        },
-      });
-      if (!response.ok) throw new Error('Failed to fetch stats');
-      return response.json();
-    },
+    queryFn: () => adminAPI.getStats().then(res => res.data),
   });
 
   // Fetch team performance
   const { data: teamPerformance = [] } = useQuery({
     queryKey: ['team-performance'],
-    queryFn: async () => {
-      const response = await fetch(`${API_BASE_URL}/api/admin/team-performance`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-        },
-      });
-      if (!response.ok) throw new Error('Failed to fetch team performance');
-      return response.json();
-    },
+    queryFn: () => adminAPI.getTeamPerformance().then(res => res.data),
   });
 
   // Fetch funnel leakage analysis
   const { data: funnelLeakage = [] } = useQuery({
     queryKey: ['funnel-leakage'],
-    queryFn: async () => {
-      const response = await fetch(`${API_BASE_URL}/api/admin/funnel-analysis`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-        },
-      });
-      if (!response.ok) throw new Error('Failed to fetch funnel data');
-      return response.json();
-    },
+    queryFn: () => adminAPI.getFunnelAnalysis().then(res => res.data),
   });
 
   // Fetch revenue trend
   const { data: revenueTrend = [] } = useQuery({
     queryKey: ['revenue-trend'],
-    queryFn: async () => {
-      const response = await fetch(`${API_BASE_URL}/api/admin/revenue-trend?days=30`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-        },
-      });
-      if (!response.ok) throw new Error('Failed to fetch revenue trend');
-      return response.json();
-    },
+    queryFn: () => adminAPI.getRevenueTrend(30).then(res => res.data),
   });
 
   const statCards = [
@@ -271,34 +239,39 @@ const AdminDashboard = () => {
         </div>
       </div>
 
-      {/* Team Performance */}
-      <div style={{
-        background: 'var(--bg-secondary)',
-        borderRadius: '12px',
-        padding: 'var(--space-4)',
-        border: '1px solid var(--border-color)',
-      }}>
-        <h3 style={{ fontSize: 'var(--text-lg)', fontWeight: '600', marginBottom: 'var(--space-4)' }}>
-          Team Performance Comparison
-        </h3>
-        <ResponsiveContainer width="100%" height={300}>
-          <BarChart data={teamPerformance}>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-            <XAxis dataKey="name" stroke="var(--text-tertiary)" style={{ fontSize: '12px' }} />
-            <YAxis stroke="var(--text-tertiary)" style={{ fontSize: '12px' }} />
-            <Tooltip 
-              contentStyle={{ 
-                background: 'var(--bg-primary)', 
-                border: '1px solid var(--border-color)',
-                borderRadius: '8px',
-              }}
-            />
-            <Legend />
-            <Bar dataKey="leads" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-            <Bar dataKey="conversions" fill="#10b981" radius={[4, 4, 0, 0]} />
-            <Bar dataKey="revenue" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
+      {/* Team Performance + SLA side-by-side */}
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 'var(--space-4)' }}>
+        <div style={{
+          background: 'var(--bg-secondary)',
+          borderRadius: '12px',
+          padding: 'var(--space-4)',
+          border: '1px solid var(--border-color)',
+        }}>
+          <h3 style={{ fontSize: 'var(--text-lg)', fontWeight: '600', marginBottom: 'var(--space-4)' }}>
+            Team Performance Comparison
+          </h3>
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={teamPerformance}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
+              <XAxis dataKey="name" stroke="var(--text-tertiary)" style={{ fontSize: '12px' }} />
+              <YAxis stroke="var(--text-tertiary)" style={{ fontSize: '12px' }} />
+              <Tooltip
+                contentStyle={{
+                  background: 'var(--bg-primary)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '8px',
+                }}
+              />
+              <Legend />
+              <Bar dataKey="leads"       fill="#3b82f6" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="conversions" fill="#10b981" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="revenue"     fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* SLA Compliance Widget */}
+        <SLAWidget />
       </div>
     </div>
   );
