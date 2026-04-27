@@ -5,8 +5,9 @@ import {
   Table, Button, Tag, Progress, Space, Input, Select, DatePicker,
   Drawer, Form, message, Row, Col, Card, Statistic, Avatar, Tooltip,
   Dropdown, Segmented, Empty, Typography, Divider, Checkbox,
-  Radio, InputNumber, Alert, Modal, Upload, Steps, Badge,
+  Radio, InputNumber, Alert, Modal, Upload, Steps, Badge, AutoComplete,
 } from 'antd';
+import { COUNTRIES } from '../config/countries';
 import {
   PlusOutlined, SearchOutlined, FilterOutlined, WhatsAppOutlined,
   MailOutlined, EyeOutlined, DeleteOutlined, ReloadOutlined,
@@ -1195,25 +1196,15 @@ const LeadsPageEnhanced = () => {
           </Row>
           <Row gutter={16}>
             <Col span={12}>
-              <Form.Item name="country" label="Country" rules={[{ required: true }]}>
-                <Select placeholder="Select country" showSearch filterOption={(input, option) => 
-                  option.children.toLowerCase().includes(input.toLowerCase())
-                }>
-                  {[
-                    'India', 'USA', 'UK', 'Canada', 'Australia', 'UAE', 'Singapore', 'Germany', 'France', 'Italy',
-                    'Spain', 'Netherlands', 'Belgium', 'Switzerland', 'Sweden', 'Norway', 'Denmark', 'Finland',
-                    'Poland', 'Austria', 'Ireland', 'Portugal', 'Greece', 'Czech Republic', 'Romania', 'Hungary',
-                    'Japan', 'South Korea', 'China', 'Hong Kong', 'Taiwan', 'Thailand', 'Malaysia', 'Indonesia',
-                    'Philippines', 'Vietnam', 'Bangladesh', 'Pakistan', 'Nepal', 'Sri Lanka', 'Myanmar', 'Cambodia',
-                    'New Zealand', 'Fiji', 'Papua New Guinea', 'Solomon Islands', 'Vanuatu',
-                    'Saudi Arabia', 'Qatar', 'Kuwait', 'Bahrain', 'Oman', 'Jordan', 'Lebanon', 'Israel', 'Turkey',
-                    'Egypt', 'South Africa', 'Nigeria', 'Kenya', 'Ghana', 'Ethiopia', 'Morocco', 'Algeria', 'Tunisia',
-                    'Tanzania', 'Uganda', 'Zambia', 'Zimbabwe', 'Botswana', 'Namibia', 'Mauritius', 'Seychelles',
-                    'Brazil', 'Mexico', 'Argentina', 'Chile', 'Colombia', 'Peru', 'Venezuela', 'Ecuador', 'Bolivia',
-                    'Paraguay', 'Uruguay', 'Costa Rica', 'Panama', 'Guatemala', 'Honduras', 'El Salvador', 'Nicaragua',
-                    'Russia', 'Ukraine', 'Belarus', 'Kazakhstan', 'Uzbekistan', 'Azerbaijan', 'Georgia', 'Armenia'
-                  ].sort().map(c => <Option key={c} value={c}>{c}</Option>)}
-                </Select>
+              <Form.Item name="country" label="Country" rules={[{ required: true, message: 'Please select or enter a country' }]}>
+                <AutoComplete
+                  placeholder="Search or type a country…"
+                  allowClear
+                  filterOption={(input, option) =>
+                    option.value.toLowerCase().includes(input.toLowerCase())
+                  }
+                  options={COUNTRIES.map(c => ({ value: c, label: c }))}
+                />
               </Form.Item>
             </Col>
             <Col span={12}>
