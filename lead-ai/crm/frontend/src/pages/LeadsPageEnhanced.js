@@ -231,7 +231,7 @@ const LeadsPageEnhanced = () => {
     return params;
   }, [filters, quickFilter, searchText, advFilters, currentPage, pageSize]);
 
-  const { data: leadsResponse = { leads: [], total: 0 }, isLoading, refetch } = useQuery({
+  const { data: leadsResponse = { leads: [], total: 0 }, isLoading, isFetching, refetch } = useQuery({
     queryKey: ['leads', leadQueryParams],
     queryFn: async () => {
       try {
@@ -240,7 +240,8 @@ const LeadsPageEnhanced = () => {
         return { leads: [], total: 0 };
       }
     },
-    staleTime: 2 * 60 * 1000,
+    staleTime: 5 * 60 * 1000,   // 5 min fresh — leads change often
+    placeholderData: (prev) => prev,  // show previous data instantly while loading next page
     refetchInterval: false,
     retry: 1,
   });
@@ -461,7 +462,12 @@ const LeadsPageEnhanced = () => {
       if (results.failed && results.failed.length > 0) {
         const failedErrors = results.failed.map(f => ({
           row: f.index + 2,
-          msg: `${f.name}: ${f.error}`
+          name: f.name,
+          msg: `${f.name}: ${f.error}`,
+          duplicate: f.duplicate || false,
+          existing_lead_id: f.existing_lead_id || '',
+          existing_owner: f.existing_owner || '',
+          existing_status: f.existing_status || '',
         }));
         setImportErrors(prev => [...prev, ...failedErrors]);
       }
@@ -822,6 +828,11 @@ const LeadsPageEnhanced = () => {
           <Space>
             <Title level={4} style={{ margin: 0 }}>Lead Management</Title>
             <Badge count={totalLeads} style={{ backgroundColor: '#1890ff' }} />
+            {isFetching && !isLoading && (
+              <span style={{ fontSize: 12, color: '#1890ff', fontWeight: 400 }}>
+                <SyncOutlined spin style={{ marginRight: 4 }} />refreshing…
+              </span>
+            )}
           </Space>
         }
         extra={
@@ -874,7 +885,7 @@ const LeadsPageEnhanced = () => {
         <Table
           columns={columns}
           dataSource={filteredLeads}
-          loading={isLoading}
+          loading={isLoading && !isFetching}
           rowKey="lead_id"
           scroll={{ x: 1800 }}
           size="middle"
@@ -1044,23 +1055,66 @@ const LeadsPageEnhanced = () => {
             {importErrors.filter(e => e.msg.includes(':')).length > 0 && (
               <>
                 <Divider />
-                <Alert
-                  type="warning"
-                  showIcon
-                  message={`${importErrors.filter(e => e.msg.includes(':')).length} leads failed to import`}
-                  description={
-                    <div style={{ maxHeight: 200, overflow: 'auto' }}>
-                      <ul style={{ marginBottom: 0, paddingLeft: 20 }}>
-                        {importErrors.filter(e => e.msg.includes(':')).map((e, i) => (
-                          <li key={i} style={{ marginBottom: 4 }}>
-                            <Text code>Row {e.row}</Text>: {e.msg.split(':').slice(1).join(':').trim()}
-                          </li>
+                {/* Duplicates section */}
+                {importErrors.filter(e => e.duplicate).length > 0 && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    icon={<WarningOutlined />}
+                    message={`${importErrors.filter(e => e.duplicate).length} duplicate lead(s) — already in CRM`}
+                    description={
+                      <div style={{ maxHeight: 250, overflow: 'auto', marginTop: 8 }}>
+                        {importErrors.filter(e => e.duplicate).map((e, i) => (
+                          <div key={i} style={{
+                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                            padding: '8px 12px', marginBottom: 6,
+                            background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8,
+                          }}>
+                            <div>
+                              <Text strong style={{ fontSize: 13 }}>{e.name}</Text>
+                              <span style={{ marginLeft: 8, fontSize: 12, color: '#6b7280' }}>Row {e.row}</span>
+                              {e.existing_lead_id && (
+                                <Tag style={{ marginLeft: 8 }} color="blue">{e.existing_lead_id}</Tag>
+                              )}
+                            </div>
+                            <div style={{ textAlign: 'right' }}>
+                              <div style={{ fontSize: 12, color: '#374151' }}>
+                                <span style={{ fontWeight: 600 }}>Owner: </span>
+                                <Tag color={e.existing_owner && e.existing_owner !== 'Unassigned' ? 'purple' : 'default'}>
+                                  {e.existing_owner || 'Unassigned'}
+                                </Tag>
+                              </div>
+                              {e.existing_status && (
+                                <Tag color="green" style={{ marginTop: 4 }}>{e.existing_status}</Tag>
+                              )}
+                            </div>
+                          </div>
                         ))}
-                      </ul>
-                    </div>
-                  }
-                  style={{ marginBottom: 24, textAlign: 'left' }}
-                />
+                      </div>
+                    }
+                    style={{ marginBottom: 16, textAlign: 'left' }}
+                  />
+                )}
+                {/* Other errors section */}
+                {importErrors.filter(e => e.msg.includes(':') && !e.duplicate).length > 0 && (
+                  <Alert
+                    type="error"
+                    showIcon
+                    message={`${importErrors.filter(e => e.msg.includes(':') && !e.duplicate).length} leads failed to import`}
+                    description={
+                      <div style={{ maxHeight: 200, overflow: 'auto' }}>
+                        <ul style={{ marginBottom: 0, paddingLeft: 20 }}>
+                          {importErrors.filter(e => e.msg.includes(':') && !e.duplicate).map((e, i) => (
+                            <li key={i} style={{ marginBottom: 4 }}>
+                              <Text code>Row {e.row}</Text>: {e.msg.split(':').slice(1).join(':').trim()}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    }
+                    style={{ marginBottom: 24, textAlign: 'left' }}
+                  />
+                )}
               </>
             )}
             

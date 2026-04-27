@@ -123,6 +123,7 @@ export const usersAPI = {
   create: (data) => api.post('/api/users', data),
   update: (userId, data) => api.put(`/api/users/${userId}`, data),
   delete: (userId) => api.delete(`/api/users/${userId}`),
+  resetPassword: (userId, newPassword) => api.put(`/api/users/${userId}/admin-reset-password`, { new_password: newPassword }),
 };
 
 

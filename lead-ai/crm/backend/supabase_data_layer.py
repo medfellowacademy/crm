@@ -51,9 +51,20 @@ class SupabaseDataLayer:
     ) -> Dict[str, Any]:
         """Get leads with filters. Returns a paginated response dict."""
         try:
+            # Only fetch columns needed by the leads list — avoids transferring
+            # heavy text columns (feature_importance JSON, recommended_script, etc.)
+            LIST_COLUMNS = (
+                "lead_id,full_name,email,phone,whatsapp,country,source,"
+                "course_interested,status,ai_score,ai_segment,"
+                "conversion_probability,expected_revenue,actual_revenue,"
+                "follow_up_date,assigned_to,created_at,updated_at,"
+                "last_contact_date,buying_signal_strength,churn_risk,"
+                "primary_objection,next_action,priority_level,"
+                "loss_reason,loss_note"
+            )
             # Single query: data + exact count together (supabase-py v2 style)
             # count='exact' tells PostgREST to return Content-Range with total
-            query = self.client.table('leads').select("*", count='exact')
+            query = self.client.table('leads').select(LIST_COLUMNS, count='exact')
 
             # ---- apply filters ----
             if status_in and not status:

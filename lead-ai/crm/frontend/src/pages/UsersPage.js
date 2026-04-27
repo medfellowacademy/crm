@@ -54,7 +54,10 @@ const UsersPage = () => {
   const [viewMode, setViewMode] = useState('table'); // table | hierarchy
   const [selectedUser, setSelectedUser] = useState(null);
   const [leadsModalVisible, setLeadsModalVisible] = useState(false);
+  const [passwordModalVisible, setPasswordModalVisible] = useState(false);
+  const [passwordTargetUser, setPasswordTargetUser] = useState(null);
   const [form] = Form.useForm();
+  const [passwordResetForm] = Form.useForm();
 
   // Fetch users
   const { data: usersData, isLoading } = useQuery({
@@ -120,6 +123,20 @@ const UsersPage = () => {
     },
     onError: (error) => {
       message.error(`Failed to delete user: ${error.message}`);
+    },
+  });
+
+  const resetPasswordMutation = useMutation({
+    mutationFn: ({ id, newPassword }) => usersAPI.resetPassword(id, newPassword),
+    onSuccess: () => {
+      message.success('Password reset successfully!');
+      setPasswordModalVisible(false);
+      setPasswordTargetUser(null);
+      passwordResetForm.resetFields();
+    },
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      message.error(detail || 'Failed to reset password');
     },
   });
 
@@ -428,31 +445,40 @@ const UsersPage = () => {
       title: 'Actions',
       key: 'actions',
       fixed: 'right',
-      width: 120,
+      width: 220,
       render: (_, record) => (
-        <Space>
-          <Tooltip title="Edit">
+        <Space wrap>
+          <Button
+            type="primary"
+            size="small"
+            icon={<EditOutlined />}
+            onClick={() => handleEdit(record)}
+          >
+            Edit
+          </Button>
+          <Button
+            size="small"
+            icon={<LockOutlined />}
+            style={{ borderColor: '#faad14', color: '#faad14' }}
+            onClick={() => {
+              setPasswordTargetUser(record);
+              setPasswordModalVisible(true);
+            }}
+          >
+            Change Pwd
+          </Button>
+          <Popconfirm
+            title="Are you sure you want to delete this user?"
+            onConfirm={() => handleDelete(record.id)}
+            okText="Yes"
+            cancelText="No"
+          >
             <Button
-              type="primary"
+              danger
               size="small"
-              icon={<EditOutlined />}
-              onClick={() => handleEdit(record)}
+              icon={<DeleteOutlined />}
             />
-          </Tooltip>
-          <Tooltip title="Delete">
-            <Popconfirm
-              title="Are you sure you want to delete this user?"
-              onConfirm={() => handleDelete(record.id)}
-              okText="Yes"
-              cancelText="No"
-            >
-              <Button
-                danger
-                size="small"
-                icon={<DeleteOutlined />}
-              />
-            </Popconfirm>
-          </Tooltip>
+          </Popconfirm>
         </Space>
       ),
     },
@@ -798,6 +824,57 @@ const UsersPage = () => {
           />
         )}
       </Modal>
+      {/* Change Password Modal */}
+      <Modal
+        title={
+          passwordTargetUser ? (
+            <Space>
+              <LockOutlined />
+              <span>Change Password — {passwordTargetUser.full_name}</span>
+            </Space>
+          ) : 'Change Password'
+        }
+        open={passwordModalVisible}
+        onCancel={() => {
+          setPasswordModalVisible(false);
+          setPasswordTargetUser(null);
+          passwordResetForm.resetFields();
+        }}
+        onOk={() => passwordResetForm.submit()}
+        okText="Reset Password"
+        confirmLoading={resetPasswordMutation.isPending}
+      >
+        <Form
+          form={passwordResetForm}
+          layout="vertical"
+          onFinish={(values) => {
+            if (values.new_password !== values.confirm_password) {
+              message.error('Passwords do not match');
+              return;
+            }
+            resetPasswordMutation.mutate({ id: passwordTargetUser.id, newPassword: values.new_password });
+          }}
+        >
+          <Form.Item
+            name="new_password"
+            label="New Password"
+            rules={[
+              { required: true, message: 'Please enter new password' },
+              { min: 6, message: 'Password must be at least 6 characters' },
+            ]}
+          >
+            <Input.Password prefix={<LockOutlined />} placeholder="New password" />
+          </Form.Item>
+          <Form.Item
+            name="confirm_password"
+            label="Confirm Password"
+            rules={[{ required: true, message: 'Please confirm new password' }]}
+          >
+            <Input.Password prefix={<LockOutlined />} placeholder="Confirm new password" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
     </div>
   );
 };

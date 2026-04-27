@@ -32,8 +32,8 @@ const queryClient = new QueryClient({
     queries: {
       refetchOnWindowFocus: false,
       retry: 0,
-      staleTime: 10 * 60 * 1000,   // 10 min — serve cache, no spinner
-      gcTime: 30 * 60 * 1000,      // 30 min — keep data in memory
+      staleTime: 30 * 60 * 1000,   // 30 min — serve from cache, no spinner
+      gcTime: 60 * 60 * 1000,      // 60 min — keep data in memory
       refetchOnMount: false,        // don't refetch if data is fresh
     },
   },

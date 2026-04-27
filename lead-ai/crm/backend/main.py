@@ -337,6 +337,22 @@ async def _verify_token(request: Request) -> None:
     decode_access_token(token)  # raises 401 if expired / invalid
 
 
+def _get_counselor_name(request: Request, db) -> str | None:
+    """Return the full_name of the caller if they are a Counselor, else None.
+    Used to enforce per-counselor data isolation."""
+    try:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token_data = decode_access_token(auth_header.split(" ", 1)[1])
+            if token_data and token_data.role == "Counselor":
+                caller = db.query(DBUser).filter(DBUser.email == token_data.email).first()
+                if caller:
+                    return caller.full_name
+    except Exception:
+        pass
+    return None
+
+
 from fastapi import status
 
 # Initialize FastAPI with the global auth dependency
@@ -1466,12 +1482,18 @@ async def bulk_create_leads(leads: list[LeadCreate], background_tasks: Backgroun
             # Check for duplicates by phone (primary unique identifier)
             if supabase_data.client:
                 try:
-                    existing = supabase_data.client.table('leads').select("lead_id").eq("phone", lead.phone).limit(1).execute()
+                    existing = supabase_data.client.table('leads').select("lead_id,assigned_to,status,full_name").eq("phone", lead.phone).limit(1).execute()
                     if existing.data and len(existing.data) > 0:
+                        ex = existing.data[0]
+                        owner = ex.get("assigned_to") or "Unassigned"
                         results["failed"].append({
                             "index": idx,
                             "name": lead.full_name,
-                            "error": f"Duplicate phone number: {lead.phone}"
+                            "error": f"Duplicate phone number: {lead.phone}",
+                            "duplicate": True,
+                            "existing_lead_id": ex.get("lead_id", ""),
+                            "existing_owner": owner,
+                            "existing_status": ex.get("status", ""),
                         })
                         continue
                 except Exception:
@@ -1479,10 +1501,15 @@ async def bulk_create_leads(leads: list[LeadCreate], background_tasks: Backgroun
             else:
                 existing_lead = db.query(DBLead).filter(DBLead.phone == lead.phone).first()
                 if existing_lead:
+                    owner = existing_lead.assigned_to or "Unassigned"
                     results["failed"].append({
                         "index": idx,
                         "name": lead.full_name,
-                        "error": f"Duplicate phone number: {lead.phone} (existing lead: {existing_lead.lead_id})"
+                        "error": f"Duplicate phone number: {lead.phone}",
+                        "duplicate": True,
+                        "existing_lead_id": existing_lead.lead_id,
+                        "existing_owner": owner,
+                        "existing_status": existing_lead.status.value if hasattr(existing_lead.status, "value") else existing_lead.status,
                     })
                     continue
             
@@ -1584,7 +1611,7 @@ async def bulk_create_leads(leads: list[LeadCreate], background_tasks: Backgroun
 async def get_leads(
     request: Request,
     skip: int = 0,
-    limit: int = 100,
+    limit: int = 50,
     status: Optional[LeadStatus] = None,
     status_in: Optional[str] = None,
     country: Optional[str] = None,
@@ -1632,6 +1659,23 @@ async def get_leads(
     except Exception:
         pass  # token errors already handled by _verify_token; never crash the endpoint
 
+    # ── In-memory cache (90 sec TTL) ─────────────────────────────────────────
+    _cache_params = dict(
+        skip=skip, limit=limit, status=str(status), status_in=status_in,
+        country=country, country_in=country_in, segment=str(segment),
+        segment_in=segment_in, assigned_to=assigned_to, assigned_to_in=assigned_to_in,
+        course_interested=course_interested, source=source,
+        min_score=min_score, max_score=max_score,
+        follow_up_from=str(follow_up_from), follow_up_to=str(follow_up_to),
+        created_today=created_today, overdue=overdue, search=search,
+    )
+    import hashlib, json
+    _cache_key = "leads:" + hashlib.md5(
+        json.dumps(_cache_params, sort_keys=True, default=str).encode()
+    ).hexdigest()
+    if _cache_key in LEAD_CACHE:
+        return LEAD_CACHE[_cache_key]
+
     # Use Supabase REST API if available
     if supabase_data.client:
         # Use Supabase REST API
@@ -1669,7 +1713,8 @@ async def get_leads(
                 updated_from=updated_from.isoformat() if updated_from else None,
                 updated_to=updated_to.isoformat() if updated_to else None,
             )
-            # Return raw data from Supabase (already in correct format)
+            # Cache and return raw data from Supabase (already in correct format)
+            LEAD_CACHE[_cache_key] = leads_data
             return leads_data
         except Exception as e:
             logger.error(f"Supabase query failed, falling back to SQLAlchemy: {e}")
@@ -1810,18 +1855,22 @@ async def get_leads(
             })
         except Exception as serial_err:
             logger.warning(f"Skipping lead serialization error: {serial_err}")
-    return {
+    result = {
         "leads": leads_list,
         "total": total_count,
         "skip": skip,
         "limit": limit,
         "has_more": (skip + limit) < total_count
     }
+    LEAD_CACHE[_cache_key] = result
+    return result
 
 @app.get("/api/leads/{lead_id}")
-async def get_lead(lead_id: str, db: Session = Depends(get_db)):
+async def get_lead(lead_id: str, request: Request, db: Session = Depends(get_db)):
     """Get single lead by ID"""
     from sqlalchemy.orm import joinedload
+
+    _counselor_name = _get_counselor_name(request, db)
 
     # Use Supabase REST API if available
     if supabase_data.client:
@@ -1829,6 +1878,10 @@ async def get_lead(lead_id: str, db: Session = Depends(get_db)):
             lead = supabase_data.get_lead_by_id(lead_id)
             if not lead:
                 raise HTTPException(status_code=404, detail="Lead not found")
+
+            # Counselors may only view their own leads
+            if _counselor_name and lead.get("assigned_to") != _counselor_name:
+                raise HTTPException(status_code=403, detail="Access denied")
 
             # Fetch notes separately from database
             db_lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
@@ -1847,6 +1900,8 @@ async def get_lead(lead_id: str, db: Session = Depends(get_db)):
                 lead['notes'] = []
 
             return lead
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Supabase query failed: {e}")
 
@@ -1855,20 +1910,35 @@ async def get_lead(lead_id: str, db: Session = Depends(get_db)):
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
+    # Counselors may only view their own leads
+    if _counselor_name and lead.assigned_to != _counselor_name:
+        raise HTTPException(status_code=403, detail="Access denied")
+
     return lead
 
 @app.put("/api/leads/{lead_id}")
-async def update_lead(lead_id: str, lead_update: LeadUpdate, db: Session = Depends(get_db)):
+async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, db: Session = Depends(get_db)):
     """Update lead"""
-    
+
+    _counselor_name = _get_counselor_name(request, db)
+
     # Use Supabase REST API if available
     if supabase_data.client:
         try:
+            # Counselors may only update leads assigned to them
+            if _counselor_name:
+                existing = supabase_data.get_lead_by_id(lead_id)
+                if not existing:
+                    raise HTTPException(status_code=404, detail="Lead not found")
+                if existing.get("assigned_to") != _counselor_name:
+                    raise HTTPException(status_code=403, detail="Access denied")
             update_data = lead_update.dict(exclude_unset=True)
             updated_lead = supabase_data.update_lead(lead_id, update_data)
             if not updated_lead:
                 raise HTTPException(status_code=404, detail="Lead not found")
             return updated_lead
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Supabase update failed: {e}")
             raise HTTPException(status_code=500, detail=str(e))
@@ -1877,6 +1947,10 @@ async def update_lead(lead_id: str, lead_update: LeadUpdate, db: Session = Depen
     lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
+
+    # Counselors may only update their own leads
+    if _counselor_name and lead.assigned_to != _counselor_name:
+        raise HTTPException(status_code=403, detail="Access denied")
     
     # Update fields
     update_data = lead_update.dict(exclude_unset=True)
@@ -1905,9 +1979,14 @@ async def update_lead(lead_id: str, lead_update: LeadUpdate, db: Session = Depen
     return lead
 
 @app.delete("/api/leads/{lead_id}")
-async def delete_lead(lead_id: str, db: Session = Depends(get_db)):
+async def delete_lead(lead_id: str, request: Request, db: Session = Depends(get_db)):
     """Delete lead"""
-    
+
+    # Counselors cannot delete any lead
+    _counselor_name = _get_counselor_name(request, db)
+    if _counselor_name:
+        raise HTTPException(status_code=403, detail="Counselors are not permitted to delete leads")
+
     lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -4212,6 +4291,47 @@ async def change_password(user_id: int, data: PasswordChangeRequest, db: Session
 
     db.commit()
     return {"message": "Password updated successfully"}
+
+
+class AdminPasswordResetRequest(BaseModel):
+    new_password: str
+
+
+@app.put("/api/users/{user_id}/admin-reset-password")
+async def admin_reset_password(user_id: int, data: AdminPasswordResetRequest, request: Request, db: Session = Depends(get_db)):
+    """Allow a Super Admin to reset any user's password without requiring the current password."""
+    # Verify caller is Super Admin
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        try:
+            token_data = decode_access_token(auth_header.split(" ", 1)[1])
+            if not token_data or token_data.role != "Super Admin":
+                raise HTTPException(status_code=403, detail="Only Super Admins can reset user passwords")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=403, detail="Only Super Admins can reset user passwords")
+    else:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    import bcrypt as _bcrypt
+
+    user = db.query(DBUser).filter(DBUser.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if not data.new_password or len(data.new_password) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+
+    try:
+        user.password = _bcrypt.hashpw(
+            data.new_password.encode('utf-8'),
+            _bcrypt.gensalt()
+        ).decode('utf-8')
+    except Exception:
+        user.password = data.new_password
+
+    db.commit()
+    return {"message": "Password reset successfully"}
 
 
 # ============================================================
