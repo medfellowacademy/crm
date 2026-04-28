@@ -2011,6 +2011,9 @@ async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, b
                 if existing.get("assigned_to") != _counselor_name:
                     raise HTTPException(status_code=403, detail="Access denied")
             update_data = lead_update.dict(exclude_unset=True)
+            # Convert datetime objects to ISO strings for JSON serialization
+            if 'follow_up_date' in update_data and update_data['follow_up_date']:
+                update_data['follow_up_date'] = update_data['follow_up_date'].isoformat()
             updated_lead = supabase_data.update_lead(lead_id, update_data)
             if not updated_lead:
                 raise HTTPException(status_code=404, detail="Lead not found")
@@ -2204,7 +2207,7 @@ async def get_lead_activities(lead_id: str, type: Optional[str] = None, db: Sess
                 return []
             raise HTTPException(status_code=404, detail="Lead not found")
 
-    activities = []
+        activities = []
 
     # Channel → activity type mapping
     CHANNEL_TYPE = {
@@ -2305,11 +2308,11 @@ async def get_lead_activities(lead_id: str, type: Optional[str] = None, db: Sess
     # Sort newest-first
     activities.sort(key=lambda x: x["timestamp"] or "", reverse=True)
 
-    # Type filter
-    if type and type != "all":
-        activities = [a for a in activities if a["type"] == type]
+        # Type filter
+        if type and type != "all":
+            activities = [a for a in activities if a["type"] == type]
 
-    return activities
+        return activities
     except HTTPException:
         raise
     except Exception as e:
