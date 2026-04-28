@@ -100,7 +100,7 @@ const LeadDetails = () => {
     addNoteMutation.mutate({
       content: values.content,
       channel: values.channel || 'manual',
-      created_by: values.created_by || 'Counselor',
+      created_by: values.created_by, // Backend will use authenticated user's name
     });
   };
 

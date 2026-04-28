@@ -421,6 +421,7 @@ const LeadsPageEnhanced = () => {
         assigned_to: isCounselor
           ? (authUser?.full_name || undefined)
           : (mappedLead.assigned_to || undefined),
+        notes: mappedLead.notes || undefined,  // Include notes if mapped
       };
       
       // Remove undefined/empty keys

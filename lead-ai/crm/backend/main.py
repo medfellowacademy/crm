@@ -709,12 +709,12 @@ from pydantic import field_validator
 class NoteCreate(BaseModel):
     content: str
     channel: str = "manual"
-    created_by: str
+    created_by: Optional[str] = None  # Optional - backend determines from auth token
 
     @field_validator('content', 'created_by', mode='before')
     @classmethod
     def _sanitize(cls, v):
-        return sanitize_text(v, max_length=10000)
+        return sanitize_text(v, max_length=10000) if v else None
 
 class NoteResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -734,11 +734,12 @@ class LeadCreate(BaseModel):
     source: str
     course_interested: str
     assigned_to: Optional[str] = None
+    notes: Optional[str] = None  # Initial note content for imports
 
-    @field_validator('full_name', 'source', 'course_interested', 'assigned_to', mode='before')
+    @field_validator('full_name', 'source', 'course_interested', 'assigned_to', 'notes', mode='before')
     @classmethod
     def _sanitize(cls, v):
-        return sanitize_text(v, max_length=500)
+        return sanitize_text(v, max_length=500) if v else None
 
 class LeadUpdate(BaseModel):
     full_name: Optional[str] = None
@@ -1456,8 +1457,25 @@ async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, db: S
 
 
 @app.post("/api/leads/bulk-create")
-async def bulk_create_leads(leads: list[LeadCreate], background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+async def bulk_create_leads(leads: list[LeadCreate], background_tasks: BackgroundTasks, request: Request, db: Session = Depends(get_db)):
     """Bulk create multiple leads at once for import functionality"""
+    
+    # Get the importer's name for notes
+    importer_name = _get_counselor_name(request, db)
+    if not importer_name:
+        # If not a counselor, try to get the user's full name from the token
+        try:
+            auth_header = request.headers.get("Authorization", "")
+            if auth_header.startswith("Bearer "):
+                token_data = decode_access_token(auth_header.split(" ", 1)[1])
+                if token_data and token_data.email:
+                    user = db.query(DBUser).filter(DBUser.email == token_data.email).first()
+                    if user:
+                        importer_name = user.full_name
+        except Exception:
+            pass
+    
+    importer_name = importer_name or "System"
     
     results = {
         "success": [],
@@ -1563,6 +1581,21 @@ async def bulk_create_leads(leads: list[LeadCreate], background_tasks: Backgroun
                     payload = {k: v for k, v in payload.items() if v is not None}
                     created = supabase_data.create_lead(payload)
                     if created:
+                        # Create import note in SQLite database (notes are stored locally)
+                        # First, find the database lead ID
+                        db_lead_record = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
+                        if db_lead_record:
+                            # Use note content from imported data or default message
+                            note_content = lead.notes if lead.notes else "Lead imported via bulk upload"
+                            import_note = DBNote(
+                                lead_id=db_lead_record.id,
+                                content=note_content,
+                                channel="manual",
+                                created_by=importer_name
+                            )
+                            db.add(import_note)
+                            db.commit()
+                        
                         results["success"].append({"index": idx, "lead_id": lead_id, "name": lead.full_name})
                         continue
                 except Exception as e:
@@ -1573,6 +1606,18 @@ async def bulk_create_leads(leads: list[LeadCreate], background_tasks: Backgroun
                 db.add(db_lead)
                 db.commit()
                 db.refresh(db_lead)
+                
+                # Create import note with content from imported data or default message
+                note_content = lead.notes if lead.notes else "Lead imported via bulk upload"
+                import_note = DBNote(
+                    lead_id=db_lead.id,
+                    content=note_content,
+                    channel="manual",
+                    created_by=importer_name
+                )
+                db.add(import_note)
+                db.commit()
+                
                 results["success"].append({"index": idx, "lead_id": lead_id, "name": lead.full_name})
             except Exception as db_error:
                 # Rollback this transaction and continue with next lead
@@ -2039,19 +2084,37 @@ async def bulk_update_leads(
 # ============================================================================
 
 @app.post("/api/leads/{lead_id}/notes", response_model=NoteResponse)
-async def add_note(lead_id: str, note: NoteCreate, db: Session = Depends(get_db)):
+async def add_note(lead_id: str, note: NoteCreate, request: Request, db: Session = Depends(get_db)):
     """Add note to lead"""
     
     lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     
+    # Get the actual logged-in user's name from the request
+    counselor_name = _get_counselor_name(request, db)
+    if not counselor_name:
+        # If not a counselor, try to get the user's full name from the token
+        try:
+            auth_header = request.headers.get("Authorization", "")
+            if auth_header.startswith("Bearer "):
+                token_data = decode_access_token(auth_header.split(" ", 1)[1])
+                if token_data and token_data.email:
+                    user = db.query(DBUser).filter(DBUser.email == token_data.email).first()
+                    if user:
+                        counselor_name = user.full_name
+        except Exception:
+            pass
+    
+    # Fallback to provided name or "System" if still not found
+    created_by = counselor_name or note.created_by or "System"
+    
     # Create note
     db_note = DBNote(
         lead_id=lead.id,
         content=note.content,
         channel=note.channel,
-        created_by=note.created_by
+        created_by=created_by
     )
     db.add(db_note)
     
