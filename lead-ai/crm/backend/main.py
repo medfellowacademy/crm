@@ -1974,18 +1974,25 @@ async def get_lead(lead_id: str, request: Request, db: Session = Depends(get_db)
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"Supabase query failed: {e}")
+            logger.error(f"Supabase get_lead failed for {lead_id}: {e}", exc_info=True)
+            # Fall through to SQLAlchemy fallback
 
     # Fallback to SQLAlchemy with eager loading of notes
-    lead = db.query(DBLead).options(joinedload(DBLead.notes)).filter(DBLead.lead_id == lead_id).first()
-    if not lead:
-        raise HTTPException(status_code=404, detail="Lead not found")
+    try:
+        lead = db.query(DBLead).options(joinedload(DBLead.notes)).filter(DBLead.lead_id == lead_id).first()
+        if not lead:
+            raise HTTPException(status_code=404, detail="Lead not found")
 
-    # Counselors may only view their own leads
-    if _counselor_name and lead.assigned_to != _counselor_name:
-        raise HTTPException(status_code=403, detail="Access denied")
+        # Counselors may only view their own leads
+        if _counselor_name and lead.assigned_to != _counselor_name:
+            raise HTTPException(status_code=403, detail="Access denied")
 
-    return lead
+        return lead
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get lead {lead_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve lead: {str(e)}")
 
 @app.put("/api/leads/{lead_id}")
 async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -2185,9 +2192,17 @@ async def get_notes(lead_id: str, db: Session = Depends(get_db)):
 @app.get("/api/leads/{lead_id}/activities")
 async def get_lead_activities(lead_id: str, type: Optional[str] = None, db: Session = Depends(get_db)):
     """Get enriched activity timeline for a lead — notes, WhatsApp, calls, emails, status changes."""
-    lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
-    if not lead:
-        raise HTTPException(status_code=404, detail="Lead not found")
+    try:
+        lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
+        if not lead:
+            # Try Supabase if not in SQLite
+            if supabase_data.client:
+                lead_data = supabase_data.get_lead_by_id(lead_id)
+                if not lead_data:
+                    raise HTTPException(status_code=404, detail="Lead not found")
+                # Return empty activities if lead only in Supabase
+                return []
+            raise HTTPException(status_code=404, detail="Lead not found")
 
     activities = []
 
@@ -2295,14 +2310,39 @@ async def get_lead_activities(lead_id: str, type: Optional[str] = None, db: Sess
         activities = [a for a in activities if a["type"] == type]
 
     return activities
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get activities for {lead_id}: {e}", exc_info=True)
+        # Return empty list instead of failing
+        return []
 
 
 @app.get("/api/leads/{lead_id}/ai-summary")
 async def get_lead_ai_summary(lead_id: str, db: Session = Depends(get_db)):
     """Get AI-generated summary and insights for a lead"""
-    lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
-    if not lead:
-        raise HTTPException(status_code=404, detail="Lead not found")
+    try:
+        lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
+        if not lead:
+            # Try Supabase if not in SQLite
+            if supabase_data.client:
+                lead_data = supabase_data.get_lead_by_id(lead_id)
+                if not lead_data:
+                    raise HTTPException(status_code=404, detail="Lead not found")
+                # Build basic summary from Supabase data
+                return {
+                    "lead_id": lead_data.get("lead_id"),
+                    "summary": f"{lead_data.get('full_name', 'Lead')} is interested in {lead_data.get('course_interested', 'courses')}.",
+                    "key_insights": [
+                        f"AI Score: {lead_data.get('ai_score', 0)}/100",
+                        f"Status: {lead_data.get('status', 'Unknown')}"
+                    ],
+                    "recommendations": ["Follow up with the lead"],
+                    "next_best_action": "Schedule follow-up call",
+                    "urgency": "Medium",
+                    "sentiment": "neutral"
+                }
+            raise HTTPException(status_code=404, detail="Lead not found")
 
     # Generate basic summary from lead data
     summary = {
@@ -2334,6 +2374,11 @@ async def get_lead_ai_summary(lead_id: str, db: Session = Depends(get_db)):
         summary["recommendations"].insert(0, "⚠️ Follow-up overdue - Contact ASAP")
 
     return summary
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get AI summary for {lead_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to generate AI summary: {str(e)}")
 
 # ============================================================================
 # API ENDPOINTS - HOSPITALS
