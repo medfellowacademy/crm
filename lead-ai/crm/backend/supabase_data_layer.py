@@ -208,6 +208,11 @@ class SupabaseDataLayer:
             # Add updated_at timestamp
             data['updated_at'] = datetime.utcnow().isoformat()
             
+            # Convert any datetime objects to ISO strings for JSON serialization
+            for key, value in data.items():
+                if isinstance(value, datetime):
+                    data[key] = value.isoformat()
+            
             # Remove None values to avoid overwriting with null unintentionally
             # Keep empty strings and 0 values
             cleaned_data = {k: v for k, v in data.items() if v is not None}
@@ -225,6 +230,11 @@ class SupabaseDataLayer:
             now = datetime.utcnow().isoformat()
             data['created_at'] = now
             data['updated_at'] = now
+            
+            # Convert any datetime objects to ISO strings for JSON serialization
+            for key, value in data.items():
+                if isinstance(value, datetime):
+                    data[key] = value.isoformat()
             
             # Remove None values to avoid Supabase constraint issues
             # Keep empty strings and 0 values, just remove None
