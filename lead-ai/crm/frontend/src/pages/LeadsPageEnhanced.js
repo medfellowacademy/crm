@@ -234,9 +234,10 @@ const LeadsPageEnhanced = () => {
         return { leads: [], total: 0 };
       }
     },
-    staleTime: 5 * 60 * 1000,   // 5 min fresh — leads change often
+    staleTime: 30 * 1000,   // 30 seconds - fetch fresh data more frequently
     placeholderData: (prev) => prev,  // show previous data instantly while loading next page
     refetchInterval: false,
+    refetchOnWindowFocus: true,  // Refetch when user returns to tab
     retry: 1,
   });
 
@@ -308,7 +309,11 @@ const LeadsPageEnhanced = () => {
 
   const updateMutation = useMutation({
     mutationFn: ({ leadId, data }) => leadsAPI.update(leadId, data),
-    onSuccess: () => { message.success('Lead updated!'); queryClient.invalidateQueries(['leads']); },
+    onSuccess: (_, { leadId }) => { 
+      message.success('Lead updated!'); 
+      queryClient.invalidateQueries(['leads']); 
+      queryClient.invalidateQueries(['lead', leadId]); // Invalidate individual lead cache
+    },
     onError: (e) => message.error(`Failed: ${e.message}`),
   });
 
@@ -319,7 +324,15 @@ const LeadsPageEnhanced = () => {
 
   const bulkMutation = useMutation({
     mutationFn: ({ leadIds, updates }) => leadsAPI.bulkUpdate(leadIds, updates),
-    onSuccess: () => { message.success(`${selectedRows.length} leads updated!`); setSelectedRows([]); setBulkDrawerVisible(false); bulkForm.resetFields(); queryClient.invalidateQueries(['leads']); },
+    onSuccess: (_, { leadIds }) => { 
+      message.success(`${selectedRows.length} leads updated!`); 
+      setSelectedRows([]); 
+      setBulkDrawerVisible(false); 
+      bulkForm.resetFields(); 
+      queryClient.invalidateQueries(['leads']); 
+      // Invalidate each individual lead cache
+      leadIds.forEach(leadId => queryClient.invalidateQueries(['lead', leadId]));
+    },
   });
 
   // ── Bulk Import with Field Mapping ────────────────────────────────────────

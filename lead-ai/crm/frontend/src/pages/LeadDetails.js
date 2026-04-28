@@ -60,7 +60,10 @@ const LeadDetails = () => {
   // Fetch lead details
   const { data: lead, isLoading, refetch } = useQuery({
     queryKey: ['lead', leadId],
-    queryFn: () => leadsAPI.getById(leadId).then(res => res.data)
+    queryFn: () => leadsAPI.getById(leadId).then(res => res.data),
+    refetchOnMount: 'always', // Always fetch fresh data when component mounts
+    refetchOnWindowFocus: true, // Refetch when user returns to tab
+    staleTime: 0, // Consider data stale immediately
   });
 
   // Update form when lead data changes
@@ -93,6 +96,7 @@ const LeadDetails = () => {
       setIsEditing(false);
       // Invalidate and refetch to ensure UI updates
       queryClient.invalidateQueries({ queryKey: ['lead', leadId] });
+      queryClient.invalidateQueries({ queryKey: ['leads'] }); // Invalidate leads list
       refetch();
     },
     onError: (error) => {
