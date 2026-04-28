@@ -2347,36 +2347,36 @@ async def get_lead_ai_summary(lead_id: str, db: Session = Depends(get_db)):
                 }
             raise HTTPException(status_code=404, detail="Lead not found")
 
-    # Generate basic summary from lead data
-    summary = {
-        "lead_id": lead.lead_id,
-        "summary": f"{lead.full_name} is interested in {lead.course_interested}. Currently in {lead.status} status.",
-        "key_insights": [
-            f"AI Score: {lead.ai_score}/100 - {lead.ai_segment} segment",
-            f"Conversion Probability: {int(lead.conversion_probability * 100)}%",
-            f"Expected Revenue: ₹{int(lead.expected_revenue):,}"
-        ],
-        "recommendations": [],
-        "next_best_action": lead.next_action or "Schedule follow-up call",
-        "urgency": lead.priority_level or "Medium",
-        "sentiment": "positive" if lead.ai_score > 70 else "neutral" if lead.ai_score > 40 else "negative"
-    }
+        # Generate basic summary from lead data
+        summary = {
+            "lead_id": lead.lead_id,
+            "summary": f"{lead.full_name} is interested in {lead.course_interested}. Currently in {lead.status} status.",
+            "key_insights": [
+                f"AI Score: {lead.ai_score}/100 - {lead.ai_segment} segment",
+                f"Conversion Probability: {int(lead.conversion_probability * 100)}%",
+                f"Expected Revenue: ₹{int(lead.expected_revenue):,}"
+            ],
+            "recommendations": [],
+            "next_best_action": lead.next_action or "Schedule follow-up call",
+            "urgency": lead.priority_level or "Medium",
+            "sentiment": "positive" if lead.ai_score > 70 else "neutral" if lead.ai_score > 40 else "negative"
+        }
 
-    # Add recommendations based on status and score
-    if lead.ai_segment == "HOT":
-        summary["recommendations"].append("🔥 High priority - Contact immediately")
-        summary["recommendations"].append("💰 High conversion probability - Focus on closing")
-    elif lead.ai_segment == "WARM":
-        summary["recommendations"].append("📞 Schedule follow-up within 24 hours")
-        summary["recommendations"].append("📧 Send course details and testimonials")
-    else:
-        summary["recommendations"].append("📅 Schedule follow-up for next week")
-        summary["recommendations"].append("🎯 Work on building interest")
+        # Add recommendations based on status and score
+        if lead.ai_segment == "HOT":
+            summary["recommendations"].append("🔥 High priority - Contact immediately")
+            summary["recommendations"].append("💰 High conversion probability - Focus on closing")
+        elif lead.ai_segment == "WARM":
+            summary["recommendations"].append("📞 Schedule follow-up within 24 hours")
+            summary["recommendations"].append("📧 Send course details and testimonials")
+        else:
+            summary["recommendations"].append("📅 Schedule follow-up for next week")
+            summary["recommendations"].append("🎯 Work on building interest")
 
-    if lead.follow_up_date and lead.follow_up_date < datetime.utcnow():
-        summary["recommendations"].insert(0, "⚠️ Follow-up overdue - Contact ASAP")
+        if lead.follow_up_date and lead.follow_up_date < datetime.utcnow():
+            summary["recommendations"].insert(0, "⚠️ Follow-up overdue - Contact ASAP")
 
-    return summary
+        return summary
     except HTTPException:
         raise
     except Exception as e:
