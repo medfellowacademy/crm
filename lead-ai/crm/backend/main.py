@@ -1403,7 +1403,7 @@ async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, db: S
     db_lead = DBLead(
         lead_id=lead_id,
         full_name=lead.full_name,
-        email=lead.email,
+        email=lead.email if lead.email else None,  # Explicitly handle None
         phone=lead.phone,
         whatsapp=lead.whatsapp or lead.phone,
         country=lead.country,

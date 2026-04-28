@@ -208,10 +208,14 @@ class SupabaseDataLayer:
             # Add updated_at timestamp
             data['updated_at'] = datetime.utcnow().isoformat()
             
-            response = self.client.table('leads').update(data).eq('lead_id', lead_id).execute()
+            # Remove None values to avoid overwriting with null unintentionally
+            # Keep empty strings and 0 values
+            cleaned_data = {k: v for k, v in data.items() if v is not None}
+            
+            response = self.client.table('leads').update(cleaned_data).eq('lead_id', lead_id).execute()
             return response.data[0] if response.data else None
         except Exception as e:
-            logger.error(f"Error updating lead {lead_id}: {e}")
+            logger.error(f"Error updating lead {lead_id}: {e}", exc_info=True)
             return None
     
     def create_lead(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -222,10 +226,14 @@ class SupabaseDataLayer:
             data['created_at'] = now
             data['updated_at'] = now
             
-            response = self.client.table('leads').insert(data).execute()
+            # Remove None values to avoid Supabase constraint issues
+            # Keep empty strings and 0 values, just remove None
+            cleaned_data = {k: v for k, v in data.items() if v is not None}
+            
+            response = self.client.table('leads').insert(cleaned_data).execute()
             return response.data[0] if response.data else None
         except Exception as e:
-            logger.error(f"Error creating lead: {e}")
+            logger.error(f"Error creating lead in Supabase: {e}", exc_info=True)
             return None
     
     def delete_lead(self, lead_id: str) -> bool:
