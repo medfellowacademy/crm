@@ -19,7 +19,6 @@ import {
   WarningOutlined, FunnelPlotOutlined, MessageOutlined,
 } from '@ant-design/icons';
 import ChatDrawer from '../components/ChatDrawer';
-import LeadHoverPreview from '../components/leads/LeadHoverPreview';
 import DuplicateDetectionModal from '../components/leads/DuplicateDetectionModal';
 import FieldMappingModal from '../components/leads/FieldMappingModal';
 import WhatsAppTemplateDrawer from '../components/whatsapp/WhatsAppTemplateDrawer';
@@ -167,10 +166,6 @@ const LeadsPageEnhanced = () => {
   const [bulkForm] = Form.useForm();
   const fileInputRef = useRef(null);
 
-  // ── Hover preview state ────────────────────────────────────────────────────
-  const [hoveredLead, setHoveredLead] = useState(null);
-  const [hoverPos,    setHoverPos]    = useState({ x: 0, y: 0 });
-
   // Duplicate detection
   const [dupModalOpen,    setDupModalOpen]    = useState(false);
   const [dupCandidates,   setDupCandidates]   = useState([]);
@@ -178,8 +173,6 @@ const LeadsPageEnhanced = () => {
 
   // WhatsApp template drawer (for quick-send from table row)
   const [templateLead,    setTemplateLead]    = useState(null);
-  const showTimerRef = useRef(null);
-  const hideTimerRef = useRef(null);
 
   // Reset to first page when filters or search changes
   React.useEffect(() => {
@@ -896,26 +889,6 @@ const LeadsPageEnhanced = () => {
             onChange: (keys) => setSelectedRows(keys),
             preserveSelectedRowKeys: true,
           }}
-          onRow={(record) => ({
-            onMouseEnter: (e) => {
-              clearTimeout(hideTimerRef.current);
-              clearTimeout(showTimerRef.current);
-              const { clientX: x, clientY: y } = e;
-              showTimerRef.current = setTimeout(() => {
-                setHoveredLead(record);
-                setHoverPos({ x, y });
-              }, 120);
-            },
-            onMouseMove: (e) => {
-              if (hoveredLead?.lead_id === record.lead_id) {
-                setHoverPos({ x: e.clientX, y: e.clientY });
-              }
-            },
-            onMouseLeave: () => {
-              clearTimeout(showTimerRef.current);
-              hideTimerRef.current = setTimeout(() => setHoveredLead(null), 180);
-            },
-          })}
           pagination={{
             total: totalLeads,
             pageSize: pageSize,
@@ -1401,9 +1374,6 @@ const LeadsPageEnhanced = () => {
 
       {/* WhatsApp Chat Drawer */}
       <ChatDrawer lead={chatLead} onClose={() => setChatLead(null)} />
-
-      {/* Lead hover preview portal */}
-      <LeadHoverPreview lead={hoveredLead} pos={hoverPos} />
 
       {/* WhatsApp Template Drawer (from table row action) */}
       <WhatsAppTemplateDrawer
