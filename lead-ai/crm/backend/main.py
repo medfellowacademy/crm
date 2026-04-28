@@ -727,7 +727,7 @@ class NoteResponse(BaseModel):
 
 class LeadCreate(BaseModel):
     full_name: str
-    email: Optional[EmailStr] = None
+    email: Optional[str] = None  # Changed from EmailStr to str for lenient import
     phone: str
     whatsapp: Optional[str] = None
     country: str
@@ -736,6 +736,18 @@ class LeadCreate(BaseModel):
     assigned_to: Optional[str] = None
     notes: Optional[str] = None  # Initial note content for imports
 
+    @field_validator('email', mode='before')
+    @classmethod
+    def _validate_email(cls, v):
+        """Validate email - return None if invalid instead of raising error"""
+        if not v or not isinstance(v, str):
+            return None
+        v = v.strip()
+        # Basic check: must have @ and something before and after it
+        if '@' not in v or v.startswith('@') or v.endswith('@') or len(v) < 3:
+            return None
+        return v
+
     @field_validator('full_name', 'source', 'course_interested', 'assigned_to', 'notes', mode='before')
     @classmethod
     def _sanitize(cls, v):
@@ -743,7 +755,7 @@ class LeadCreate(BaseModel):
 
 class LeadUpdate(BaseModel):
     full_name: Optional[str] = None
-    email: Optional[EmailStr] = None
+    email: Optional[str] = None  # Changed from EmailStr to str for lenient updates
     phone: Optional[str] = None
     whatsapp: Optional[str] = None
     country: Optional[str] = None
@@ -755,6 +767,18 @@ class LeadUpdate(BaseModel):
     next_action: Optional[str] = None
     loss_reason: Optional[str] = None
     loss_note: Optional[str] = None
+
+    @field_validator('email', mode='before')
+    @classmethod
+    def _validate_email(cls, v):
+        """Validate email - return None if invalid instead of raising error"""
+        if not v or not isinstance(v, str):
+            return None
+        v = v.strip()
+        # Basic check: must have @ and something before and after it
+        if '@' not in v or v.startswith('@') or v.endswith('@') or len(v) < 3:
+            return None
+        return v
 
     @field_validator('full_name', 'course_interested', 'assigned_to', 'next_action',
                      'loss_reason', 'loss_note', mode='before')
