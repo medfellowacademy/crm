@@ -59,20 +59,24 @@ const LeadsPage = () => {
   const [communicationType, setCommunicationType] = useState('whatsapp');
 
   // Fetch data
-  const { data: leads, isLoading, refetch } = useQuery({
+  const { data: leadsResponse, isLoading, refetch } = useQuery({
     queryKey: ['leads', filters],
-    queryFn: () => leadsAPI.getAll(filters).then(res => res.data?.leads || []),
+    queryFn: () => leadsAPI.getAll(filters),
     keepPreviousData: true
   });
 
+  // Ensure leads is always an array
+  const leads = Array.isArray(leadsResponse?.data?.leads) ? leadsResponse.data.leads : 
+                Array.isArray(leadsResponse?.data) ? leadsResponse.data : [];
+
   const { data: courses } = useQuery({
     queryKey: ['courses'],
-    queryFn: () => coursesAPI.getAll().then(res => res.data)
+    queryFn: () => coursesAPI.getAll().then(res => Array.isArray(res.data) ? res.data : [])
   });
 
   const { data: counselors } = useQuery({
     queryKey: ['counselors'],
-    queryFn: () => counselorsAPI.getAll().then(res => res.data)
+    queryFn: () => counselorsAPI.getAll().then(res => Array.isArray(res.data) ? res.data : [])
   });
 
   // Create lead mutation

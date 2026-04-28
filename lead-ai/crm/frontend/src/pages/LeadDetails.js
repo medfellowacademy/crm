@@ -63,12 +63,12 @@ const LeadDetails = () => {
 
   const { data: courses } = useQuery({
     queryKey: ['courses'],
-    queryFn: () => coursesAPI.getAll().then(res => res.data)
+    queryFn: () => coursesAPI.getAll().then(res => Array.isArray(res.data) ? res.data : [])
   });
 
   const { data: counselors } = useQuery({
     queryKey: ['counselors'],
-    queryFn: () => counselorsAPI.getAll().then(res => res.data)
+    queryFn: () => counselorsAPI.getAll().then(res => Array.isArray(res.data) ? res.data : [])
   });
 
   // Update lead mutation
