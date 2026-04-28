@@ -48,18 +48,32 @@ const LeadDetails = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [noteForm] = Form.useForm();
+  const [leadForm] = Form.useForm();
   const [lossForm] = Form.useForm();
   const [emailModal, setEmailModal] = useState(false);
   const [whatsappModal, setWhatsappModal] = useState(false);
   const [templateDrawer, setTemplateDrawer] = useState(false);
   const [lossModal, setLossModal] = useState(false);
   const [pendingStatus, setPendingStatus] = useState(null);
+  const [isEditing, setIsEditing] = useState(false);
 
   // Fetch lead details
   const { data: lead, isLoading } = useQuery({
     queryKey: ['lead', leadId],
     queryFn: () => leadsAPI.getById(leadId).then(res => res.data)
   });
+
+  // Update form when lead data changes
+  React.useEffect(() => {
+    if (lead) {
+      leadForm.setFieldsValue({
+        course_interested: lead.course_interested,
+        status: lead.status,
+        follow_up_date: lead.follow_up_date ? dayjs(lead.follow_up_date) : null,
+        assigned_to: lead.assigned_to,
+      });
+    }
+  }, [lead, leadForm]);
 
   const { data: courses } = useQuery({
     queryKey: ['courses'],
@@ -76,12 +90,33 @@ const LeadDetails = () => {
     mutationFn: (data) => leadsAPI.update(leadId, data),
     onSuccess: () => {
       message.success('Lead updated successfully!');
+      setIsEditing(false);
       queryClient.invalidateQueries({ queryKey: ['lead', leadId] });
     },
     onError: (error) => {
       message.error(`Failed to update lead: ${error.message}`);
     },
   });
+
+  // Handle form submission
+  const handleSaveChanges = (values) => {
+    // Check if status changed to loss status
+    const statusChanged = values.status !== lead.status;
+    const isLossStatus = values.status === 'Not Interested' || values.status === 'Junk';
+    
+    if (statusChanged && isLossStatus) {
+      setPendingStatus(values.status);
+      setLossModal(true);
+      return;
+    }
+    
+    // Convert DatePicker value to ISO string
+    const updateData = {
+      ...values,
+      follow_up_date: values.follow_up_date ? values.follow_up_date.toISOString() : null,
+    };
+    updateLeadMutation.mutate(updateData);
+  };
 
   // Add note mutation
   const addNoteMutation = useMutation({
@@ -104,22 +139,16 @@ const LeadDetails = () => {
     });
   };
 
-  const handleUpdateField = (field, value) => {
-    // Intercept status changes to loss statuses — show loss reason modal
-    if (field === 'status' && (value === 'Not Interested' || value === 'Junk')) {
-      setPendingStatus(value);
-      setLossModal(true);
-      return;
-    }
-    updateLeadMutation.mutate({ [field]: value });
-  };
-
   const handleLossSubmit = () => {
     lossForm.validateFields().then(values => {
+      const formValues = leadForm.getFieldsValue();
       updateLeadMutation.mutate({
         status: pendingStatus,
         loss_reason: values.loss_reason,
         loss_note: values.loss_note || '',
+        course_interested: formValues.course_interested,
+        follow_up_date: formValues.follow_up_date ? formValues.follow_up_date.toISOString() : null,
+        assigned_to: formValues.assigned_to,
       });
       setLossModal(false);
       lossForm.resetFields();
@@ -213,78 +242,134 @@ const LeadDetails = () => {
         {/* Left Column */}
         <Col xs={24} lg={16}>
           {/* Lead Information */}
-          <Card title="Lead Information" style={{ marginBottom: '24px' }}>
-            <Descriptions column={2} bordered>
-              <Descriptions.Item label="Full Name">
-                {lead?.full_name}
-              </Descriptions.Item>
-              <Descriptions.Item label="Email">
-                {lead?.email || '-'}
-              </Descriptions.Item>
-              <Descriptions.Item label="Phone">
-                {lead?.phone}
-              </Descriptions.Item>
-              <Descriptions.Item label="WhatsApp">
-                {lead?.whatsapp || lead?.phone}
-              </Descriptions.Item>
-              <Descriptions.Item label="Country">
-                <Tag color="blue">{lead?.country}</Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="Source">
-                <Tag>{lead?.source}</Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="Course Interested" span={2}>
-                <Select
-                  style={{ width: '100%' }}
-                  value={lead?.course_interested}
-                  onChange={(value) => handleUpdateField('course_interested', value)}
-                >
-                  {courses?.map(course => (
-                    <Option key={course.id} value={course.course_name}>
-                      {course.course_name}
-                    </Option>
-                  ))}
-                </Select>
-              </Descriptions.Item>
-              <Descriptions.Item label="Status">
-                <Select
-                  value={lead?.status}
-                  onChange={(value) => handleUpdateField('status', value)}
-                  style={{ width: '100%' }}
-                >
-                  <Option value="Fresh">Fresh</Option>
-                  <Option value="Follow Up">Follow Up</Option>
-                  <Option value="Warm">Warm</Option>
-                  <Option value="Hot">Hot</Option>
-                  <Option value="Not Interested">Not Interested</Option>
-                  <Option value="Junk">Junk</Option>
-                  <Option value="Not Answering">Not Answering</Option>
-                  <Option value="Enrolled">Enrolled</Option>
-                </Select>
-              </Descriptions.Item>
-              <Descriptions.Item label="Follow-up Date">
-                <DatePicker
-                  showTime
-                  value={lead?.follow_up_date ? dayjs(lead.follow_up_date) : null}
-                  onChange={(date) => handleUpdateField('follow_up_date', date?.toISOString())}
-                  style={{ width: '100%' }}
-                />
-              </Descriptions.Item>
-              <Descriptions.Item label="Assigned To" span={2}>
-                <Select
-                  value={lead?.assigned_to}
-                  onChange={(value) => handleUpdateField('assigned_to', value)}
-                  style={{ width: '100%' }}
-                  allowClear
-                >
-                  {counselors?.map(counselor => (
-                    <Option key={counselor.id} value={counselor.name}>
-                      {counselor.name}
-                    </Option>
-                  ))}
-                </Select>
-              </Descriptions.Item>
-            </Descriptions>
+          <Card 
+            title="Lead Information"
+            extra={
+              <Space>
+                {!isEditing ? (
+                  <Button type="primary" onClick={() => setIsEditing(true)}>
+                    Edit
+                  </Button>
+                ) : (
+                  <>
+                    <Button onClick={() => {
+                      setIsEditing(false);
+                      leadForm.setFieldsValue({
+                        course_interested: lead.course_interested,
+                        status: lead.status,
+                        follow_up_date: lead.follow_up_date ? dayjs(lead.follow_up_date) : null,
+                        assigned_to: lead.assigned_to,
+                      });
+                    }}>
+                      Cancel
+                    </Button>
+                    <Button 
+                      type="primary" 
+                      icon={<SaveOutlined />}
+                      loading={updateLeadMutation.isLoading}
+                      onClick={() => leadForm.submit()}
+                    >
+                      Save
+                    </Button>
+                  </>
+                )}
+              </Space>
+            }
+            style={{ marginBottom: '24px' }}
+          >
+            <Form form={leadForm} onFinish={handleSaveChanges} layout="vertical">
+              <Descriptions column={2} bordered>
+                <Descriptions.Item label="Full Name">
+                  {lead?.full_name}
+                </Descriptions.Item>
+                <Descriptions.Item label="Email">
+                  {lead?.email || '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Phone">
+                  {lead?.phone}
+                </Descriptions.Item>
+                <Descriptions.Item label="WhatsApp">
+                  {lead?.whatsapp || lead?.phone}
+                </Descriptions.Item>
+                <Descriptions.Item label="Country">
+                  <Tag color="blue">{lead?.country}</Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="Source">
+                  <Tag>{lead?.source}</Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="Course Interested" span={2}>
+                  {!isEditing ? (
+                    <span>{lead?.course_interested}</span>
+                  ) : (
+                    <Form.Item name="course_interested" noStyle>
+                      <Select style={{ width: '100%' }}>
+                        {courses?.map(course => (
+                          <Option key={course.id} value={course.course_name}>
+                            {course.course_name}
+                          </Option>
+                        ))}
+                      </Select>
+                    </Form.Item>
+                  )}
+                </Descriptions.Item>
+                <Descriptions.Item label="Status">
+                  {!isEditing ? (
+                    <Tag color={
+                      lead?.status === 'Enrolled' ? 'green' :
+                      lead?.status === 'Hot' ? 'red' :
+                      lead?.status === 'Warm' ? 'orange' :
+                      lead?.status === 'Not Interested' ? 'red' :
+                      lead?.status === 'Junk' ? 'red' : 'blue'
+                    }>
+                      {lead?.status}
+                    </Tag>
+                  ) : (
+                    <Form.Item name="status" noStyle>
+                      <Select style={{ width: '100%' }}>
+                        <Option value="Fresh">Fresh</Option>
+                        <Option value="Follow Up">Follow Up</Option>
+                        <Option value="Warm">Warm</Option>
+                        <Option value="Hot">Hot</Option>
+                        <Option value="Not Interested">Not Interested</Option>
+                        <Option value="Junk">Junk</Option>
+                        <Option value="Not Answering">Not Answering</Option>
+                        <Option value="Enrolled">Enrolled</Option>
+                      </Select>
+                    </Form.Item>
+                  )}
+                </Descriptions.Item>
+                <Descriptions.Item label="Follow-up Date">
+                  {!isEditing ? (
+                    <span>
+                      {lead?.follow_up_date ? dayjs(lead.follow_up_date).format('MMM DD, YYYY hh:mm A') : '-'}
+                    </span>
+                  ) : (
+                    <Form.Item name="follow_up_date" noStyle>
+                      <DatePicker
+                        showTime
+                        style={{ width: '100%' }}
+                        format="MMM DD, YYYY hh:mm A"
+                      />
+                    </Form.Item>
+                  )}
+                </Descriptions.Item>
+                <Descriptions.Item label="Assigned To" span={2}>
+                  {!isEditing ? (
+                    <span>{lead?.assigned_to || '-'}</span>
+                  ) : (
+                    <Form.Item name="assigned_to" noStyle>
+                      <Select style={{ width: '100%' }} allowClear>
+                        {counselors?.map(counselor => (
+                          <Option key={counselor.id} value={counselor.name}>
+                            {counselor.name}
+                          </Option>
+                        ))}
+                      </Select>
+                    </Form.Item>
+                  )}
+                </Descriptions.Item>
+              </Descriptions>
+            </Form>
           </Card>
 
           {/* Notes Section */}
