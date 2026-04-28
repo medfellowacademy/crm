@@ -1483,6 +1483,9 @@ async def bulk_create_leads(leads: list[LeadCreate], background_tasks: Backgroun
         "total": len(leads)
     }
     
+    # Load course prices once before processing (performance optimization)
+    ai_scorer.load_course_prices(db)
+    
     # Get current lead count for ID generation
     if supabase_data.client:
         try:
@@ -1545,8 +1548,7 @@ async def bulk_create_leads(leads: list[LeadCreate], background_tasks: Backgroun
                 status=LeadStatus.FRESH
             )
             
-            # AI scoring
-            ai_scorer.load_course_prices(db)
+            # AI scoring (course prices already loaded once before loop)
             score_result = ai_scorer.score_lead(db_lead, [])
             for key, value in score_result.items():
                 if key == 'feature_importance' and value:
@@ -1962,7 +1964,7 @@ async def get_lead(lead_id: str, request: Request, db: Session = Depends(get_db)
     return lead
 
 @app.put("/api/leads/{lead_id}")
-async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, db: Session = Depends(get_db)):
+async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """Update lead"""
 
     _counselor_name = _get_counselor_name(request, db)
@@ -1981,6 +1983,10 @@ async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, d
             updated_lead = supabase_data.update_lead(lead_id, update_data)
             if not updated_lead:
                 raise HTTPException(status_code=404, detail="Lead not found")
+            
+            # Re-score in background for Supabase path
+            background_tasks.add_task(rescore_lead_async, lead_id, db)
+            
             return updated_lead
         except HTTPException:
             raise
@@ -2011,15 +2017,8 @@ async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, d
     db.commit()
     db.refresh(lead)
     
-    # Re-score if needed
-    ai_scorer.load_course_prices(db)
-    score_result = ai_scorer.score_lead(lead, lead.notes)
-    for key, value in score_result.items():
-        if key not in ['actual_revenue']:  # Don't override actual revenue
-            setattr(lead, key, value)
-    
-    db.commit()
-    db.refresh(lead)
+    # Re-score in background (non-blocking) - improves response time
+    background_tasks.add_task(rescore_lead_async, lead_id, db)
     
     return lead
 
@@ -2084,7 +2083,7 @@ async def bulk_update_leads(
 # ============================================================================
 
 @app.post("/api/leads/{lead_id}/notes", response_model=NoteResponse)
-async def add_note(lead_id: str, note: NoteCreate, request: Request, db: Session = Depends(get_db)):
+async def add_note(lead_id: str, note: NoteCreate, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """Add note to lead"""
     
     lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
@@ -2124,15 +2123,29 @@ async def add_note(lead_id: str, note: NoteCreate, request: Request, db: Session
     db.commit()
     db.refresh(db_note)
     
-    # Re-score lead
-    ai_scorer.load_course_prices(db)
-    score_result = ai_scorer.score_lead(lead, lead.notes)
-    for key, value in score_result.items():
-        setattr(lead, key, value)
-    
-    db.commit()
+    # Re-score lead in background (non-blocking) - improves response time
+    background_tasks.add_task(rescore_lead_async, lead_id, db)
     
     return db_note
+
+
+def rescore_lead_async(lead_id: str, db: Session):
+    """Background task to re-score a lead after note addition"""
+    try:
+        lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
+        if not lead:
+            return
+        
+        ai_scorer.load_course_prices(db)
+        score_result = ai_scorer.score_lead(lead, lead.notes)
+        for key, value in score_result.items():
+            setattr(lead, key, value)
+        
+        db.commit()
+        logger.info(f"✅ Lead {lead_id} re-scored in background")
+    except Exception as e:
+        logger.error(f"❌ Failed to re-score lead {lead_id}: {e}")
+        db.rollback()
 
 @app.get("/api/leads/{lead_id}/notes", response_model=List[NoteResponse])
 async def get_notes(lead_id: str, db: Session = Depends(get_db)):
