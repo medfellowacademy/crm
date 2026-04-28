@@ -27,19 +27,19 @@ const AdminDashboard = () => {
   // Fetch team performance
   const { data: teamPerformance = [] } = useQuery({
     queryKey: ['team-performance'],
-    queryFn: () => adminAPI.getTeamPerformance().then(res => res.data),
+    queryFn: () => adminAPI.getTeamPerformance().then(res => Array.isArray(res.data) ? res.data : []),
   });
 
   // Fetch funnel leakage analysis
   const { data: funnelLeakage = [] } = useQuery({
     queryKey: ['funnel-leakage'],
-    queryFn: () => adminAPI.getFunnelAnalysis().then(res => res.data),
+    queryFn: () => adminAPI.getFunnelAnalysis().then(res => Array.isArray(res.data) ? res.data : []),
   });
 
   // Fetch revenue trend
   const { data: revenueTrend = [] } = useQuery({
     queryKey: ['revenue-trend'],
-    queryFn: () => adminAPI.getRevenueTrend(30).then(res => res.data),
+    queryFn: () => adminAPI.getRevenueTrend(30).then(res => Array.isArray(res.data) ? res.data : []),
   });
 
   const statCards = [

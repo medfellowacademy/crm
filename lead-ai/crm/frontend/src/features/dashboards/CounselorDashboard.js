@@ -26,14 +26,19 @@ const CounselorDashboard = ({ user }) => {
   // Fetch today's follow-ups (using dashboardAPI which handles assigned_to param)
   const { data: followUps = [], isLoading: followUpsLoading } = useQuery({
     queryKey: ['today-followups', user.id],
-    queryFn: () => api.get('/api/leads/followups/today', { params: { assigned_to: user.id } }).then(res => res.data),
+    queryFn: () => api.get('/api/leads/followups/today', { params: { assigned_to: user.id } })
+      .then(res => Array.isArray(res.data) ? res.data : []),
   });
 
   // Fetch performance trend (last 7 days)
   const { data: performanceTrend = [] } = useQuery({
     queryKey: ['performance-trend', user.id],
-    queryFn: () => userStatsAPI.getPerformance(user.id, 7).then(res => res.data),
+    queryFn: () => userStatsAPI.getPerformance(user.id, 7)
+      .then(res => Array.isArray(res.data) ? res.data : []),
   });
+
+  // Ensure followUps is always an array
+  const safeFollowUps = Array.isArray(followUps) ? followUps : [];
 
   const statCards = [
     {
@@ -45,10 +50,10 @@ const CounselorDashboard = ({ user }) => {
     },
     {
       title: "Today's Follow-ups",
-      value: followUps.length,
+      value: safeFollowUps.length,
       icon: Clock,
       color: '#f59e0b',
-      urgent: followUps.filter(f => f.priority === 'high').length,
+      urgent: safeFollowUps.filter(f => f.priority === 'high').length,
     },
     {
       title: 'Conversion Rate',

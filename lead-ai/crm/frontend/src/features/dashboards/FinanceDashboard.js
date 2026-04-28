@@ -16,7 +16,7 @@ const FinanceDashboard = () => {
   // Fetch revenue trend
   const { data: revenueTrend = [] } = useQuery({
     queryKey: ['finance-revenue-trend'],
-    queryFn: () => adminAPI.getRevenueTrend(30).then(res => res.data),
+    queryFn: () => adminAPI.getRevenueTrend(30).then(res => Array.isArray(res.data) ? res.data : []),
   });
 
   // Fetch recent enrolled leads

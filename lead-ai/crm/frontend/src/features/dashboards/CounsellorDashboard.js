@@ -42,7 +42,8 @@ const CounsellorDashboard = ({ user }) => {
         },
       });
       if (!response.ok) throw new Error('Failed to fetch follow-ups');
-      return response.json();
+      const data = await response.json();
+      return Array.isArray(data) ? data : [];
     },
   });
 
@@ -56,9 +57,13 @@ const CounsellorDashboard = ({ user }) => {
         },
       });
       if (!response.ok) throw new Error('Failed to fetch performance');
-      return response.json();
+      const data = await response.json();
+      return Array.isArray(data) ? data : [];
     },
   });
+
+  // Ensure followUps is always an array
+  const safeFollowUps = Array.isArray(followUps) ? followUps : [];
 
   const statCards = [
     {
@@ -70,10 +75,10 @@ const CounsellorDashboard = ({ user }) => {
     },
     {
       title: "Today's Follow-ups",
-      value: followUps.length,
+      value: safeFollowUps.length,
       icon: Clock,
       color: '#f59e0b',
-      urgent: followUps.filter(f => f.priority === 'high').length,
+      urgent: safeFollowUps.filter(f => f.priority === 'high').length,
     },
     {
       title: 'Conversion Rate',
