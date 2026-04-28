@@ -2209,104 +2209,104 @@ async def get_lead_activities(lead_id: str, type: Optional[str] = None, db: Sess
 
         activities = []
 
-    # Channel → activity type mapping
-    CHANNEL_TYPE = {
-        "call": "call",
-        "whatsapp": "whatsapp",
-        "email": "email",
-        "manual": "note",
-        "note": "note",
-        "system": "status",
-    }
-    CHANNEL_TITLE = {
-        "call": "Call logged",
-        "whatsapp": "WhatsApp message",
-        "email": "Email sent",
-        "manual": "Note added",
-        "note": "Note added",
-        "system": "System update",
-    }
+        # Channel → activity type mapping
+        CHANNEL_TYPE = {
+            "call": "call",
+            "whatsapp": "whatsapp",
+            "email": "email",
+            "manual": "note",
+            "note": "note",
+            "system": "status",
+        }
+        CHANNEL_TITLE = {
+            "call": "Call logged",
+            "whatsapp": "WhatsApp message",
+            "email": "Email sent",
+            "manual": "Note added",
+            "note": "Note added",
+            "system": "System update",
+        }
 
-    # ── Notes (typed by channel) ─────────────────────────────────────────────
-    for note in lead.notes:
-        channel = (note.channel or "manual").lower()
-        act_type = CHANNEL_TYPE.get(channel, "note")
+        # ── Notes (typed by channel) ─────────────────────────────────────────────
+        for note in lead.notes:
+            channel = (note.channel or "manual").lower()
+            act_type = CHANNEL_TYPE.get(channel, "note")
 
-        # Detect status-change notes written by system
-        content_lower = (note.content or "").lower()
-        is_status_note = any(k in content_lower for k in ["status changed", "status updated", "marked as", "enrolled", "not interested"])
-        if is_status_note:
-            act_type = "status"
+            # Detect status-change notes written by system
+            content_lower = (note.content or "").lower()
+            is_status_note = any(k in content_lower for k in ["status changed", "status updated", "marked as", "enrolled", "not interested"])
+            if is_status_note:
+                act_type = "status"
 
-        # Detect call duration in content e.g. "Duration: 4m 32s"
-        duration = None
-        import re as _re
-        dur_match = _re.search(r"duration[:\s]+(\d+m?\s*\d*s?)", note.content or "", _re.I)
-        if dur_match:
-            duration = dur_match.group(1).strip()
+            # Detect call duration in content e.g. "Duration: 4m 32s"
+            duration = None
+            import re as _re
+            dur_match = _re.search(r"duration[:\s]+(\d+m?\s*\d*s?)", note.content or "", _re.I)
+            if dur_match:
+                duration = dur_match.group(1).strip()
 
-        activities.append({
-            "id": f"note-{note.id}",
-            "type": act_type,
-            "title": CHANNEL_TITLE.get(channel, "Note added"),
-            "content": note.content,
-            "timestamp": note.created_at.isoformat() if note.created_at else None,
-            "user": note.created_by or "System",
-            "channel": channel,
-            "duration": duration,
-            "direction": None,
-            "status": None,
-        })
+            activities.append({
+                "id": f"note-{note.id}",
+                "type": act_type,
+                "title": CHANNEL_TITLE.get(channel, "Note added"),
+                "content": note.content,
+                "timestamp": note.created_at.isoformat() if note.created_at else None,
+                "user": note.created_by or "System",
+                "channel": channel,
+                "duration": duration,
+                "direction": None,
+                "status": None,
+            })
 
-    # ── WhatsApp / chat messages ─────────────────────────────────────────────
-    chat_messages = db.query(DBChatMessage).filter(DBChatMessage.lead_db_id == lead.id).all()
-    for msg in chat_messages:
-        direction = getattr(msg, "direction", "outbound")
-        activities.append({
-            "id": f"chat-{msg.id}",
-            "type": "whatsapp",
-            "title": f"WhatsApp {'sent' if direction == 'outbound' else 'received'}",
-            "content": msg.content or f"[{getattr(msg, 'msg_type', 'message')}]",
-            "timestamp": msg.timestamp.isoformat() if msg.timestamp else None,
-            "user": getattr(msg, "sender_name", None) or "System",
-            "channel": "whatsapp",
-            "duration": None,
-            "direction": direction,
-            "status": getattr(msg, "status", None),
-        })
+        # ── WhatsApp / chat messages ─────────────────────────────────────────────
+        chat_messages = db.query(DBChatMessage).filter(DBChatMessage.lead_db_id == lead.id).all()
+        for msg in chat_messages:
+            direction = getattr(msg, "direction", "outbound")
+            activities.append({
+                "id": f"chat-{msg.id}",
+                "type": "whatsapp",
+                "title": f"WhatsApp {'sent' if direction == 'outbound' else 'received'}",
+                "content": msg.content or f"[{getattr(msg, 'msg_type', 'message')}]",
+                "timestamp": msg.timestamp.isoformat() if msg.timestamp else None,
+                "user": getattr(msg, "sender_name", None) or "System",
+                "channel": "whatsapp",
+                "duration": None,
+                "direction": direction,
+                "status": getattr(msg, "status", None),
+            })
 
-    # ── Synthetic lead-creation event ────────────────────────────────────────
-    if lead.created_at:
-        activities.append({
-            "id": "created",
-            "type": "created",
-            "title": "Lead created",
-            "content": f"{lead.full_name} added to CRM · Source: {lead.source or 'Unknown'}",
-            "timestamp": lead.created_at.isoformat(),
-            "user": lead.assigned_to or "System",
-            "channel": "system",
-            "duration": None,
-            "direction": None,
-            "status": None,
-        })
+        # ── Synthetic lead-creation event ────────────────────────────────────────
+        if lead.created_at:
+            activities.append({
+                "id": "created",
+                "type": "created",
+                "title": "Lead created",
+                "content": f"{lead.full_name} added to CRM · Source: {lead.source or 'Unknown'}",
+                "timestamp": lead.created_at.isoformat(),
+                "user": lead.assigned_to or "System",
+                "channel": "system",
+                "duration": None,
+                "direction": None,
+                "status": None,
+            })
 
-    # ── Synthetic status event (current status) ───────────────────────────────
-    if lead.updated_at and lead.updated_at != lead.created_at:
-        activities.append({
-            "id": "status-current",
-            "type": "status",
-            "title": f"Status: {lead.status}",
-            "content": f"Lead marked as {lead.status}",
-            "timestamp": lead.updated_at.isoformat(),
-            "user": lead.assigned_to or "System",
-            "channel": "system",
-            "duration": None,
-            "direction": None,
-            "status": lead.status,
-        })
+        # ── Synthetic status event (current status) ───────────────────────────────
+        if lead.updated_at and lead.updated_at != lead.created_at:
+            activities.append({
+                "id": "status-current",
+                "type": "status",
+                "title": f"Status: {lead.status}",
+                "content": f"Lead marked as {lead.status}",
+                "timestamp": lead.updated_at.isoformat(),
+                "user": lead.assigned_to or "System",
+                "channel": "system",
+                "duration": None,
+                "direction": None,
+                "status": lead.status,
+            })
 
-    # Sort newest-first
-    activities.sort(key=lambda x: x["timestamp"] or "", reverse=True)
+        # Sort newest-first
+        activities.sort(key=lambda x: x["timestamp"] or "", reverse=True)
 
         # Type filter
         if type and type != "all":
