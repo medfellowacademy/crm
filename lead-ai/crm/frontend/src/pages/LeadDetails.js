@@ -58,7 +58,7 @@ const LeadDetails = () => {
   const [isEditing, setIsEditing] = useState(false);
 
   // Fetch lead details
-  const { data: lead, isLoading } = useQuery({
+  const { data: lead, isLoading, refetch } = useQuery({
     queryKey: ['lead', leadId],
     queryFn: () => leadsAPI.getById(leadId).then(res => res.data)
   });
@@ -91,7 +91,9 @@ const LeadDetails = () => {
     onSuccess: () => {
       message.success('Lead updated successfully!');
       setIsEditing(false);
+      // Invalidate and refetch to ensure UI updates
       queryClient.invalidateQueries({ queryKey: ['lead', leadId] });
+      refetch();
     },
     onError: (error) => {
       message.error(`Failed to update lead: ${error.message}`);
@@ -124,7 +126,9 @@ const LeadDetails = () => {
     onSuccess: () => {
       message.success('Note added successfully!');
       noteForm.resetFields();
+      // Invalidate and refetch to ensure notes update
       queryClient.invalidateQueries({ queryKey: ['lead', leadId] });
+      refetch();
     },
     onError: (error) => {
       message.error(`Failed to add note: ${error.message}`);
