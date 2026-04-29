@@ -5137,35 +5137,38 @@ async def get_source_analytics():
             b["potential"] += lead.get('potential_revenue', 0) or 0
         
         result = []
-    for src, b in sorted(buckets.items(), key=lambda x: -x[1]["enrolled"]):
-        conv_rate = round((b["enrolled"] / b["total"]) * 100, 1) if b["total"] > 0 else 0.0
-        avg_rev = round(b["revenue"] / b["enrolled"], 0) if b["enrolled"] > 0 else 0.0
-        result.append({
-            "source": src,
-            "total_leads": b["total"],
-            "enrolled": b["enrolled"],
-            "hot_leads": b["hot"],
-            "conversion_rate": conv_rate,
-            "total_revenue": round(b["revenue"], 0),
-            "avg_revenue": avg_rev,
-            "total_potential": round(b["potential"], 0),
-            "roi_score": round(conv_rate * (avg_rev / 10000), 1) if avg_rev > 0 else 0.0,
-        })
+        for src, b in sorted(buckets.items(), key=lambda x: -x[1]["enrolled"]):
+            conv_rate = round((b["enrolled"] / b["total"]) * 100, 1) if b["total"] > 0 else 0.0
+            avg_rev = round(b["revenue"] / b["enrolled"], 0) if b["enrolled"] > 0 else 0.0
+            result.append({
+                "source": src,
+                "total_leads": b["total"],
+                "enrolled": b["enrolled"],
+                "hot_leads": b["hot"],
+                "conversion_rate": conv_rate,
+                "total_revenue": round(b["revenue"], 0),
+                "avg_revenue": avg_rev,
+                "total_potential": round(b["potential"], 0),
+                "roi_score": round(conv_rate * (avg_rev / 10000), 1) if avg_rev > 0 else 0.0,
+            })
 
-    # Overall summary
-    total_leads = sum(b["total"] for b in buckets.values())
-    total_enrolled = sum(b["enrolled"] for b in buckets.values())
-    total_revenue = sum(b["revenue"] for b in buckets.values())
+        # Overall summary
+        total_leads = sum(b["total"] for b in buckets.values())
+        total_enrolled = sum(b["enrolled"] for b in buckets.values())
+        total_revenue = sum(b["revenue"] for b in buckets.values())
 
-    return {
-        "sources": result,
-        "summary": {
-            "total_leads": total_leads,
-            "total_enrolled": total_enrolled,
-            "overall_conversion_rate": round((total_enrolled / total_leads) * 100, 1) if total_leads > 0 else 0.0,
-            "total_revenue": round(total_revenue, 0),
-        },
-    }
+        return {
+            "sources": result,
+            "summary": {
+                "total_leads": total_leads,
+                "total_enrolled": total_enrolled,
+                "overall_conversion_rate": round((total_enrolled / total_leads) * 100, 1) if total_leads > 0 else 0.0,
+                "total_revenue": round(total_revenue, 0),
+            },
+        }
+    except Exception as e:
+        logger.error(f"Source analytics error: {e}")
+        return {"sources": [], "summary": {}}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -5417,28 +5420,6 @@ async def get_decay_log(
     
     # Simplified - return empty for now
     return {"logs": [], "count": 0}
-        .all()
-    )
-    total = db.query(DBDecayLog).count()
-    return {
-        "total": total,
-        "events": [
-            {
-                "id":                   r.id,
-                "lead_id":              r.lead_id,
-                "lead_name":            r.lead_name,
-                "assigned_to":          r.assigned_to,
-                "old_status":           r.old_status,
-                "new_status":           r.new_status,
-                "old_score":            r.old_score,
-                "new_score":            r.new_score,
-                "hours_since_contact":  r.hours_since_contact,
-                "reason":               r.reason,
-                "created_at":           r.created_at.isoformat(),
-            }
-            for r in rows
-        ],
-    }
 
 
 @app.get("/api/admin/decay-preview")
@@ -5449,74 +5430,6 @@ async def get_decay_preview(
     Dry-run: return leads that WOULD be affected on the next decay cycle - SUPABASE ONLY (Stub)
     """
     return {"preview": [], "count": 0}
-    results = []
-
-    candidates = (
-        db.query(DBLead)
-        .filter(
-            DBLead.status.notin_([
-                LeadStatus.ENROLLED, LeadStatus.NOT_INTERESTED, LeadStatus.JUNK
-            ]),
-        )
-        .all()
-    )
-
-    for lead in candidates:
-        ref_dt = lead.last_contact_date or lead.created_at
-        if not ref_dt:
-            continue
-        hours_silent = (now - ref_dt).total_seconds() / 3600
-        days_silent  = hours_silent / 24
-        old_status   = _status_str(lead.status)
-        old_score    = lead.ai_score or 0.0
-
-        pending = []
-
-        if old_status in ("Hot", "hot") and hours_silent >= cfg.hot_to_warm_hours:
-            pending.append({
-                "type": "status", "from": old_status, "to": "Warm",
-                "reason": "hot_to_warm",
-            })
-        elif old_status in ("Warm", "warm") and hours_silent >= cfg.warm_to_stale_hours:
-            pending.append({
-                "type": "status", "from": old_status, "to": "Follow Up",
-                "reason": "warm_to_stale",
-            })
-
-        if cfg.apply_score_decay and days_silent >= 1:
-            safe_decay_per_day = max(0.0, min(float(cfg.score_decay_per_day or 3.0), 100.0))
-            decay_amount = safe_decay_per_day * min(days_silent, 30)
-            new_score = max(0.0, min(100.0, old_score - decay_amount))
-            if abs(new_score - old_score) >= 0.5:
-                pending.append({
-                    "type": "score",
-                    "from": round(old_score, 1),
-                    "to":   round(new_score, 1),
-                    "reason": "score_decay",
-                })
-
-        if pending:
-            results.append({
-                "lead_id":              lead.lead_id,
-                "full_name":            lead.full_name,
-                "assigned_to":          lead.assigned_to,
-                "status":               old_status,
-                "ai_score":             round(old_score, 1),
-                "hours_since_contact":  round(hours_silent, 1),
-                "last_contact_date":    lead.last_contact_date.isoformat() if lead.last_contact_date else None,
-                "pending_changes":      pending,
-            })
-
-    # Sort by urgency: status changes first, then longest silent
-    results.sort(key=lambda x: (
-        -int(any(p["type"] == "status" for p in x["pending_changes"])),
-        -x["hours_since_contact"]
-    ))
-    return {"count": len(results), "leads": results, "config": {
-        "hot_to_warm_hours":   cfg.hot_to_warm_hours,
-        "warm_to_stale_hours": cfg.warm_to_stale_hours,
-        "score_decay_per_day": cfg.score_decay_per_day,
-    }}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -5657,23 +5570,39 @@ _BUILTIN_TEMPLATES = [
 ]
 
 
-def _seed_wa_templates(db: Session):
-    """Insert built-in templates once if the table is empty."""
-    if db.query(DBWATemplate).count() > 0:
+def _seed_wa_templates():
+    """Insert built-in templates once if the table is empty - SUPABASE ONLY"""
+    if not supabase_data.client:
         return
+    
+    # Check if templates exist
+    try:
+        response = supabase_data.client.table('whatsapp_templates').select('id').limit(1).execute()
+        if response.data and len(response.data) > 0:
+            return
+    except:
+        return
+    
+    # Insert built-in templates
+    import json
     for t in _BUILTIN_TEMPLATES:
-        import json
-        db.add(DBWATemplate(
-            name=t["name"],
-            category=t["category"],
-            emoji=t.get("emoji", "💬"),
-            description=t.get("description", ""),
-            body=t["body"],
-            variables=json.dumps(t.get("variables", [])),
-            is_builtin=t.get("is_builtin", False),
-            created_by="System",
-        })
-        supabase_data.client.table('wa_templates').insert(template_data).execute()
+        template_data = {
+            'name': t["name"],
+            'category': t["category"],
+            'emoji': t.get("emoji", "💬"),
+            'description': t.get("description", ""),
+            'body': t["body"],
+            'variables': json.dumps(t.get("variables", [])),
+            'is_builtin': t.get("is_builtin", False),
+            'created_by': "System",
+            'is_active': True
+        }
+        try:
+            supabase_data.client.table('whatsapp_templates').insert(template_data).execute()
+        except:
+            pass  # Template may already exist
+
+
 
 
 # Seed on startup
@@ -5747,16 +5676,21 @@ async def create_wa_template(
         "name": payload.get("name", "Untitled"),
         "category": payload.get("category", "custom"),
         "emoji": payload.get("emoji", "💬"),
-        description=payload.get("description", ""),
-        body=body_text,
-        variables=json.dumps(list(dict.fromkeys(variables))),  # deduplicate, preserve order
-        is_builtin=False,
-        created_by=current_user.get("full_name", "Unknown"),
-    )
-    db.add(t)
-    db.commit()
-    db.refresh(t)
-    return {"id": t.id, "message": "Template created", "name": t.name}
+        "description": payload.get("description", ""),
+        "body": body_text,
+        "variables": json.dumps(list(dict.fromkeys(variables))),  # deduplicate, preserve order
+        "is_builtin": False,
+        "created_by": current_user.get("full_name", "Unknown"),
+        "is_active": True
+    }
+    
+    # Insert into Supabase
+    response = supabase_data.client.table('whatsapp_templates').insert(template_data).execute()
+    if not response.data:
+        raise HTTPException(status_code=500, detail="Failed to create template")
+    
+    created = response.data[0]
+    return {"id": created["id"], "message": "Template created", "name": created["name"]}
 
 
 @app.put("/api/wa-templates/{template_id}")
@@ -5942,69 +5876,6 @@ async def check_duplicates(
     
     # Simplified implementation
     return {"duplicates": [], "match_count": 0}
-    """
-    phone     = payload.get("phone", "") or ""
-    email     = (payload.get("email", "") or "").strip().lower()
-    full_name = (payload.get("full_name", "") or "").strip()
-    country   = (payload.get("country", "") or "").strip()
-
-    norm_phone = _normalise_phone(phone)
-
-    if supabase_data.client:
-        try:
-            rows = supabase_data.client.table("leads").select("*").limit(5000).execute()
-            leads = rows.data or []
-        except Exception:
-            leads = [_lead_row(l) for l in db.query(DBLead).all()]
-    else:
-        leads = [_lead_row(l) for l in db.query(DBLead).all()]
-
-    results = []
-    seen_ids = set()
-
-    for lead in leads:
-        lid = lead.get("lead_id") or str(lead.get("id", ""))
-        if lid in seen_ids:
-            continue
-
-        match_types = []
-
-        # exact phone
-        existing_phone = _normalise_phone(lead.get("phone", "") or "")
-        if norm_phone and existing_phone and norm_phone == existing_phone:
-            match_types.append("exact_phone")
-
-        # exact email
-        existing_email = (lead.get("email", "") or "").strip().lower()
-        if email and existing_email and email == existing_email:
-            match_types.append("exact_email")
-
-        # fuzzy name + same country
-        if full_name and _name_overlap(full_name, lead.get("full_name", "") or "") >= 0.7:
-            if not country or not lead.get("country") or country.lower() == (lead.get("country") or "").lower():
-                if "exact_phone" not in match_types and "exact_email" not in match_types:
-                    match_types.append("fuzzy_name")
-
-        if match_types:
-            seen_ids.add(lid)
-            results.append({
-                "lead_id":          lead.get("lead_id"),
-                "full_name":        lead.get("full_name"),
-                "phone":            lead.get("phone"),
-                "email":            lead.get("email"),
-                "country":          lead.get("country"),
-                "source":           lead.get("source"),
-                "course_interested": lead.get("course_interested"),
-                "status":           lead.get("status"),
-                "ai_score":         lead.get("ai_score"),
-                "ai_segment":       lead.get("ai_segment"),
-                "whatsapp":         lead.get("whatsapp"),
-                "assigned_to":      lead.get("assigned_to"),
-                "created_at":       str(lead.get("created_at", "")),
-                "match_types":      match_types,
-            })
-
-    return {"duplicates": results, "count": len(results)}
 
 
 def _lead_row(db_lead) -> dict:
