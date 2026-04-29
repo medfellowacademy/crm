@@ -2146,30 +2146,33 @@ async def get_lead_activities(lead_id: str, type: Optional[str] = None):
 
 
 @app.get("/api/leads/{lead_id}/ai-summary")
-async def get_lead_ai_summary(lead_id: str, db: Session = Depends(get_db)):
-    """Get AI-generated summary and insights for a lead"""
+async def get_lead_ai_summary(lead_id: str):
+    """Get AI-generated summary and insights for a lead - SUPABASE ONLY"""
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    
     try:
-        lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
-        if not lead:
-            # Try Supabase if not in SQLite
-            if supabase_data.client:
-                lead_data = supabase_data.get_lead_by_id(lead_id)
-                if not lead_data:
-                    raise HTTPException(status_code=404, detail="Lead not found")
-                # Build basic summary from Supabase data
-                return {
-                    "lead_id": lead_data.get("lead_id"),
-                    "summary": f"{lead_data.get('full_name', 'Lead')} is interested in {lead_data.get('course_interested', 'courses')}.",
-                    "key_insights": [
-                        f"AI Score: {lead_data.get('ai_score', 0)}/100",
-                        f"Status: {lead_data.get('status', 'Unknown')}"
-                    ],
-                    "recommendations": ["Follow up with the lead"],
-                    "next_best_action": "Schedule follow-up call",
-                    "urgency": "Medium",
-                    "sentiment": "neutral"
-                }
+        lead_data = supabase_data.get_lead_by_id(lead_id)
+        if not lead_data:
             raise HTTPException(status_code=404, detail="Lead not found")
+        
+        # Build AI summary from Supabase data
+        ai_score = lead_data.get('ai_score', 0) or 0
+        conv_prob = lead_data.get('conversion_probability', 0) or 0
+        
+        return {
+            "lead_id": lead_data.get("lead_id"),
+            "summary": f"{lead_data.get('full_name', 'Lead')} is interested in {lead_data.get('course_interested', 'courses')}. Currently in {lead_data.get('status', 'Unknown')} status.",
+            "key_insights": [
+                f"AI Score: {ai_score}/100 - {lead_data.get('ai_segment', 'Unknown')} segment",
+                f"Conversion Probability: {int(conv_prob * 100)}%",
+                f"Expected Revenue: ${lead_data.get('expected_revenue', 0)}"
+            ],
+            "recommendations": [lead_data.get('ai_recommendation', 'Follow up with the lead')],
+            "next_best_action": "Schedule follow-up call" if lead_data.get('status') == 'Fresh' else "Continue nurturing",
+            "urgency": "High" if ai_score > 70 else "Medium" if ai_score > 40 else "Low",
+            "sentiment": "positive" if ai_score > 60 else "neutral"
+        }
 
         # Generate basic summary from lead data
         summary = {
@@ -2807,52 +2810,53 @@ async def conversion_funnel(db: Session = Depends(get_db)):
 @app.post("/api/leads/{lead_id}/send-whatsapp")
 async def send_whatsapp(
     lead_id: str,
-    request: WhatsAppRequest,
-    db: Session = Depends(get_db)
+    request: WhatsAppRequest
 ):
-    """Send WhatsApp message via Twilio"""
+    """Send WhatsApp message via Twilio - SUPABASE ONLY"""
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
     
-    lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
+    lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     
-    if not lead.whatsapp:
+    if not lead.get('whatsapp'):
         raise HTTPException(status_code=400, detail="Lead has no WhatsApp number")
     
     # Send WhatsApp message
     from communication_service import comm_service
     
     variables = {
-        "name": lead.full_name or "there",
-        "course": lead.course_interested or "our courses",
-        "counselor": lead.assigned_to or "Your counselor",
+        "name": lead.get('full_name') or "there",
+        "course": lead.get('course_interested') or "our courses",
+        "counselor": lead.get('assigned_to') or "Your counselor",
         "message": request.message
     }
     
     result = await comm_service.send(
         channel="whatsapp",
-        to=lead.whatsapp,
+        to=lead['whatsapp'],
         message=request.message,
         template=request.template,
         variables=variables
     )
     
     # Log in database
-    note = DBNote(
-        lead_id=lead.id,
-        content=f"[WhatsApp {'Sent' if result['success'] else 'Failed'}] {request.message}",
-        channel="whatsapp",
-        created_by="System",
-    )
-    db.add(note)
-    db.commit()
+    lead_internal_id = lead.get('id')
+    if lead_internal_id:
+        supabase_data.create_note(
+            lead_id=lead_internal_id,
+            content=f"[WhatsApp {'Sent' if result['success'] else 'Failed'}] {request.message}",
+            channel="whatsapp",
+            created_by="System"
+        )
     
     if result["success"]:
         return {
             "success": True,
             "message": "WhatsApp sent successfully",
             "message_id": result.get("message_id"),
-            "to": lead.whatsapp
+            "to": lead['whatsapp']
         }
     else:
         raise HTTPException(status_code=500, detail=result.get("error", "Failed to send WhatsApp"))
@@ -2860,60 +2864,98 @@ async def send_whatsapp(
 @app.post("/api/leads/{lead_id}/send-email")
 async def send_email(
     lead_id: str,
-    request: EmailRequest,
-    db: Session = Depends(get_db)
+    request: EmailRequest
 ):
-    """Send email via Resend"""
+    """Send email via Resend - SUPABASE ONLY"""
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
     
-    lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
+    lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     
-    if not lead.email:
+    if not lead.get('email'):
         raise HTTPException(status_code=400, detail="Lead has no email address")
     
     # Send email
     from communication_service import comm_service
     
     variables = {
-        "name": lead.full_name or "there",
-        "course": lead.course_interested or "our courses",
-        "counselor": lead.assigned_to or "Your counselor",
+        "name": lead.get('full_name') or "there",
+        "course": lead.get('course_interested') or "our courses",
+        "counselor": lead.get('assigned_to') or "Your counselor",
         "subject": request.subject,
         "body": request.body
     }
     
     result = await comm_service.send(
         channel="email",
-        to=lead.email,
+        to=lead['email'],
         message=request.body,
         template=request.template,
         variables=variables
     )
     
     # Log in database
-    note = DBNote(
-        lead_id=lead.id,
-        content=f"[Email {'Sent' if result['success'] else 'Failed'}] Subject: {request.subject}\n\n{request.body}",
-        channel="email",
-        created_by="System",
-    )
-    db.add(note)
-    db.commit()
+    lead_internal_id = lead.get('id')
+    if lead_internal_id:
+        supabase_data.create_note(
+            lead_id=lead_internal_id,
+            content=f"[Email {'Sent' if result['success'] else 'Failed'}] Subject: {request.subject}\n\n{request.body}",
+            channel="email",
+            created_by="System"
+        )
     
     if result["success"]:
         return {
             "success": True,
             "message": "Email sent successfully",
             "message_id": result.get("message_id"),
-            "to": lead.email
+            "to": lead['email']
         }
     else:
         raise HTTPException(status_code=500, detail=result.get("error", "Failed to send email"))
 
 @app.post("/api/leads/{lead_id}/trigger-welcome")
-async def trigger_welcome(lead_id: str, db: Session = Depends(get_db)):
-    """Trigger automated welcome sequence (Email + WhatsApp)"""
+async def trigger_welcome(lead_id: str):
+    """Trigger automated welcome sequence (Email + WhatsApp) - SUPABASE ONLY"""
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    
+    lead = supabase_data.get_lead_by_id(lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    
+    from communication_service import comm_service
+    results = []
+    
+    # Send welcome email
+    if lead.get('email'):
+        result = await comm_service.send(
+            channel="email",
+            to=lead['email'],
+            message="Welcome message",
+            template="welcome_email",
+            variables={"name": lead.get('full_name', 'there')}
+        )
+        results.append({"channel": "email", "success": result['success']})
+    
+    # Send welcome WhatsApp
+    if lead.get('whatsapp'):
+        result = await comm_service.send(
+            channel="whatsapp",
+            to=lead['whatsapp'],
+            message="Welcome message",
+            template="welcome_whatsapp",
+            variables={"name": lead.get('full_name', 'there')}
+        )
+        results.append({"channel": "whatsapp", "success": result['success']})
+    
+    return {
+        "success": True,
+        "message": "Welcome sequence triggered",
+        "results": results
+    }
     
     lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
     if not lead:
@@ -3016,108 +3058,197 @@ async def trigger_followup(
 @app.post("/api/leads/{lead_id}/assign")
 async def assign_lead(
     lead_id: str,
-    request: AssignmentRequest,
-    db: Session = Depends(get_db)
+    request: AssignmentRequest
 ):
     """
-    Assign lead to counselor using specified strategy
+    Assign lead to counselor - SUPABASE ONLY (Simplified)
     
-    Strategies:
-    - intelligent: AI-based matching (recommended)
-    - round_robin: Rotate assignments evenly
-    - skill_based: Match course expertise
-    - workload: Assign to least busy counselor
+    Note: Advanced assignment strategies require conversion of assignment_service
+    Currently implements basic assignment to specified counselor
     """
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
     
-    from assignment_service import LeadAssignmentEngine
-    
-    # Get lead by lead_id
-    lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
+    # Get lead
+    lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     
-    engine = LeadAssignmentEngine(db)
-    result = engine.assign_lead(lead.id, request.strategy)
+    # Get counselor from request (simplified - no complex assignment logic)
+    if not hasattr(request, 'counselor_name') or not request.counselor_name:
+        # Default to first available counselor
+        users = supabase_data.get_all_users()
+        counselors = [u for u in users if u.get('role') in ['Counselor', 'Team Leader', 'Manager'] and u.get('is_active')]
+        if not counselors:
+            raise HTTPException(status_code=400, detail="No available counselors")
+        counselor_name = counselors[0]['full_name']
+    else:
+        counselor_name = request.counselor_name
     
-    if not result["success"]:
-        raise HTTPException(status_code=400, detail=result["error"])
+    # Update lead
+    updated = supabase_data.update_lead(lead_id, {'assigned_to': counselor_name})
+    if not updated:
+        raise HTTPException(status_code=500, detail="Failed to assign lead")
     
-    return result
+    return {
+        "success": True,
+        "message": f"Lead assigned to {counselor_name}",
+        "assigned_to": counselor_name
+    }
 
 @app.post("/api/leads/assign-all")
 async def assign_all_unassigned(
-    request: AssignmentRequest,
-    db: Session = Depends(get_db)
+    request: AssignmentRequest
 ):
-    """Assign all unassigned leads in bulk"""
+    """Assign all unassigned leads in bulk - SUPABASE ONLY"""
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
     
-    from assignment_service import LeadAssignmentEngine
+    # Get unassigned leads
+    response = supabase_data.client.table('leads').select('lead_id').is_('assigned_to', 'null').execute()
+    unassigned = response.data if response.data else []
     
-    engine = LeadAssignmentEngine(db)
-    results = engine.bulk_assign_unassigned(request.strategy)
+    if not unassigned:
+        return {"success": True, "message": "No unassigned leads", "assigned_count": 0}
     
-    return results
+    # Get counselors
+    users = supabase_data.get_all_users()
+    counselors = [u['full_name'] for u in users if u.get('role') in ['Counselor', 'Team Leader'] and u.get('is_active')]
+    
+    if not counselors:
+        raise HTTPException(status_code=400, detail="No available counselors")
+    
+    # Simple round-robin assignment
+    assigned_count = 0
+    for idx, lead in enumerate(unassigned):
+        counselor = counselors[idx % len(counselors)]
+        supabase_data.update_lead(lead['lead_id'], {'assigned_to': counselor})
+        assigned_count += 1
+    
+    return {
+        "success": True,
+        "message": f"Assigned {assigned_count} leads",
+        "assigned_count": assigned_count
+    }
 
 @app.post("/api/leads/{lead_id}/reassign")
 async def reassign_lead(
     lead_id: str,
-    request: ReassignmentRequest,
-    db: Session = Depends(get_db)
+    request: ReassignmentRequest
 ):
-    """Reassign lead to different counselor"""
+    """Reassign lead to different counselor - SUPABASE ONLY"""
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
     
-    from assignment_service import LeadAssignmentEngine
-    
-    # Get lead by lead_id
-    lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
+    # Get lead
+    lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     
-    engine = LeadAssignmentEngine(db)
-    result = engine.reassign_lead(lead.id, request.new_counselor, request.reason)
+    # Update assignment
+    updated = supabase_data.update_lead(lead_id, {'assigned_to': request.new_counselor})
+    if not updated:
+        raise HTTPException(status_code=500, detail="Failed to reassign lead")
     
-    if not result["success"]:
-        raise HTTPException(status_code=400, detail=result["error"])
+    # Create activity log
+    lead_internal_id = lead.get('id')
+    if lead_internal_id:
+        supabase_data.create_activity(
+            lead_id=lead_internal_id,
+            activity_type='reassignment',
+            description=f"Lead reassigned to {request.new_counselor}. Reason: {request.reason}",
+            created_by="System"
+        )
     
-    return result
+    return {
+        "success": True,
+        "message": f"Lead reassigned to {request.new_counselor}",
+        "new_counselor": request.new_counselor
+    }
 
 @app.get("/api/counselors/workload")
 @cache_async_result(STATS_CACHE, "counselor_workload")
-async def get_counselor_workloads(db: Session = Depends(get_db)):
-    """Get workload statistics for all counselors (cached for 1 minute)"""
+async def get_counselor_workloads():
+    """Get workload statistics for all counselors (cached for 1 minute) - SUPABASE ONLY"""
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
     
-    from assignment_service import LeadAssignmentEngine
-    
-    counselors = db.query(DBUser).filter(
-        DBUser.role.in_(["Counselor", "Manager", "Team Leader"])
-    ).all()
-    
-    engine = LeadAssignmentEngine(db)
-    
-    workloads = []
-    for counselor in counselors:
-        workload = engine._get_counselor_workload(counselor.full_name)
-        performance = engine._get_counselor_performance(counselor.full_name)
+    try:
+        # Get counselors
+        users = supabase_data.get_all_users()
+        counselors = [u for u in users if u.get('role') in ['Counselor', 'Manager', 'Team Leader'] and u.get('is_active')]
         
-        workloads.append({
-            "full_name": counselor.full_name,
-            "email": counselor.email,
-            "role": counselor.role,
-            "active_leads": workload,
-            "performance_score": round(performance, 1),
-            "status": "overloaded" if workload > 30 else "busy" if workload > 20 else "available"
-        })
-    
-    return {
-        "counselors": workloads,
-        "total_counselors": len(workloads),
-        "total_active_leads": sum(c["active_leads"] for c in workloads),
-        "average_workload": round(sum(c["active_leads"] for c in workloads) / len(workloads), 1) if workloads else 0
-    }
+        # Get all leads
+        all_leads = supabase_data.client.table('leads').select('assigned_to,status,ai_score').execute()
+        leads_data = all_leads.data if all_leads.data else []
+        
+        workloads = []
+        for counselor in counselors:
+            counselor_name = counselor['full_name']
+            # Count active leads (not Junk or Lost)
+            active_leads = [l for l in leads_data if l.get('assigned_to') == counselor_name and l.get('status') not in ['Junk', 'Lost']]
+            active_count = len(active_leads)
+            
+            # Calculate performance score (avg AI score of their leads)
+            avg_score = sum(l.get('ai_score', 0) or 0 for l in active_leads) / len(active_leads) if active_leads else 0
+            
+            workloads.append({
+                "full_name": counselor_name,
+                "email": counselor.get('email'),
+                "role": counselor.get('role'),
+                "active_leads": active_count,
+                "performance_score": round(avg_score, 1),
+                "status": "overloaded" if active_count > 30 else "busy" if active_count > 20 else "available"
+            })
+        
+        return {
+            "counselors": workloads,
+            "total_counselors": len(workloads),
+            "total_active_leads": sum(c["active_leads"] for c in workloads),
+            "average_workload": round(sum(c["active_leads"] for c in workloads) / len(workloads), 1) if workloads else 0
+        }
+    except Exception as e:
+        logger.error(f"Error getting counselor workloads: {e}")
+        return {"counselors": [], "total_counselors": 0, "total_active_leads": 0, "average_workload": 0}
 
 @app.post("/api/workflows/trigger")
-async def trigger_workflows(db: Session = Depends(get_db)):
-    """Manually trigger automated workflows for all leads"""
+async def trigger_workflows():
+    """Manually trigger automated workflows for all leads - SUPABASE ONLY"""
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    
+    try:
+        # Get all leads
+        response = supabase_data.client.table('leads').select('lead_id,status,follow_up_date').execute()
+        all_leads = response.data if response.data else []
+        
+        triggered_count = 0
+        from datetime import datetime
+        now = datetime.utcnow()
+        
+        # Simple workflow: check for overdue follow-ups
+        for lead in all_leads:
+            if lead.get('status') in ['Fresh', 'In Progress', 'Follow Up']:
+                follow_up_date = lead.get('follow_up_date')
+                if follow_up_date:
+                    try:
+                        follow_up_dt = datetime.fromisoformat(follow_up_date.replace('Z', '+00:00'))
+                        if follow_up_dt < now:
+                            # Mark as needing attention
+                            supabase_data.update_lead(lead['lead_id'], {'status': 'Follow Up'})
+                            triggered_count += 1
+                    except:
+                        pass
+        
+        return {
+            "success": True,
+            "message": f"Processed {len(all_leads)} leads, triggered {triggered_count} workflow actions",
+            "processed": len(all_leads),
+            "triggered": triggered_count
+        }
+    except Exception as e:
+        logger.error(f"Workflow trigger failed: {e}")
+        raise HTTPException(status_code=500, detail="Workflow trigger failed")
     
     from assignment_service import WorkflowAutomation
     
