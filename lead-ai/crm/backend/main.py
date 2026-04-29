@@ -3773,162 +3773,162 @@ async def metrics():
 
 # ==================== COMMUNICATION INTEGRATIONS ====================
 # WhatsApp, Email, and Call APIs with ML Training Data Collection
+# TEMPORARILY DISABLED - communication_integrations.py needs Supabase migration
+# from communication_integrations import (
+#     communication_service,
+#     CommunicationHistory
+# )
 
-from communication_integrations import (
-    communication_service,
-    CommunicationHistory
-)
-
-@app.post("/api/communications/whatsapp/send")
-async def send_whatsapp_message(
-    data: Dict[str, Any]
-):
-    """Send WhatsApp message to lead - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
-    
-    try:
-        result = communication_service.whatsapp.send_message(
-            to_number=data['to'],
-            message=data['message'],
-            lead_id=data['lead_id'],
-            sender=data['sender']
-        )
-        return result
-    except Exception as e:
-        logger.error(f"WhatsApp send error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/communications/whatsapp/webhook")
-async def whatsapp_webhook(
-    data: Dict[str, Any]
-):
-    """Webhook endpoint for incoming WhatsApp messages - SUPABASE ONLY"""
-    try:
-        result = communication_service.whatsapp.receive_webhook(data)
-        return result
-    except Exception as e:
-        logger.error(f"WhatsApp webhook error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/communications/email/send")
-async def send_email(
-    data: Dict[str, Any]
-):
-    """Send email to lead - SUPABASE ONLY"""
-    try:
-        result = communication_service.email.send_email(
-            to_email=data['to'],
-            subject=data.get('subject', 'Message from Medical CRM'),
-            body=data['message'],
-            lead_id=data['lead_id'],
-            sender=data['sender'],
-            db=db,
-            html=data.get('html', False)
-        )
-        return result
-    except Exception as e:
-        logger.error(f"Email send error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/communications/call/initiate")
-async def initiate_call(
-    data: Dict[str, Any]
-):
-    """Initiate voice call with recording - SUPABASE ONLY"""
-    try:
-        callback_url = os.getenv('TWILIO_CALLBACK_URL', 'http://localhost:8000/api/communications/call')
-        result = communication_service.calls.initiate_call(
-            to_number=data['to_number'],
-            lead_id=data['lead_id'],
-            counselor=data['counselor'],
-            db=db,
-            callback_url=callback_url
-        )
-        return result
-    except Exception as e:
-        logger.error(f"Call initiation error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/communications/call/recording-complete")
-async def call_recording_complete(
-    data: Dict[str, Any]
-):
-    """Webhook for call recording completion - SUPABASE ONLY"""
-    try:
-        call_sid = data.get('CallSid')
-        call_status = data.get('CallStatus')
-        call_duration = int(data.get('CallDuration', 0))
-        recording_url = data.get('RecordingUrl')
-        
-        communication_service.calls.update_call_status(
-            call_sid=call_sid,
-            status=call_status,
-            duration=call_duration,
-            recording_url=recording_url,
-            db=db
-        )
-        
-        return {"success": True}
-    except Exception as e:
-        logger.error(f"Recording webhook error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/communications/{lead_id}/history")
-async def get_communication_history(
-    lead_id: str,
-    type: Optional[str] = Query(None)
-):
-    """Get all communication history for a lead - SUPABASE ONLY"""
-    try:
-        history = communication_service.get_conversation_history(
-            lead_id=lead_id,
-            communication_type=type
-        )
-        return history
-    except Exception as e:
-        logger.error(f"Communication history error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/communications/training-data")
-async def get_training_data(
-    type: Optional[str] = Query(None),
-    limit: int = Query(1000)
-):
-    """Get communication data for ML model training - SUPABASE ONLY"""
-    try:
-        training_data = communication_service.get_training_data(
-            communication_type=type,
-            limit=limit
-        )
-        return {
-            "total_records": len(training_data),
-            "data": training_data
-        }
-    except Exception as e:
-        logger.error(f"Training data error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/communications/mark-training")
-async def mark_as_training_data(
-    data: Dict[str, List[int]]
-):
-    """Mark specific communications as used for training - SUPABASE ONLY"""
-    try:
-        communication_service.mark_as_training_data(
-            communication_ids=data['ids']
-        )
-        return {"success": True, "marked_count": len(data['ids'])}
-    except Exception as e:
-        logger.error(f"Mark training error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+# @app.post("/api/communications/whatsapp/send")
+# async def send_whatsapp_message(
+#     data: Dict[str, Any]
+# ):
+#     """Send WhatsApp message to lead - SUPABASE ONLY"""
+#     if not supabase_data.client:
+#         raise HTTPException(status_code=500, detail="Database not configured")
+#     
+#     try:
+#         result = communication_service.whatsapp.send_message(
+#             to_number=data['to'],
+#             message=data['message'],
+#             lead_id=data['lead_id'],
+#             sender=data['sender']
+#         )
+#         return result
+#     except Exception as e:
+#         logger.error(f"WhatsApp send error: {e}")
+#         raise HTTPException(status_code=500, detail=str(e))
+# 
+# 
+# @app.post("/api/communications/whatsapp/webhook")
+# async def whatsapp_webhook(
+#     data: Dict[str, Any]
+# ):
+#     """Webhook endpoint for incoming WhatsApp messages - SUPABASE ONLY"""
+#     try:
+#         result = communication_service.whatsapp.receive_webhook(data)
+#         return result
+#     except Exception as e:
+#         logger.error(f"WhatsApp webhook error: {e}")
+#         raise HTTPException(status_code=500, detail=str(e))
+# 
+# 
+# @app.post("/api/communications/email/send")
+# async def send_email(
+#     data: Dict[str, Any]
+# ):
+#     """Send email to lead - SUPABASE ONLY"""
+#     try:
+#         result = communication_service.email.send_email(
+#             to_email=data['to'],
+#             subject=data.get('subject', 'Message from Medical CRM'),
+#             body=data['message'],
+#             lead_id=data['lead_id'],
+#             sender=data['sender'],
+#             db=db,
+#             html=data.get('html', False)
+#         )
+#         return result
+#     except Exception as e:
+#         logger.error(f"Email send error: {e}")
+#         raise HTTPException(status_code=500, detail=str(e))
+# 
+# 
+# @app.post("/api/communications/call/initiate")
+# async def initiate_call(
+#     data: Dict[str, Any]
+# ):
+#     """Initiate voice call with recording - SUPABASE ONLY"""
+#     try:
+#         callback_url = os.getenv('TWILIO_CALLBACK_URL', 'http://localhost:8000/api/communications/call')
+#         result = communication_service.calls.initiate_call(
+#             to_number=data['to_number'],
+#             lead_id=data['lead_id'],
+#             counselor=data['counselor'],
+#             db=db,
+#             callback_url=callback_url
+#         )
+#         return result
+#     except Exception as e:
+#         logger.error(f"Call initiation error: {e}")
+#         raise HTTPException(status_code=500, detail=str(e))
+# 
+# 
+# @app.post("/api/communications/call/recording-complete")
+# async def call_recording_complete(
+#     data: Dict[str, Any]
+# ):
+#     """Webhook for call recording completion - SUPABASE ONLY"""
+#     try:
+#         call_sid = data.get('CallSid')
+#         call_status = data.get('CallStatus')
+#         call_duration = int(data.get('CallDuration', 0))
+#         recording_url = data.get('RecordingUrl')
+#         
+#         communication_service.calls.update_call_status(
+#             call_sid=call_sid,
+#             status=call_status,
+#             duration=call_duration,
+#             recording_url=recording_url,
+#             db=db
+#         )
+#         
+#         return {"success": True}
+#     except Exception as e:
+#         logger.error(f"Recording webhook error: {e}")
+#         raise HTTPException(status_code=500, detail=str(e))
+# 
+# 
+# @app.get("/api/communications/{lead_id}/history")
+# async def get_communication_history(
+#     lead_id: str,
+#     type: Optional[str] = Query(None)
+# ):
+#     """Get all communication history for a lead - SUPABASE ONLY"""
+#     try:
+#         history = communication_service.get_conversation_history(
+#             lead_id=lead_id,
+#             communication_type=type
+#         )
+#         return history
+#     except Exception as e:
+#         logger.error(f"Communication history error: {e}")
+#         raise HTTPException(status_code=500, detail=str(e))
+# 
+# 
+# @app.get("/api/communications/training-data")
+# async def get_training_data(
+#     type: Optional[str] = Query(None),
+#     limit: int = Query(1000)
+# ):
+#     """Get communication data for ML model training - SUPABASE ONLY"""
+#     try:
+#         training_data = communication_service.get_training_data(
+#             communication_type=type,
+#             limit=limit
+#         )
+#         return {
+#             "total_records": len(training_data),
+#             "data": training_data
+#         }
+#     except Exception as e:
+#         logger.error(f"Training data error: {e}")
+#         raise HTTPException(status_code=500, detail=str(e))
+# 
+# 
+# @app.post("/api/communications/mark-training")
+# async def mark_as_training_data(
+#     data: Dict[str, List[int]]
+# ):
+#     """Mark specific communications as used for training - SUPABASE ONLY"""
+#     try:
+#         communication_service.mark_as_training_data(
+#             communication_ids=data['ids']
+#         )
+#         return {"success": True, "marked_count": len(data['ids'])}
+#     except Exception as e:
+#         logger.error(f"Mark training error: {e}")
+#         raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================================================
