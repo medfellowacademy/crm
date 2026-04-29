@@ -46,7 +46,7 @@ from exceptions import (
 
 # Authentication
 from auth import get_current_user, oauth2_scheme, decode_access_token, create_access_token
-from deps import get_db as _shared_get_db  # used by auth.py via deps.py
+# No more local database - all operations use Supabase REST API
 
 # Rate limiting
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -1321,7 +1321,7 @@ ai_scorer = AILeadScorer()
 # already import it from main continue to work during the migration.
 # ============================================================================
 
-from deps import get_db  # noqa: E402 (import after model definitions is intentional)
+# Removed: from deps import get_db - Supabase only, no local database
 
 # ============================================================================
 # API ENDPOINTS - AUTHENTICATION
@@ -1333,48 +1333,53 @@ class LoginRequest(BaseModel):
 
 @app.post("/api/auth/login")
 @limiter.limit("10/minute")  # Brute-force protection: max 10 login attempts per minute per IP
-async def login(request: Request, body: LoginRequest, db: Session = Depends(get_db)):
-    """Login with username (email) and password - validates against users table"""
-    user = db.query(DBUser).filter(DBUser.email == body.username).first()
+async def login(request: Request, body: LoginRequest):
+    """Login with username (email) and password - validates against Supabase users table"""
+    
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    
+    user = supabase_data.get_user_by_email(body.username)
 
     if not user:
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    if not user.is_active:
+    if not user.get('is_active', True):
         raise HTTPException(status_code=401, detail="Account is inactive")
 
-    # Verify password using raw bcrypt (passlib breaks with bcrypt>=4.0)
+    # Verify password using raw bcrypt
     password_valid = False
-    if user.password:
-        if user.password.startswith('$2b$') or user.password.startswith('$2a$'):
+    user_password = user.get('password', '')
+    if user_password:
+        if user_password.startswith('$2b$') or user_password.startswith('$2a$'):
             try:
                 import bcrypt as _bcrypt
                 password_valid = _bcrypt.checkpw(
                     body.password.encode('utf-8'),
-                    user.password.encode('utf-8')
+                    user_password.encode('utf-8')
                 )
             except Exception:
                 password_valid = False
         else:
             # plain text password (legacy)
-            password_valid = (user.password == body.password)
+            password_valid = (user_password == body.password)
 
     if not password_valid:
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    access_token = create_access_token({"sub": user.email, "role": user.role})
+    access_token = create_access_token({"sub": user.get('email'), "role": user.get('role')})
 
     return {
         "success": True,
         "access_token": access_token,
         "token_type": "bearer",
         "user": {
-            "id": user.id,
-            "full_name": user.full_name,
-            "email": user.email,
-            "role": user.role,
-            "phone": user.phone,
-            "is_active": user.is_active,
+            "id": user.get('id'),
+            "full_name": user.get('full_name'),
+            "email": user.get('email'),
+            "role": user.get('role'),
+            "phone": user.get('phone'),
+            "is_active": user.get('is_active', True),
         }
     }
 

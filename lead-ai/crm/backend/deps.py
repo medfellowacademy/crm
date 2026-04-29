@@ -1,16 +1,21 @@
 """
-Shared FastAPI dependencies.
-Kept in a separate module so auth.py can import get_db without creating a
-circular import with main.py.
+Shared FastAPI dependencies - SUPABASE ONLY
+NO LOCAL DATABASE SUPPORT
 """
 
-from database import SessionLocal
+from fastapi import HTTPException
 
 
 def get_db():
-    """Yield a SQLAlchemy database session and ensure it is closed afterward."""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+    """
+    DEPRECATED: This application uses Supabase only.
+    
+    This function exists for legacy compatibility but should not be used.
+    All endpoints must use supabase_data from supabase_data_layer.py
+    
+    Raises HTTPException if called.
+    """
+    raise HTTPException(
+        status_code=500,
+        detail="Local database not supported. Use Supabase REST API via supabase_data_layer.py"
+    )

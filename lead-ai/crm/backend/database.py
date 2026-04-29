@@ -1,71 +1,37 @@
 """
-Database configuration and setup
-SUPABASE ONLY - No local SQLite database
+Database configuration - SUPABASE ONLY
+NO LOCAL DATABASE - All operations use Supabase REST API
 """
 
 import os
-from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
-# Supabase configuration
+# Supabase configuration - REQUIRED
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-def get_database_url():
+def validate_supabase_config():
     """
-    Get the database URL - SUPABASE ONLY.
-    
-    This application requires Supabase to be configured.
-    Set SUPABASE_URL and SUPABASE_KEY environment variables.
-    
-    All data operations use Supabase REST API via supabase_client.py.
-    SQLAlchemy is only for model definitions (legacy compatibility).
+    Validate that Supabase is properly configured.
+    This application REQUIRES Supabase - no local database support.
     """
-    # Check if Supabase is configured
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError(
             "❌ SUPABASE_URL and SUPABASE_KEY must be set in environment variables.\n"
-            "This application requires Supabase and does not support local SQLite.\n"
-            "Please configure your Supabase credentials in .env file."
+            "This application requires Supabase and does not support local databases.\n"
+            "Please configure your Supabase credentials in .env file.\n"
+            "Example:\n"
+            "  SUPABASE_URL=https://xxxxx.supabase.co\n"
+            "  SUPABASE_KEY=your-anon-key-here"
         )
-    
-    print("✅ Using Supabase REST API for ALL data operations")
-    # Return a dummy SQLite URL for SQLAlchemy model initialization only
-    # All actual data operations go through Supabase REST API
-    return "sqlite:///./crm_database.db"
+    print("✅ Supabase configured - All data operations use Supabase REST API")
+    return True
 
-SQLALCHEMY_DATABASE_URL = get_database_url()
+# Validate on import
+validate_supabase_config()
 
-# Create minimal engine for model definitions only
-# All actual data operations use Supabase REST API
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    echo=False
-)
-
-# Session factory (for legacy endpoints being migrated)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# Base class for models
-Base = declarative_base()
-
-# Dependency for FastAPI routes (DEPRECATED - use supabase_data instead)
-def get_db():
-    """
-    Database session dependency - DEPRECATED
-    
-    ⚠️ This is for legacy compatibility only.
-    All new endpoints should use supabase_data from supabase_data_layer.py
-    Local database is NOT synced with Supabase!
-    """
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+# DEPRECATED: get_db() removed - use supabase_data from supabase_data_layer.py instead
+# All endpoints must use Supabase REST API via supabase_data_layer.SupabaseDataLayer
