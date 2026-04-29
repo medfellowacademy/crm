@@ -1408,8 +1408,11 @@ async def root():
 # ============================================================================
 
 @app.post("/api/leads", response_model=LeadResponse)
-async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    """Create a new lead with AI scoring"""
+async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks):
+    """Create a new lead with AI scoring - SUPABASE ONLY"""
+
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
 
     # Generate a collision-safe unique lead ID using timestamp + random suffix
     import uuid as _uuid
@@ -1417,11 +1420,11 @@ async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, db: S
     _rand = _uuid.uuid4().hex[:4].upper()
     lead_id = f"LEAD{_ts}{_rand}"
 
-    # Build a temporary ORM object just for AI scoring (not yet persisted)
+    # Build a temporary object just for AI scoring (not persisted)
     db_lead = DBLead(
         lead_id=lead_id,
         full_name=lead.full_name,
-        email=lead.email if lead.email else None,  # Explicitly handle None
+        email=lead.email if lead.email else None,
         phone=lead.phone,
         whatsapp=lead.whatsapp or lead.phone,
         country=lead.country,
@@ -1431,8 +1434,16 @@ async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, db: S
         status=LeadStatus.FRESH
     )
 
-    # AI scoring
-    ai_scorer.load_course_prices(db)
+    # AI scoring (load prices from Supabase)
+    try:
+        # Get courses from Supabase for pricing
+        courses = supabase_data.get_courses()
+        # Create a dict for ai_scorer to use
+        ai_scorer.course_prices = {c.get('name'): c.get('price', 0) for c in courses if c.get('name')}
+    except Exception as e:
+        logger.warning(f"Could not load course prices for AI scoring: {e}")
+        ai_scorer.course_prices = {}
+    
     score_result = ai_scorer.score_lead(db_lead, [])
     for key, value in score_result.items():
         if key == 'feature_importance' and value:
@@ -1441,69 +1452,65 @@ async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, db: S
         else:
             setattr(db_lead, key, value)
 
-    # ── Save to Supabase (primary store) ──────────────────────────────────
-    if supabase_data.client:
-        try:
-            payload = {
-                "lead_id": db_lead.lead_id,
-                "full_name": db_lead.full_name,
-                "email": db_lead.email,
-                "phone": db_lead.phone,
-                "whatsapp": db_lead.whatsapp,
-                "country": db_lead.country,
-                "source": db_lead.source,
-                "course_interested": db_lead.course_interested,
-                "assigned_to": db_lead.assigned_to,
-                "status": db_lead.status.value if hasattr(db_lead.status, 'value') else db_lead.status,
-                "ai_score": db_lead.ai_score or 0.0,
-                "ai_segment": db_lead.ai_segment.value if hasattr(db_lead.ai_segment, 'value') else db_lead.ai_segment,
-                "ai_recommendation": db_lead.ai_recommendation,
-                # Required float fields in LeadResponse — send 0.0 defaults so
-                # FastAPI response validation doesn't fail when we return the dict.
-                "conversion_probability": db_lead.conversion_probability or 0.0,
-                "expected_revenue": db_lead.expected_revenue or 0.0,
-                "actual_revenue": db_lead.actual_revenue or 0.0,
-                "buying_signal_strength": db_lead.buying_signal_strength or 0.0,
-                "churn_risk": db_lead.churn_risk or 0.0,
-            }
-            # strip None values (keep 0.0 floats)
-            payload = {k: v for k, v in payload.items() if v is not None}
-            created = supabase_data.create_lead(payload)
-            if created:
-                # Invalidate caches
-                invalidate_cache(STATS_CACHE)
-                invalidate_cache(LEAD_CACHE)
-                return created
-            # fall through to SQLite if Supabase insert returned nothing
-        except Exception as e:
-            logger.error(f"Supabase create_lead failed, falling back to SQLite: {e}")
-
-    # ── Fallback: save to SQLite ───────────────────────────────────────────
-    db.add(db_lead)
-    db.commit()
-    db.refresh(db_lead)
-
-    activity = DBActivity(
-        lead_id=db_lead.id,
-        activity_type="lead_created",
-        description=f"Lead created from {lead.source}",
-        created_by="System"
-    )
-    db.add(activity)
-    db.commit()
-
-    invalidate_cache(STATS_CACHE)
-    invalidate_cache(LEAD_CACHE)
-
-    return db_lead
+    # Save to Supabase
+    try:
+        payload = {
+            "lead_id": db_lead.lead_id,
+            "full_name": db_lead.full_name,
+            "email": db_lead.email,
+            "phone": db_lead.phone,
+            "whatsapp": db_lead.whatsapp,
+            "country": db_lead.country,
+            "source": db_lead.source,
+            "course_interested": db_lead.course_interested,
+            "assigned_to": db_lead.assigned_to,
+            "status": db_lead.status.value if hasattr(db_lead.status, 'value') else db_lead.status,
+            "ai_score": db_lead.ai_score or 0.0,
+            "ai_segment": db_lead.ai_segment.value if hasattr(db_lead.ai_segment, 'value') else db_lead.ai_segment,
+            "ai_recommendation": db_lead.ai_recommendation,
+            "conversion_probability": db_lead.conversion_probability or 0.0,
+            "expected_revenue": db_lead.expected_revenue or 0.0,
+            "actual_revenue": db_lead.actual_revenue or 0.0,
+            "buying_signal_strength": db_lead.buying_signal_strength or 0.0,
+            "churn_risk": db_lead.churn_risk or 0.0,
+        }
+        # Strip None values (keep 0.0 floats)
+        payload = {k: v for k, v in payload.items() if v is not None}
+        created = supabase_data.create_lead(payload)
+        
+        if not created:
+            raise HTTPException(status_code=500, detail="Failed to create lead in database")
+        
+        # Create activity log
+        if created.get('id'):
+            supabase_data.create_activity(
+                lead_id=created['id'],
+                activity_type="lead_created",
+                description=f"Lead created from {lead.source}",
+                created_by="System"
+            )
+        
+        # Invalidate caches
+        invalidate_cache(STATS_CACHE)
+        invalidate_cache(LEAD_CACHE)
+        
+        return created
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create lead: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to create lead: {str(e)}")
 
 
 @app.post("/api/leads/bulk-create")
-async def bulk_create_leads(leads: list[LeadCreate], background_tasks: BackgroundTasks, request: Request, db: Session = Depends(get_db)):
-    """Bulk create multiple leads at once for import functionality"""
+async def bulk_create_leads(leads: list[LeadCreate], background_tasks: BackgroundTasks, request: Request):
+    """Bulk create multiple leads at once for import functionality - SUPABASE ONLY"""
+    
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
     
     # Get the importer's name for notes
-    importer_name = _get_counselor_name(request, db)
+    importer_name = _get_counselor_name(request)
     if not importer_name:
         # If not a counselor, try to get the user's full name from the token
         try:
@@ -1511,9 +1518,9 @@ async def bulk_create_leads(leads: list[LeadCreate], background_tasks: Backgroun
             if auth_header.startswith("Bearer "):
                 token_data = decode_access_token(auth_header.split(" ", 1)[1])
                 if token_data and token_data.email:
-                    user = db.query(DBUser).filter(DBUser.email == token_data.email).first()
+                    user = supabase_data.get_user_by_email(token_data.email)
                     if user:
-                        importer_name = user.full_name
+                        importer_name = user.get('full_name')
         except Exception:
             pass
     
@@ -1526,7 +1533,12 @@ async def bulk_create_leads(leads: list[LeadCreate], background_tasks: Backgroun
     }
     
     # Load course prices once before processing (performance optimization)
-    ai_scorer.load_course_prices(db)
+    try:
+        courses = supabase_data.get_courses()
+        ai_scorer.course_prices = {c.get('name'): c.get('price', 0) for c in courses if c.get('name')}
+    except Exception as e:
+        logger.warning(f"Could not load course prices for AI scoring: {e}")
+        ai_scorer.course_prices = {}
     
     for idx, lead in enumerate(leads):
         try:
@@ -1536,40 +1548,25 @@ async def bulk_create_leads(leads: list[LeadCreate], background_tasks: Backgroun
             lead_id = f"LEAD{_ts}{_rand}"
             
             # Check for duplicates by phone (primary unique identifier)
-            if supabase_data.client:
-                try:
-                    existing = supabase_data.client.table('leads').select("lead_id,assigned_to,status,full_name").eq("phone", lead.phone).limit(1).execute()
-                    if existing.data and len(existing.data) > 0:
-                        ex = existing.data[0]
-                        owner = ex.get("assigned_to") or "Unassigned"
-                        results["failed"].append({
-                            "index": idx,
-                            "name": lead.full_name,
-                            "error": f"Duplicate phone number: {lead.phone}",
-                            "duplicate": True,
-                            "existing_lead_id": ex.get("lead_id", ""),
-                            "existing_owner": owner,
-                            "existing_status": ex.get("status", ""),
-                        })
-                        continue
-                except Exception:
-                    pass
-            else:
-                existing_lead = db.query(DBLead).filter(DBLead.phone == lead.phone).first()
-                if existing_lead:
-                    owner = existing_lead.assigned_to or "Unassigned"
+            try:
+                existing = supabase_data.client.table('leads').select("lead_id,assigned_to,status,full_name").eq("phone", lead.phone).limit(1).execute()
+                if existing.data and len(existing.data) > 0:
+                    ex = existing.data[0]
+                    owner = ex.get("assigned_to") or "Unassigned"
                     results["failed"].append({
                         "index": idx,
                         "name": lead.full_name,
                         "error": f"Duplicate phone number: {lead.phone}",
                         "duplicate": True,
-                        "existing_lead_id": existing_lead.lead_id,
+                        "existing_lead_id": ex.get("lead_id", ""),
                         "existing_owner": owner,
-                        "existing_status": existing_lead.status.value if hasattr(existing_lead.status, "value") else existing_lead.status,
+                        "existing_status": ex.get("status", ""),
                     })
                     continue
+            except Exception as dup_check_err:
+                logger.warning(f"Duplicate check failed for lead {idx}: {dup_check_err}")
             
-            # Build temporary ORM object for AI scoring
+            # Build temporary object for AI scoring
             db_lead = DBLead(
                 lead_id=lead_id,
                 full_name=lead.full_name,
@@ -1593,75 +1590,53 @@ async def bulk_create_leads(leads: list[LeadCreate], background_tasks: Backgroun
                     setattr(db_lead, key, value)
             
             # Save to Supabase
-            if supabase_data.client:
-                try:
-                    payload = {
-                        "lead_id": db_lead.lead_id,
-                        "full_name": db_lead.full_name,
-                        "email": db_lead.email,
-                        "phone": db_lead.phone,
-                        "whatsapp": db_lead.whatsapp,
-                        "country": db_lead.country,
-                        "source": db_lead.source,
-                        "course_interested": db_lead.course_interested,
-                        "assigned_to": db_lead.assigned_to,
-                        "status": db_lead.status.value if hasattr(db_lead.status, 'value') else db_lead.status,
-                        "ai_score": db_lead.ai_score or 0.0,
-                        "ai_segment": db_lead.ai_segment.value if hasattr(db_lead.ai_segment, 'value') else db_lead.ai_segment,
-                        "ai_recommendation": db_lead.ai_recommendation,
-                        "conversion_probability": db_lead.conversion_probability or 0.0,
-                        "expected_revenue": db_lead.expected_revenue or 0.0,
-                        "actual_revenue": db_lead.actual_revenue or 0.0,
-                        "buying_signal_strength": db_lead.buying_signal_strength or 0.0,
-                        "churn_risk": db_lead.churn_risk or 0.0,
-                    }
-                    payload = {k: v for k, v in payload.items() if v is not None}
-                    created = supabase_data.create_lead(payload)
-                    if created:
-                        # Create import note in SQLite database (notes are stored locally)
-                        # First, find the database lead ID
-                        db_lead_record = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
-                        if db_lead_record:
-                            # Use note content from imported data or default message
-                            note_content = lead.notes if lead.notes else "Lead imported via bulk upload"
-                            import_note = DBNote(
-                                lead_id=db_lead_record.id,
-                                content=note_content,
-                                channel="manual",
-                                created_by=importer_name
-                            )
-                            db.add(import_note)
-                            db.commit()
-                        
-                        results["success"].append({"index": idx, "lead_id": lead_id, "name": lead.full_name})
-                        continue
-                except Exception as e:
-                    logger.error(f"Supabase bulk create failed for lead {idx}: {e}")
-            
-            # Fallback to SQLite (with proper transaction management)
             try:
-                db.add(db_lead)
-                db.commit()
-                db.refresh(db_lead)
+                payload = {
+                    "lead_id": db_lead.lead_id,
+                    "full_name": db_lead.full_name,
+                    "email": db_lead.email,
+                    "phone": db_lead.phone,
+                    "whatsapp": db_lead.whatsapp,
+                    "country": db_lead.country,
+                    "source": db_lead.source,
+                    "course_interested": db_lead.course_interested,
+                    "assigned_to": db_lead.assigned_to,
+                    "status": db_lead.status.value if hasattr(db_lead.status, 'value') else db_lead.status,
+                    "ai_score": db_lead.ai_score or 0.0,
+                    "ai_segment": db_lead.ai_segment.value if hasattr(db_lead.ai_segment, 'value') else db_lead.ai_segment,
+                    "ai_recommendation": db_lead.ai_recommendation,
+                    "conversion_probability": db_lead.conversion_probability or 0.0,
+                    "expected_revenue": db_lead.expected_revenue or 0.0,
+                    "actual_revenue": db_lead.actual_revenue or 0.0,
+                    "buying_signal_strength": db_lead.buying_signal_strength or 0.0,
+                    "churn_risk": db_lead.churn_risk or 0.0,
+                }
+                payload = {k: v for k, v in payload.items() if v is not None}
+                created = supabase_data.create_lead(payload)
                 
-                # Create import note with content from imported data or default message
-                note_content = lead.notes if lead.notes else "Lead imported via bulk upload"
-                import_note = DBNote(
-                    lead_id=db_lead.id,
-                    content=note_content,
-                    channel="manual",
-                    created_by=importer_name
-                )
-                db.add(import_note)
-                db.commit()
-                
-                results["success"].append({"index": idx, "lead_id": lead_id, "name": lead.full_name})
-            except Exception as db_error:
-                # Rollback this transaction and continue with next lead
-                db.rollback()
-                logger.error(f"SQLite insert failed for lead {idx}: {db_error}")
-                error_msg = str(db_error)
-                if "UNIQUE constraint failed" in error_msg or "duplicate key" in error_msg.lower():
+                if created:
+                    # Create import note in Supabase
+                    lead_internal_id = created.get('id')
+                    if lead_internal_id:
+                        note_content = lead.notes if lead.notes else "Lead imported via bulk upload"
+                        supabase_data.create_note(
+                            lead_id=lead_internal_id,
+                            content=note_content,
+                            channel="manual",
+                            created_by=importer_name
+                        )
+                    
+                    results["success"].append({"index": idx, "lead_id": lead_id, "name": lead.full_name})
+                else:
+                    results["failed"].append({
+                        "index": idx,
+                        "name": lead.full_name,
+                        "error": "Failed to create lead in database"
+                    })
+            except Exception as e:
+                logger.error(f"Supabase bulk create failed for lead {idx}: {e}")
+                error_msg = str(e)
+                if "duplicate key" in error_msg.lower() or "unique" in error_msg.lower():
                     error_msg = f"Duplicate entry for phone: {lead.phone}"
                 results["failed"].append({
                     "index": idx,
@@ -1672,7 +1647,6 @@ async def bulk_create_leads(leads: list[LeadCreate], background_tasks: Backgroun
         except Exception as e:
             # Catch-all for any other errors (scoring, etc.)
             logger.error(f"Failed to create lead {idx}: {e}")
-            db.rollback()  # Ensure session is clean for next iteration
             results["failed"].append({
                 "index": idx,
                 "name": lead.full_name if hasattr(lead, 'full_name') else 'Unknown',
@@ -1879,20 +1853,26 @@ async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, b
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/leads/{lead_id}")
-async def delete_lead(lead_id: str, request: Request, db: Session = Depends(get_db)):
-    """Delete lead"""
+async def delete_lead(lead_id: str, request: Request):
+    """Delete lead - SUPABASE ONLY"""
+
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
 
     # Counselors cannot delete any lead
-    _counselor_name = _get_counselor_name(request, db)
+    _counselor_name = _get_counselor_name(request)
     if _counselor_name:
         raise HTTPException(status_code=403, detail="Counselors are not permitted to delete leads")
 
-    lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
+    # Check if lead exists
+    lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     
-    db.delete(lead)
-    db.commit()
+    # Delete from Supabase
+    success = supabase_data.delete_lead(lead_id)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to delete lead")
     
     return {"message": "Lead deleted successfully"}
 
