@@ -58,12 +58,13 @@ const LeadDetails = () => {
   const [isEditing, setIsEditing] = useState(false);
 
   // Fetch lead details
-  const { data: lead, isLoading, refetch } = useQuery({
+  const { data: lead, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['lead', leadId],
     queryFn: () => leadsAPI.getById(leadId).then(res => res.data),
     refetchOnMount: 'always', // Always fetch fresh data when component mounts
     refetchOnWindowFocus: true, // Refetch when user returns to tab
     staleTime: 0, // Consider data stale immediately
+    retry: 1, // Only retry once on failure
   });
 
   // Update form when lead data changes
@@ -165,7 +166,20 @@ const LeadDetails = () => {
   };
 
   if (isLoading) {
-    return <div>Loading...</div>;
+    return <div style={{ padding: '40px', textAlign: 'center' }}>Loading lead details...</div>;
+  }
+
+  if (isError || !lead) {
+    const errMsg = error?.response?.status === 404
+      ? 'Lead not found. It may have been deleted.'
+      : `Failed to load lead: ${error?.message || 'Unknown error'}`;
+    return (
+      <div style={{ padding: '40px', textAlign: 'center' }}>
+        <p style={{ color: '#ff4d4f', marginBottom: '16px' }}>{errMsg}</p>
+        <button onClick={() => navigate('/leads')} style={{ marginRight: '8px' }}>← Back to Leads</button>
+        <button onClick={() => refetch()}>Retry</button>
+      </div>
+    );
   }
 
   return (

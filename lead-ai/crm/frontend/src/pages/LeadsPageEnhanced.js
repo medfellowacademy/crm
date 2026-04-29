@@ -294,7 +294,7 @@ const LeadsPageEnhanced = () => {
   // ── Mutations ──────────────────────────────────────────────────────────────
   const createMutation = useMutation({
     mutationFn: (d) => leadsAPI.create(d),
-    onSuccess: () => { message.success('Lead created!'); setDrawerVisible(false); form.resetFields(); queryClient.invalidateQueries(['leads']); },
+    onSuccess: () => { message.success('Lead created!'); setDrawerVisible(false); form.resetFields(); queryClient.invalidateQueries({ queryKey: ['leads'] }); },
     onError: (e) => {
       console.error('Create lead error:', e);
       const detail = e.response?.data?.detail;
@@ -311,15 +311,15 @@ const LeadsPageEnhanced = () => {
     mutationFn: ({ leadId, data }) => leadsAPI.update(leadId, data),
     onSuccess: (_, { leadId }) => { 
       message.success('Lead updated!'); 
-      queryClient.invalidateQueries(['leads']); 
-      queryClient.invalidateQueries(['lead', leadId]); // Invalidate individual lead cache
+      queryClient.invalidateQueries({ queryKey: ['leads'] }); 
+      queryClient.invalidateQueries({ queryKey: ['lead', leadId] }); // Invalidate individual lead cache
     },
     onError: (e) => message.error(`Failed: ${e.message}`),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id) => leadsAPI.delete(id),
-    onSuccess: () => { message.success('Lead deleted!'); queryClient.invalidateQueries(['leads']); },
+    onSuccess: () => { message.success('Lead deleted!'); queryClient.invalidateQueries({ queryKey: ['leads'] }); },
   });
 
   const bulkMutation = useMutation({
@@ -329,9 +329,9 @@ const LeadsPageEnhanced = () => {
       setSelectedRows([]); 
       setBulkDrawerVisible(false); 
       bulkForm.resetFields(); 
-      queryClient.invalidateQueries(['leads']); 
+      queryClient.invalidateQueries({ queryKey: ['leads'] }); 
       // Invalidate each individual lead cache
-      leadIds.forEach(leadId => queryClient.invalidateQueries(['lead', leadId]));
+      leadIds.forEach(leadId => queryClient.invalidateQueries({ queryKey: ['lead', leadId] }));
     },
   });
 
@@ -480,7 +480,7 @@ const LeadsPageEnhanced = () => {
         setImportErrors(prev => [...prev, ...failedErrors]);
       }
       
-      queryClient.invalidateQueries(['leads']);
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
       
       if (results.failed.length === 0) {
         message.success(`All ${results.success.length} leads imported successfully!`);
@@ -883,7 +883,7 @@ const LeadsPageEnhanced = () => {
                   Modal.confirm({
                     title: `Delete ${selectedRows.length} leads?`,
                     content: 'This cannot be undone.',
-                    onOk: async () => { for (const id of selectedRows) { await leadsAPI.delete(id).catch(() => {}); } setSelectedRows([]); queryClient.invalidateQueries(['leads']); message.success('Deleted!'); },
+                    onOk: async () => { for (const id of selectedRows) { await leadsAPI.delete(id).catch(() => {}); } setSelectedRows([]); queryClient.invalidateQueries({ queryKey: ['leads'] }); message.success('Deleted!'); },
                   });
                 }}>Bulk Delete</Button>
               </Space>
@@ -1407,7 +1407,7 @@ const LeadsPageEnhanced = () => {
         onMerged={() => {
           setDrawerVisible(false);
           form.resetFields();
-          queryClient.invalidateQueries(['leads']);
+          queryClient.invalidateQueries({ queryKey: ['leads'] });
         }}
       />
     </div>

@@ -5,6 +5,7 @@ Uses Supabase REST API client for data operations
 
 from typing import List, Optional, Dict, Any
 from datetime import datetime
+import re
 from supabase_client import supabase_manager
 from logger_config import logger
 
@@ -121,11 +122,15 @@ class SupabaseDataLayer:
                 now_iso = datetime.utcnow().isoformat()
                 query = query.lt('follow_up_date', now_iso)
             if search:
-                query = query.or_(
-                    f"full_name.ilike.%{search}%,"
-                    f"email.ilike.%{search}%,"
-                    f"phone.ilike.%{search}%"
-                )
+                # Sanitize search term to prevent injection via PostgREST filter string
+                # Strip characters that have special meaning in PostgREST filter syntax
+                safe_search = re.sub(r"[%_\(\),\"]", "", str(search)).strip()[:100]
+                if safe_search:
+                    query = query.or_(
+                        f"full_name.ilike.%{safe_search}%,"
+                        f"email.ilike.%{safe_search}%,"
+                        f"phone.ilike.%{safe_search}%"
+                    )
 
             if created_on:
                 query = query.gte('created_at', f"{created_on}T00:00:00").lte('created_at', f"{created_on}T23:59:59")

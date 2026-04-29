@@ -31,10 +31,10 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
-      retry: 0,
-      staleTime: 30 * 60 * 1000,   // 30 min — serve from cache, no spinner
-      gcTime: 60 * 60 * 1000,      // 60 min — keep data in memory
-      refetchOnMount: false,        // don't refetch if data is fresh
+      retry: 1,
+      staleTime: 2 * 60 * 1000,    // 2 min — lead data must stay current in a live CRM
+      gcTime: 15 * 60 * 1000,      // 15 min — keep data in memory between page navigations
+      refetchOnMount: true,         // always check freshness when a page mounts
     },
   },
 });

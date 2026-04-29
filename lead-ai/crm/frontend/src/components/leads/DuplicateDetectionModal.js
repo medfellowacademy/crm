@@ -249,7 +249,7 @@ const DuplicateDetectionModal = ({
     mutationFn: (payload) => duplicatesAPI.merge(payload),
     onSuccess: (res) => {
       message.success('Leads merged successfully!');
-      queryClient.invalidateQueries(['leads']);
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
       onMerged?.(res.data);
       handleClose();
     },

@@ -33,6 +33,7 @@ import json
 import os
 import re
 import enum
+import asyncio as _asyncio
 
 # Import logging and error handling
 from logger_config import logger
@@ -230,10 +231,18 @@ async def lifespan(app: FastAPI):
             f"Missing required environment variables: {', '.join(_missing)}. "
             "Set them before starting the application."
         )
+
+    # --- Warn on missing optional-but-important env vars ---
     if os.getenv("SUPABASE_URL") and not os.getenv("SUPABASE_KEY"):
         logger.warning("⚠️ SUPABASE_URL is set but SUPABASE_KEY is missing — Supabase will not connect.")
+    if not os.getenv("SUPABASE_URL") or not os.getenv("SUPABASE_KEY"):
+        logger.warning("⚠️ SUPABASE_URL/SUPABASE_KEY not set — using local SQLite. Data will NOT sync to Supabase.")
     if not os.getenv("OPENAI_API_KEY"):
         logger.warning("⚠️ OPENAI_API_KEY is not set — AI assistant features will be disabled.")
+    if not os.getenv("RESEND_API_KEY"):
+        logger.warning("⚠️ RESEND_API_KEY is not set — email sending will be disabled.")
+    if not os.getenv("TWILIO_ACCOUNT_SID") or not os.getenv("TWILIO_AUTH_TOKEN"):
+        logger.warning("⚠️ TWILIO credentials not set — SMS/WhatsApp via Twilio will be disabled.")
 
     logger.info(f"📊 Database: {SQLALCHEMY_DATABASE_URL}")
 
@@ -1029,8 +1038,10 @@ class AILeadScorer:
         # Determine segment
         segment = self._determine_segment(final_score, conversation_analysis)
         
-        # Calculate expected revenue
+        # Calculate expected revenue (guard against None course_price)
         course_price = self.course_prices.get(lead.course_interested, 50000)
+        if not course_price or not isinstance(course_price, (int, float)):
+            course_price = 50000
         expected_revenue = course_price * (final_score / 100)
         
         # Generate recommendations
@@ -1388,16 +1399,11 @@ async def root():
 async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """Create a new lead with AI scoring"""
 
-    # Generate unique lead ID based on Supabase count if available, else SQLite
-    if supabase_data.client:
-        try:
-            count_resp = supabase_data.client.table('leads').select("lead_id", count='exact').limit(0).execute()
-            lead_count = count_resp.count or 0
-        except Exception:
-            lead_count = db.query(DBLead).count()
-    else:
-        lead_count = db.query(DBLead).count()
-    lead_id = f"LEAD{lead_count + 1:05d}"
+    # Generate a collision-safe unique lead ID using timestamp + random suffix
+    import uuid as _uuid
+    _ts = datetime.utcnow().strftime("%y%m%d%H%M%S")
+    _rand = _uuid.uuid4().hex[:4].upper()
+    lead_id = f"LEAD{_ts}{_rand}"
 
     # Build a temporary ORM object just for AI scoring (not yet persisted)
     db_lead = DBLead(
@@ -1510,19 +1516,12 @@ async def bulk_create_leads(leads: list[LeadCreate], background_tasks: Backgroun
     # Load course prices once before processing (performance optimization)
     ai_scorer.load_course_prices(db)
     
-    # Get current lead count for ID generation
-    if supabase_data.client:
-        try:
-            count_resp = supabase_data.client.table('leads').select("lead_id", count='exact').limit(0).execute()
-            lead_count = count_resp.count or 0
-        except Exception:
-            lead_count = db.query(DBLead).count()
-    else:
-        lead_count = db.query(DBLead).count()
-    
     for idx, lead in enumerate(leads):
         try:
-            lead_id = f"LEAD{lead_count + idx + 1:05d}"
+            import uuid as _uuid
+            _ts = datetime.utcnow().strftime("%y%m%d%H%M%S")
+            _rand = _uuid.uuid4().hex[:4].upper()
+            lead_id = f"LEAD{_ts}{_rand}"
             
             # Check for duplicates by phone (primary unique identifier)
             if supabase_data.client:
@@ -2096,6 +2095,21 @@ async def bulk_update_leads(
     if not leads:
         raise HTTPException(status_code=404, detail="No leads found")
     
+    # Validate enum fields before applying updates
+    _valid_statuses = {s.value for s in LeadStatus}
+    _valid_segments = {s.value for s in LeadSegment}
+
+    if "status" in updates and updates["status"] not in _valid_statuses:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid status '{updates['status']}'. Must be one of: {sorted(_valid_statuses)}"
+        )
+    if "ai_segment" in updates and updates["ai_segment"] not in _valid_segments:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid segment '{updates['ai_segment']}'. Must be one of: {sorted(_valid_segments)}"
+        )
+
     # Update each lead
     updated_count = 0
     for lead in leads:
@@ -2104,9 +2118,14 @@ async def bulk_update_leads(
                 setattr(lead, key, value)
         lead.updated_at = datetime.utcnow()
         updated_count += 1
-    
-    db.commit()
-    
+
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"bulk_update_leads commit failed: {e}")
+        raise HTTPException(status_code=500, detail="Bulk update failed — database error.")
+
     return {
         "message": f"Successfully updated {updated_count} leads",
         "updated_count": updated_count
@@ -2390,12 +2409,21 @@ async def get_lead_ai_summary(lead_id: str, db: Session = Depends(get_db)):
 @app.post("/api/hospitals", response_model=HospitalResponse)
 async def create_hospital(hospital: HospitalCreate, db: Session = Depends(get_db)):
     """Create hospital"""
-    
+    from sqlalchemy.exc import IntegrityError
+
     db_hospital = DBHospital(**hospital.dict())
     db.add(db_hospital)
-    db.commit()
-    db.refresh(db_hospital)
-    
+    try:
+        db.commit()
+        db.refresh(db_hospital)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="A hospital with this name already exists.")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"create_hospital error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create hospital.")
+
     return db_hospital
 
 @app.get("/api/hospitals", response_model=List[HospitalResponse])
@@ -2425,12 +2453,21 @@ async def get_hospitals(
 @app.post("/api/courses", response_model=CourseResponse)
 async def create_course(course: CourseCreate, db: Session = Depends(get_db)):
     """Create course"""
-    
+    from sqlalchemy.exc import IntegrityError
+
     db_course = DBCourse(**course.dict())
     db.add(db_course)
-    db.commit()
-    db.refresh(db_course)
-    
+    try:
+        db.commit()
+        db.refresh(db_course)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="A course with this name already exists.")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"create_course error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create course.")
+
     return db_course
 
 @app.get("/api/courses", response_model=List[CourseResponse])
@@ -3025,8 +3062,12 @@ async def trigger_welcome(lead_id: str, db: Session = Depends(get_db)):
         "counselor": lead.assigned_to or "Your counselor"
     }
     
-    results = await comm_service.campaign.trigger_welcome_sequence(lead_data)
-    
+    try:
+        results = await comm_service.campaign.trigger_welcome_sequence(lead_data)
+    except Exception as e:
+        logger.error(f"trigger_welcome failed for lead {lead_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Communication service error: {str(e)}")
+
     # Log results
     for result in results:
         note = DBNote(
@@ -3037,8 +3078,12 @@ async def trigger_welcome(lead_id: str, db: Session = Depends(get_db)):
         )
         db.add(note)
 
-    db.commit()
-    
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"trigger_welcome DB commit failed: {e}")
+
     return {
         "success": True,
         "message": "Welcome sequence triggered",
@@ -3068,8 +3113,12 @@ async def trigger_followup(
         "counselor": lead.assigned_to or "Your counselor"
     }
     
-    results = await comm_service.campaign.trigger_follow_up(lead_data, request.message, request.priority)
-    
+    try:
+        results = await comm_service.campaign.trigger_follow_up(lead_data, request.message, request.priority)
+    except Exception as e:
+        logger.error(f"trigger_followup failed for lead {lead_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Communication service error: {str(e)}")
+
     # Log results
     for result in results:
         note = DBNote(
@@ -3080,8 +3129,12 @@ async def trigger_followup(
         )
         db.add(note)
 
-    db.commit()
-    
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"trigger_followup DB commit failed: {e}")
+
     return {
         "success": True,
         "message": "Follow-up sequence triggered",
@@ -4342,13 +4395,23 @@ async def mark_all_notifications_read():
 @app.put("/api/hospitals/{hospital_id}", response_model=HospitalResponse)
 async def update_hospital(hospital_id: int, data: HospitalCreate, db: Session = Depends(get_db)):
     """Update an existing hospital record."""
+    from sqlalchemy.exc import IntegrityError
+
     hospital = db.query(DBHospital).filter(DBHospital.id == hospital_id).first()
     if not hospital:
         raise HTTPException(status_code=404, detail="Hospital not found")
     for field, value in data.dict(exclude_unset=True).items():
         setattr(hospital, field, value)
-    db.commit()
-    db.refresh(hospital)
+    try:
+        db.commit()
+        db.refresh(hospital)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="A hospital with this name already exists.")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"update_hospital error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update hospital.")
     return hospital
 
 
@@ -4358,8 +4421,13 @@ async def delete_hospital(hospital_id: int, db: Session = Depends(get_db)):
     hospital = db.query(DBHospital).filter(DBHospital.id == hospital_id).first()
     if not hospital:
         raise HTTPException(status_code=404, detail="Hospital not found")
-    db.delete(hospital)
-    db.commit()
+    try:
+        db.delete(hospital)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"delete_hospital error: {e}")
+        raise HTTPException(status_code=409, detail="Cannot delete hospital — it may be referenced by existing leads.")
     return {"message": "Hospital deleted successfully"}
 
 
@@ -4370,13 +4438,23 @@ async def delete_hospital(hospital_id: int, db: Session = Depends(get_db)):
 @app.put("/api/courses/{course_id}", response_model=CourseResponse)
 async def update_course(course_id: int, data: CourseCreate, db: Session = Depends(get_db)):
     """Update an existing course record."""
+    from sqlalchemy.exc import IntegrityError
+
     course = db.query(DBCourse).filter(DBCourse.id == course_id).first()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
     for field, value in data.dict(exclude_unset=True).items():
         setattr(course, field, value)
-    db.commit()
-    db.refresh(course)
+    try:
+        db.commit()
+        db.refresh(course)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="A course with this name already exists.")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"update_course error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update course.")
     return course
 
 
@@ -4386,8 +4464,13 @@ async def delete_course(course_id: int, db: Session = Depends(get_db)):
     course = db.query(DBCourse).filter(DBCourse.id == course_id).first()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    db.delete(course)
-    db.commit()
+    try:
+        db.delete(course)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"delete_course error: {e}")
+        raise HTTPException(status_code=409, detail="Cannot delete course — it may be referenced by existing leads.")
     return {"message": "Course deleted successfully"}
 
 
@@ -5255,8 +5338,10 @@ def run_decay_cycle(db: Session) -> dict:
         score_changed = False
         new_score = old_score
         if cfg.apply_score_decay and days_silent >= 1:
-            decay_amount = cfg.score_decay_per_day * min(days_silent, 30)
-            new_score = max(0.0, old_score - decay_amount)
+            # Clamp decay rate to safe range [0.0, 100.0] points/day
+            safe_decay_per_day = max(0.0, min(float(cfg.score_decay_per_day or 3.0), 100.0))
+            decay_amount = safe_decay_per_day * min(days_silent, 30)
+            new_score = max(0.0, min(100.0, old_score - decay_amount))
             if abs(new_score - old_score) >= 0.5:
                 lead.ai_score = round(new_score, 1)
                 score_changed = True
@@ -5329,7 +5414,7 @@ def run_decay_cycle(db: Session) -> dict:
 
 
 # ── Background asyncio scheduler ─────────────────────────────────────────────
-import asyncio as _asyncio
+# asyncio imported at top of file as _asyncio
 
 _decay_task: "_asyncio.Task | None" = None
 
@@ -5487,8 +5572,9 @@ async def get_decay_preview(
             })
 
         if cfg.apply_score_decay and days_silent >= 1:
-            decay_amount = cfg.score_decay_per_day * min(days_silent, 30)
-            new_score = max(0.0, old_score - decay_amount)
+            safe_decay_per_day = max(0.0, min(float(cfg.score_decay_per_day or 3.0), 100.0))
+            decay_amount = safe_decay_per_day * min(days_silent, 30)
+            new_score = max(0.0, min(100.0, old_score - decay_amount))
             if abs(new_score - old_score) >= 0.5:
                 pending.append({
                     "type": "score",

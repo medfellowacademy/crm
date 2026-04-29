@@ -70,7 +70,7 @@ const UsersPage = () => {
   // Fetch leads
   const { data: leadsData } = useQuery({
     queryKey: ['leads'],
-    queryFn: () => leadsAPI.getAll().then(res => res.data)
+    queryFn: () => leadsAPI.getAll({ limit: 500 }).then(res => res.data)
   });
   
   const leads = leadsData?.leads || [];

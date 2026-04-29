@@ -4,6 +4,7 @@ const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://medfellow-crm-api
 
 const api = axios.create({
   baseURL: API_BASE_URL,
+  timeout: 15000,          // 15 s — prevents requests hanging indefinitely
   headers: {
     'Content-Type': 'application/json',
   },

@@ -408,7 +408,7 @@ const ScoreDecayPage = () => {
     mutationFn: (data) => decayAPI.updateConfig(data),
     onSuccess: () => {
       message.success('Configuration saved!');
-      queryClient.invalidateQueries(['decay-config']);
+      queryClient.invalidateQueries({ queryKey: ['decay-config'] });
       refetchPreview();
     },
     onError: (e) => message.error(e.message),
@@ -421,9 +421,9 @@ const ScoreDecayPage = () => {
       message.success(
         `Cycle complete — ${d.downgraded} downgraded, ${d.score_decayed} scores decayed`
       );
-      queryClient.invalidateQueries(['decay-log']);
-      queryClient.invalidateQueries(['decay-preview']);
-      queryClient.invalidateQueries(['leads']);
+      queryClient.invalidateQueries({ queryKey: ['decay-log'] });
+      queryClient.invalidateQueries({ queryKey: ['decay-preview'] });
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
     },
     onError: (e) => message.error(e.message),
   });

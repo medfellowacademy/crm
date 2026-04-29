@@ -52,7 +52,7 @@ const SmartNotifications = () => {
     
     ws.onmessage = (event) => {
       const notification = JSON.parse(event.data);
-      queryClient.invalidateQueries(['notifications']);
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
       
       // Show browser notification
       if ('Notification' in window && Notification.permission === 'granted') {
@@ -79,7 +79,7 @@ const SmartNotifications = () => {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries(['notifications']);
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
     },
   });
 
@@ -98,7 +98,7 @@ const SmartNotifications = () => {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries(['notifications']);
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
     },
   });
 
@@ -115,7 +115,7 @@ const SmartNotifications = () => {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries(['notifications']);
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
     },
   });
 

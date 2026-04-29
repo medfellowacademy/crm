@@ -58,7 +58,7 @@ const ChatInterface = ({ visible, onClose, lead, type = 'whatsapp' }) => {
     },
     onSuccess: () => {
       setMessage('');
-      queryClient.invalidateQueries(['chat-history', lead?.lead_id, type]);
+      queryClient.invalidateQueries({ queryKey: ['chat-history', lead?.lead_id, type] });
       message.success('Message sent successfully!');
     },
     onError: (error) => {

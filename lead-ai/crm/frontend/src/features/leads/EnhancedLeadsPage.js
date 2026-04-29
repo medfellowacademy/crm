@@ -17,7 +17,7 @@ const EnhancedLeadsPage = () => {
 
   const { data: leads, isLoading } = useQuery({
     queryKey: ['leads', selectedSegment],
-    queryFn: () => leadsAPI.getAll().then(res => res.data?.leads || []),
+    queryFn: () => leadsAPI.getAll({ limit: 500, skip: 0 }).then(res => res.data?.leads || []),
   });
 
   const filteredLeads = leads?.filter(lead => {

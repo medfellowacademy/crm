@@ -78,7 +78,7 @@ const LeadAnalysisPage = () => {
   // Fetch data
   const { data: leadsData, isLoading: leadsLoading, refetch: refetchLeads } = useQuery({
     queryKey: ['leads'],
-    queryFn: () => leadsAPI.getAll().then(res => res.data)
+    queryFn: () => leadsAPI.getAll({ limit: 2000 }).then(res => res.data)
   });
 
   const { data: usersData, isLoading: usersLoading } = useQuery({

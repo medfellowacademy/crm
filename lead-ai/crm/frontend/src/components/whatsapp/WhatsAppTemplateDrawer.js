@@ -151,7 +151,7 @@ const ComposePanel = ({ tpl, lead, onSent, onBack }) => {
         content: `✅ Template "${tpl.name}" sent to ${res.data?.sent_to || lead.phone}`,
         duration: 4,
       });
-      queryClient.invalidateQueries(['lead', lead.lead_id]);
+      queryClient.invalidateQueries({ queryKey: ['lead', lead.lead_id] });
       onSent?.();
     },
     onError: (err) => {
@@ -318,7 +318,7 @@ const TemplateFormModal = ({ open, onClose, editing, onSaved }) => {
         : waTemplatesAPI.create(data),
     onSuccess: () => {
       message.success(editing ? 'Template updated!' : 'Template created!');
-      queryClient.invalidateQueries(['wa-templates']);
+      queryClient.invalidateQueries({ queryKey: ['wa-templates'] });
       onSaved?.();
       onClose();
     },
@@ -403,7 +403,7 @@ const WhatsAppTemplateDrawer = ({ open, onClose, lead }) => {
     mutationFn: (id) => waTemplatesAPI.delete(id),
     onSuccess: () => {
       message.success('Template deleted');
-      queryClient.invalidateQueries(['wa-templates']);
+      queryClient.invalidateQueries({ queryKey: ['wa-templates'] });
     },
     onError: (e) => message.error(e.response?.data?.detail || e.message),
   });

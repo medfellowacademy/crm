@@ -85,7 +85,7 @@ CREATE POLICY "Users can view notes for their leads"
   USING (
     EXISTS (
       SELECT 1 FROM leads 
-      WHERE leads.id = notes.lead_db_id 
+      WHERE leads.id = notes.lead_id   -- fixed: was lead_db_id (wrong column name)
       AND (
         leads.assigned_to = (auth.jwt()->>'email')
         OR (auth.jwt()->>'role') IN ('Super Admin', 'Manager', 'Team Leader')

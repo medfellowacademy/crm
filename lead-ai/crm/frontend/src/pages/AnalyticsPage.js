@@ -86,9 +86,12 @@ const AnalyticsPage = () => {
     queryFn: () => analyticsAPI.getConversionFunnel().then(res => res.data),
   });
 
+  // Fetching up to 2000 leads for chart data (source & course distribution).
+  // These are lightweight columns only — no heavy AI text fields.
   const { data: leads } = useQuery({
-    queryKey: ['allLeads'],
-    queryFn: () => leadsAPI.getAll().then(res => res.data?.leads || []),
+    queryKey: ['analytics-leads-sample'],
+    queryFn: () => leadsAPI.getAll({ limit: 2000, skip: 0 }).then(res => res.data?.leads || []),
+    staleTime: 5 * 60 * 1000,  // charts tolerate slightly stale data
   });
 
   const { data: counselors } = useQuery({

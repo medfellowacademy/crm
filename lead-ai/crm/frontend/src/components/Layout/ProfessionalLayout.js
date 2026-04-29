@@ -171,7 +171,7 @@ const ProfessionalLayout = ({ children }) => {
     if (route === '/leads' || route === '/pipeline' || route === '/lead-analysis') {
       queryClient.prefetchQuery({
         queryKey: ['prefetch', 'leads'],
-        queryFn: () => leadsAPI.getAll().then(r => r.data),
+        queryFn: () => leadsAPI.getAll({ limit: 500 }).then(r => r.data),
         staleTime: stale,
       });
     }

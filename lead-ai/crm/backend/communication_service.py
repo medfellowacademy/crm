@@ -19,7 +19,13 @@ class EmailService:
     """Email automation using Resend API"""
     
     def __init__(self):
-        self.api_key = os.getenv("RESEND_API_KEY", "re_demo_key")
+        self.api_key = os.getenv("RESEND_API_KEY", "")
+        if not self.api_key:
+            import logging
+            logging.getLogger(__name__).warning(
+                "⚠️ RESEND_API_KEY is not set — email sending will be disabled. "
+                "Set RESEND_API_KEY in your .env file."
+            )
         self.from_email = os.getenv("FROM_EMAIL", "crm@yourdomain.com")
         self.base_url = "https://api.resend.com"
         
@@ -32,7 +38,14 @@ class EmailService:
         reply_to: Optional[str] = None
     ) -> Dict:
         """Send email via Resend API"""
-        
+
+        if not self.api_key:
+            return {
+                "success": False,
+                "error": "RESEND_API_KEY is not configured. Email sending is disabled.",
+                "provider": "resend"
+            }
+
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.post(

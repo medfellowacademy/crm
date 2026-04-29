@@ -47,12 +47,14 @@ SQLALCHEMY_DATABASE_URL = get_database_url()
 
 # Create engine with appropriate settings
 if SQLALCHEMY_DATABASE_URL.startswith("postgresql"):
-    # PostgreSQL (Supabase) configuration
+    # PostgreSQL (Supabase) configuration — sized for production load
     engine = create_engine(
         SQLALCHEMY_DATABASE_URL,
         pool_pre_ping=True,
-        pool_size=5,
-        max_overflow=10,
+        pool_size=15,       # increased from 5 to handle concurrent requests
+        max_overflow=20,    # increased from 10; total max = 35 connections
+        pool_timeout=30,    # wait up to 30s for a free connection
+        pool_recycle=1800,  # recycle connections every 30 min to avoid stale connections
         echo=False
     )
 else:
