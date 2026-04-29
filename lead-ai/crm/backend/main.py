@@ -2476,18 +2476,20 @@ async def get_courses(
     skip: int = 0,
     limit: int = 100,
     category: Optional[str] = None,
-    is_active: bool = True,
-    db: Session = Depends(get_db)
+    is_active: bool = True
 ):
     """Get courses with filters (cached for 1 hour)"""
+    if not supabase_data.client:
+        return []
     
-    query = db.query(DBCourse).filter(DBCourse.is_active == is_active)
-    
-    if category:
-        query = query.filter(DBCourse.category == category)
-    
-    courses = query.offset(skip).limit(limit).all()
-    return courses
+    try:
+        courses = supabase_data.get_courses(is_active=is_active)
+        if category:
+            courses = [c for c in courses if c.get('category') == category]
+        return courses[skip:skip+limit]
+    except Exception as e:
+        logger.error(f"Error fetching courses: {e}")
+        return []
 
 # ============================================================================
 # API ENDPOINTS - DASHBOARD & ANALYTICS
@@ -2687,93 +2689,92 @@ async def get_followups_today(request: Request, assigned_to: Optional[str] = Non
 
 @app.get("/api/dashboard/stats", response_model=DashboardStats)
 @cache_async_result(STATS_CACHE, "dashboard_stats")
-async def get_dashboard_stats(db: Session = Depends(get_db)):
+async def get_dashboard_stats():
     """Get dashboard statistics (cached for 1 minute)"""
-
-    # Single optimized aggregate query
-    now = datetime.utcnow()
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    week_start = now - timedelta(days=7)
-    month_start = now - timedelta(days=30)
+    if not supabase_data.client:
+        return DashboardStats(
+            total_leads=0, hot_leads=0, warm_leads=0, cold_leads=0, junk_leads=0,
+            total_conversions=0, conversion_rate=0, total_revenue=0, expected_revenue=0,
+            leads_today=0, leads_this_week=0, leads_this_month=0, avg_ai_score=0
+        )
     
-    stats = db.query(
-        func.count(DBLead.id).label('total'),
-        func.count(case((DBLead.ai_segment == LeadSegment.HOT, 1))).label('hot'),
-        func.count(case((DBLead.ai_segment == LeadSegment.WARM, 1))).label('warm'),
-        func.count(case((DBLead.ai_segment == LeadSegment.COLD, 1))).label('cold'),
-        func.count(case((DBLead.ai_segment == LeadSegment.JUNK, 1))).label('junk'),
-        func.count(case((DBLead.status == LeadStatus.ENROLLED, 1))).label('conversions'),
-        func.sum(DBLead.actual_revenue).label('revenue'),
-        func.sum(DBLead.expected_revenue).label('expected'),
-        func.avg(DBLead.ai_score).label('avg_score'),
-        func.count(case((DBLead.created_at >= today_start, 1))).label('today'),
-        func.count(case((DBLead.created_at >= week_start, 1))).label('week'),
-        func.count(case((DBLead.created_at >= month_start, 1))).label('month'),
-    ).first()
-    
-    total_leads = stats.total or 0
-    hot_leads = stats.hot or 0
-    warm_leads = stats.warm or 0
-    cold_leads = stats.cold or 0
-    junk_leads = stats.junk or 0
-    total_conversions = stats.conversions or 0
-    conversion_rate = (total_conversions / total_leads * 100) if total_leads > 0 else 0
-    total_revenue = stats.revenue or 0
-    expected_revenue = stats.expected or 0
-    avg_score = stats.avg_score or 0
-    leads_today = stats.today or 0
-    leads_this_week = stats.week or 0
-    leads_this_month = stats.month or 0
-    
-    return DashboardStats(
-        total_leads=total_leads,
-        hot_leads=hot_leads,
-        warm_leads=warm_leads,
-        cold_leads=cold_leads,
-        junk_leads=junk_leads,
-        total_conversions=total_conversions,
-        conversion_rate=conversion_rate,
-        total_revenue=total_revenue,
-        expected_revenue=expected_revenue,
-        leads_today=leads_today,
-        leads_this_week=leads_this_week,
-        leads_this_month=leads_this_month,
+    try:
+        # Get basic stats from Supabase
+        basic_stats = supabase_data.get_dashboard_stats()
+        
+        # Get time-based stats
+        now = datetime.utcnow()
+        today_start = f"{now.date().isoformat()}T00:00:00"
+        week_start = (now - timedelta(days=7)).isoformat()
+        month_start = (now - timedelta(days=30)).isoformat()
+        
+        today_resp = supabase_data.client.table('leads').select('id', count='exact').gte('created_at', today_start).execute()
+        week_resp = supabase_data.client.table('leads').select('id', count='exact').gte('created_at', week_start).execute()
+        month_resp = supabase_data.client.table('leads').select('id', count='exact').gte('created_at', month_start).execute()
+        
+        # Get expected revenue
+        revenue_resp = supabase_data.client.table('leads').select('expected_revenue').execute()
+        expected_revenue = sum(l.get('expected_revenue', 0) or 0 for l in (revenue_resp.data or []))
+        
+        # Get avg score
+        score_resp = supabase_data.client.table('leads').select('ai_score').not_.is_('ai_score', 'null').execute()
+        scores = [l.get('ai_score', 0) for l in (score_resp.data or []) if l.get('ai_score')]
+        avg_score = sum(scores) / len(scores) if scores else 0
+        
+        return DashboardStats(
+            total_leads=basic_stats['total'],
+            hot_leads=basic_stats['hot'],
+            warm_leads=basic_stats['warm'],
+            cold_leads=basic_stats['cold'],
+            junk_leads=basic_stats['junk'],
+            total_conversions=basic_stats['conversions'],
+            conversion_rate=basic_stats['conversion_rate'],
+            total_revenue=basic_stats['revenue'],
+            expected_revenue=round(expected_revenue, 2),
+            leads_today=today_resp.count if hasattr(today_resp, 'count') else 0,
+            leads_this_week=week_resp.count if hasattr(week_resp, 'count') else 0,
+            leads_this_month=month_resp.count if hasattr(month_resp, 'count') else 0,
         avg_ai_score=avg_score
     )
 
 @app.get("/api/counselors", response_model=List[CounselorResponse])
-async def get_counselors(db: Session = Depends(get_db)):
+async def get_counselors():
     """Get all counselors from users table"""
-    # Query users table instead of legacy counselors table
-    users = db.query(DBUser).filter(
-        DBUser.role.in_(["Counselor", "Team Leader", "Manager"]),
-        DBUser.is_active == True
-    ).all()
+    if not supabase_data.client:
+        return []
+    
+    try:
+        # Get users with counselor roles
+        all_users = supabase_data.get_all_users()
+        users = [u for u in all_users if u.get('role') in ['Counselor', 'Team Leader', 'Manager'] and u.get('is_active')]
+        
+        # Get all leads for stats calculation
+        all_leads_resp = supabase_data.client.table('leads').select('assigned_to,status').execute()
+        all_leads = all_leads_resp.data if all_leads_resp.data else []
+        
+        counselors = []
+        for user in users:
+            user_leads = [l for l in all_leads if l.get('assigned_to') == user.get('full_name')]
+            total_leads = len(user_leads)
+            total_conversions = sum(1 for l in user_leads if l.get('status') == 'Enrolled')
 
-    # Convert users to counselor format
-    counselors = []
-    for user in users:
-        # Calculate stats from leads
-        total_leads = db.query(DBLead).filter(DBLead.assigned_to == user.full_name).count()
-        total_conversions = db.query(DBLead).filter(
-            DBLead.assigned_to == user.full_name,
-            DBLead.status == LeadStatus.ENROLLED
-        ).count()
+            counselors.append({
+                "id": user.get('id'),
+                "name": user.get('full_name'),
+                "email": user.get('email'),
+                "phone": user.get('phone') or "",
+                "is_active": user.get('is_active'),
+                "specialization": user.get('role'),
+                "total_leads": total_leads,
+                "total_conversions": total_conversions,
+                "conversion_rate": round((total_conversions / total_leads * 100) if total_leads > 0 else 0, 1),
+                "created_at": user.get('created_at')
+            })
 
-        counselors.append({
-            "id": user.id,
-            "name": user.full_name,
-            "email": user.email,
-            "phone": user.phone or "",
-            "is_active": user.is_active,
-            "specialization": user.role,
-            "total_leads": total_leads,
-            "total_conversions": total_conversions,
-            "conversion_rate": (total_conversions / total_leads * 100) if total_leads > 0 else 0,
-            "created_at": user.created_at
-        })
-
-    return counselors
+        return counselors
+    except Exception as e:
+        logger.error(f"Error fetching counselors: {e}")
+        return []
 
 
 @app.get("/api/counselors/performance")
@@ -2848,10 +2849,17 @@ async def get_counselor_performance(db: Session = Depends(get_db)):
 # ============================================================================
 
 @app.get("/api/users")
-async def get_users(db: Session = Depends(get_db)):
+async def get_users():
     """Get all users in the organization"""
-    users = db.query(DBUser).order_by(DBUser.id).all()
-    return {"users": users, "total": len(users)}
+    if not supabase_data.client:
+        return {"users": [], "total": 0}
+    
+    try:
+        users = supabase_data.get_all_users()
+        return {"users": users, "total": len(users)}
+    except Exception as e:
+        logger.error(f"Error fetching users: {e}")
+        return {"users": [], "total": 0}
 
 @app.get("/api/users/{user_id}", response_model=UserResponse)
 async def get_user(user_id: int, db: Session = Depends(get_db)):
@@ -5333,19 +5341,18 @@ async def _decay_scheduler_loop():
 
 @app.get("/api/admin/decay-config")
 async def get_decay_config(
-    db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    cfg = _get_decay_config(db)
+    # Return default decay config (requires Supabase table migration)
     return {
-        "enabled":              cfg.enabled,
-        "hot_to_warm_hours":    cfg.hot_to_warm_hours,
-        "warm_to_stale_hours":  cfg.warm_to_stale_hours,
-        "score_decay_per_day":  cfg.score_decay_per_day,
-        "apply_score_decay":    cfg.apply_score_decay,
-        "check_interval_hours": cfg.check_interval_hours,
-        "updated_at":           cfg.updated_at.isoformat() if cfg.updated_at else None,
-        "updated_by":           cfg.updated_by,
+        "enabled":              True,
+        "hot_to_warm_hours":    72,
+        "warm_to_stale_hours":  168,
+        "score_decay_per_day":  0.5,
+        "apply_score_decay":    True,
+        "check_interval_hours": 6,
+        "updated_at":           None,
+        "updated_by":           "System",
     }
 
 
@@ -5669,30 +5676,38 @@ def _render_template(body: str, variables: dict) -> str:
 @app.get("/api/wa-templates")
 async def list_wa_templates(
     category: Optional[str] = None,
-    db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
     """Return all active templates, optionally filtered by category."""
-    import json
-    q = db.query(DBWATemplate).filter(DBWATemplate.is_active == True)
-    if category:
-        q = q.filter(DBWATemplate.category == category)
-    rows = q.order_by(DBWATemplate.category, DBWATemplate.id).all()
-    return [
-        {
-            "id":          t.id,
-            "name":        t.name,
-            "category":    t.category,
-            "emoji":       t.emoji or "💬",
-            "description": t.description or "",
-            "body":        t.body,
-            "variables":   json.loads(t.variables) if t.variables else [],
-            "is_builtin":  t.is_builtin,
-            "created_at":  t.created_at.isoformat() if t.created_at else None,
-            "created_by":  t.created_by,
-        }
-        for t in rows
-    ]
+    if not supabase_data.client:
+        return []
+    
+    try:
+        import json
+        query = supabase_data.client.table('whatsapp_templates').select('*').eq('is_active', True)
+        if category:
+            query = query.eq('category', category)
+        response = query.order('category').order('id').execute()
+        rows = response.data if response.data else []
+        
+        return [
+            {
+                "id":          t.get('id'),
+                "name":        t.get('name'),
+                "category":    t.get('category'),
+                "emoji":       t.get('emoji') or "💬",
+                "description": t.get('description') or "",
+                "body":        t.get('body'),
+                "variables":   json.loads(t.get('variables')) if t.get('variables') else [],
+                "is_builtin":  t.get('is_builtin'),
+                "created_at":  t.get('created_at'),
+                "created_by":  t.get('created_by'),
+            }
+            for t in rows
+        ]
+    except Exception as e:
+        logger.error(f"Error fetching WhatsApp templates: {e}")
+        return []
 
 
 @app.post("/api/wa-templates")
