@@ -393,6 +393,108 @@ class SupabaseDataLayer:
                 'total': 0, 'hot': 0, 'warm': 0, 'cold': 0, 'junk': 0,
                 'conversions': 0, 'revenue': 0, 'conversion_rate': 0
             }
+    
+    # ========================================================================
+    # HOSPITALS CRUD
+    # ========================================================================
+    
+    def create_hospital(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Create a new hospital"""
+        try:
+            response = self.client.table('hospitals').insert(data).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Error creating hospital: {e}")
+            raise
+    
+    def update_hospital(self, hospital_id: int, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update hospital by ID"""
+        try:
+            response = self.client.table('hospitals').update(data).eq('id', hospital_id).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Error updating hospital: {e}")
+            return None
+    
+    def delete_hospital(self, hospital_id: int) -> bool:
+        """Delete hospital by ID"""
+        try:
+            self.client.table('hospitals').delete().eq('id', hospital_id).execute()
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting hospital: {e}")
+            return False
+    
+    # ========================================================================
+    # COURSES CRUD
+    # ========================================================================
+    
+    def create_course(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Create a new course"""
+        try:
+            response = self.client.table('courses').insert(data).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Error creating course: {e}")
+            raise
+    
+    def update_course(self, course_id: int, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update course by ID"""
+        try:
+            response = self.client.table('courses').update(data).eq('id', course_id).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Error updating course: {e}")
+            return None
+    
+    def delete_course(self, course_id: int) -> bool:
+        """Delete course by ID"""
+        try:
+            self.client.table('courses').delete().eq('id', course_id).execute()
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting course: {e}")
+            return False
+    
+    # ========================================================================
+    # USERS CRUD
+    # ========================================================================
+    
+    def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
+        """Get user by numeric ID"""
+        try:
+            response = self.client.table('users').select('*').eq('id', user_id).limit(1).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Error getting user by ID: {e}")
+            return None
+    
+    def create_user(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Create a new user"""
+        try:
+            response = self.client.table('users').insert(data).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Error creating user: {e}")
+            raise
+    
+    def update_user(self, user_id: int, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update user by ID"""
+        try:
+            response = self.client.table('users').update(data).eq('id', user_id).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Error updating user: {e}")
+            return None
+    
+    def delete_user(self, user_id: int) -> bool:
+        """Delete user by ID"""
+        try:
+            self.client.table('users').delete().eq('id', user_id).execute()
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting user: {e}")
+            return False
 
 
 # Global instance

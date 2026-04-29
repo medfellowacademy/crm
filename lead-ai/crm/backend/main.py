@@ -2207,68 +2207,74 @@ async def get_lead_ai_summary(lead_id: str, db: Session = Depends(get_db)):
 # ============================================================================
 
 @app.post("/api/hospitals", response_model=HospitalResponse)
-async def create_hospital(hospital: HospitalCreate, db: Session = Depends(get_db)):
-    """Create hospital"""
-    from sqlalchemy.exc import IntegrityError
-
-    db_hospital = DBHospital(**hospital.dict())
-    db.add(db_hospital)
+async def create_hospital(hospital: HospitalCreate):
+    """Create hospital - SUPABASE ONLY"""
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    
     try:
-        db.commit()
-        db.refresh(db_hospital)
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="A hospital with this name already exists.")
+        payload = hospital.dict()
+        payload['created_at'] = datetime.utcnow().isoformat()
+        created = supabase_data.create_hospital(payload)
+        if not created:
+            raise HTTPException(status_code=500, detail="Failed to create hospital")
+        return created
     except Exception as e:
-        db.rollback()
+        error_msg = str(e)
+        if "duplicate key" in error_msg.lower() or "unique" in error_msg.lower():
+            raise HTTPException(status_code=409, detail="A hospital with this name already exists.")
         logger.error(f"create_hospital error: {e}")
         raise HTTPException(status_code=500, detail="Failed to create hospital.")
-
-    return db_hospital
 
 @app.get("/api/hospitals", response_model=List[HospitalResponse])
 async def get_hospitals(
     skip: int = 0,
     limit: int = 100,
     country: Optional[str] = None,
-    status: Optional[str] = None,
-    db: Session = Depends(get_db)
+    status: Optional[str] = None
 ):
-    """Get hospitals with filters"""
+    """Get hospitals with filters - SUPABASE ONLY"""
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
     
-    query = db.query(DBHospital)
-    
-    if country:
-        query = query.filter(DBHospital.country == country)
-    if status:
-        query = query.filter(DBHospital.collaboration_status == status)
-    
-    hospitals = query.offset(skip).limit(limit).all()
-    return hospitals
+    try:
+        query = supabase_data.client.table('hospitals').select('*')
+        
+        if country:
+            query = query.eq('country', country)
+        if status:
+            query = query.eq('collaboration_status', status)
+        
+        response = query.range(skip, skip + limit - 1).execute()
+        return response.data if response.data else []
+    except Exception as e:
+        logger.error(f"Error getting hospitals: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch hospitals")
 
 # ============================================================================
 # API ENDPOINTS - COURSES
 # ============================================================================
 
 @app.post("/api/courses", response_model=CourseResponse)
-async def create_course(course: CourseCreate, db: Session = Depends(get_db)):
-    """Create course"""
-    from sqlalchemy.exc import IntegrityError
-
-    db_course = DBCourse(**course.dict())
-    db.add(db_course)
+async def create_course(course: CourseCreate):
+    """Create course - SUPABASE ONLY"""
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    
     try:
-        db.commit()
-        db.refresh(db_course)
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="A course with this name already exists.")
+        payload = course.dict()
+        payload['created_at'] = datetime.utcnow().isoformat()
+        created = supabase_data.create_course(payload)
+        if not created:
+            raise HTTPException(status_code=500, detail="Failed to create course")
+        invalidate_cache(COURSE_CACHE)
+        return created
     except Exception as e:
-        db.rollback()
+        error_msg = str(e)
+        if "duplicate key" in error_msg.lower() or "unique" in error_msg.lower():
+            raise HTTPException(status_code=409, detail="A course with this name already exists.")
         logger.error(f"create_course error: {e}")
         raise HTTPException(status_code=500, detail="Failed to create course.")
-
-    return db_course
 
 @app.get("/api/courses", response_model=List[CourseResponse])
 @cache_async_result(COURSE_CACHE, "courses_list")
@@ -2662,69 +2668,85 @@ async def get_users():
         return {"users": [], "total": 0}
 
 @app.get("/api/users/{user_id}", response_model=UserResponse)
-async def get_user(user_id: int, db: Session = Depends(get_db)):
-    """Get a specific user by ID"""
-    user = db.query(DBUser).filter(DBUser.id == user_id).first()
+async def get_user(user_id: int):
+    """Get a specific user by ID - SUPABASE ONLY"""
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    
+    user = supabase_data.get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return user
 
 @app.post("/api/users", response_model=UserResponse)
-async def create_user(user: UserCreate, db: Session = Depends(get_db)):
-    """Create a new user"""
+async def create_user(user: UserCreate):
+    """Create a new user - SUPABASE ONLY"""
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
     
     # Check if email already exists
-    existing = db.query(DBUser).filter(DBUser.email == user.email).first()
+    existing = supabase_data.get_user_by_email(user.email)
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
     
     # Hash the password for security
     hashed_password = pwd_context.hash(user.password)
-    db_user = DBUser(
-        full_name=user.full_name,
-        email=user.email,
-        phone=user.phone,
-        password=hashed_password,
-        role=user.role,
-        reports_to=user.reports_to,
-        is_active=user.is_active,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
-    )
     
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
-    return db_user
+    payload = {
+        "full_name": user.full_name,
+        "email": user.email,
+        "phone": user.phone,
+        "password": hashed_password,
+        "role": user.role,
+        "reports_to": user.reports_to,
+        "is_active": user.is_active,
+        "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    
+    try:
+        db_user = supabase_data.create_user(payload)
+        if not db_user:
+            raise HTTPException(status_code=500, detail="Failed to create user")
+        return db_user
+    except Exception as e:
+        logger.error(f"Error creating user: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create user")
 
 @app.put("/api/users/{user_id}", response_model=UserResponse)
-async def update_user(user_id: int, user: UserUpdate, db: Session = Depends(get_db)):
-    """Update user information"""
+async def update_user(user_id: int, user: UserUpdate):
+    """Update user information - SUPABASE ONLY"""
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
     
-    db_user = db.query(DBUser).filter(DBUser.id == user_id).first()
+    # Check if user exists
+    db_user = supabase_data.get_user_by_id(user_id)
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
     
     # Update fields
     update_data = user.dict(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(db_user, field, value)
+    update_data['updated_at'] = datetime.utcnow().isoformat()
     
-    db_user.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(db_user)
-    return db_user
+    updated = supabase_data.update_user(user_id, update_data)
+    if not updated:
+        raise HTTPException(status_code=500, detail="Failed to update user")
+    return updated
 
 @app.delete("/api/users/{user_id}")
-async def delete_user(user_id: int, db: Session = Depends(get_db)):
-    """Delete a user"""
+async def delete_user(user_id: int):
+    """Delete a user - SUPABASE ONLY"""
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
     
-    db_user = db.query(DBUser).filter(DBUser.id == user_id).first()
+    # Check if user exists
+    db_user = supabase_data.get_user_by_id(user_id)
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    db.delete(db_user)
-    db.commit()
+    success = supabase_data.delete_user(user_id)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to delete user")
     return {"message": "User deleted successfully"}
 
 @app.get("/api/analytics/revenue-by-country")
@@ -3544,56 +3566,32 @@ async def ai_status():
 # ============================================================================
 
 @app.get("/health")
-async def health_check(db: Session = Depends(get_db)):
-    """Health check endpoint with database and Supabase status"""
+async def health_check():
+    """Health check endpoint with Supabase status - SUPABASE ONLY"""
     
     health_status = {
         "status": "healthy",
         "version": "2.1.0",
         "timestamp": datetime.utcnow().isoformat(),
-        "database": "unknown",
+        "database": "supabase",
         "supabase": "not_configured",
         "components": {}
     }
     
-    # Check database type
-    if SQLALCHEMY_DATABASE_URL.startswith("postgresql"):
-        health_status["database"] = "postgresql (supabase)"
-        
-        # Check connection pool health
-        try:
-            pool = engine.pool
-            health_status["components"]["database_pool"] = {
-                "status": "healthy",
-                "size": pool.size(),
-                "checked_in": pool.checkedin(),
-                "overflow": pool.overflow(),
-                "checked_out": pool.checkedout()
-            }
-        except:
-            pass
-    else:
-        health_status["database"] = "sqlite (local)"
-    
-    # Test database connection
-    try:
-        db.execute(text("SELECT 1"))
-        health_status["database_connection"] = "connected"
-    except Exception as e:
-        health_status["database_connection"] = "disconnected"
-        health_status["status"] = "degraded"
-        logger.error(f"Database health check failed: {e}")
-    
-    # Test Supabase client if configured
+    # Test Supabase client
     if supabase_manager.client:
         health_status["supabase"] = "configured"
         try:
-            # Simple connection test
+            # Simple connection test - count leads
             supabase_manager.client.table('leads').select("count", count='exact').limit(0).execute()
             health_status["supabase_connection"] = "connected"
         except Exception as e:
             health_status["supabase_connection"] = "disconnected"
-            logger.warning(f"Supabase health check failed: {e}")
+            health_status["status"] = "degraded"
+            logger.error(f"Supabase health check failed: {e}")
+    else:
+        health_status["status"] = "unhealthy"
+        health_status["supabase"] = "not_configured"
     
     # Test AI assistant
     health_status["ai_assistant"] = "available" if ai_assistant.is_available() else "not_configured"
@@ -3612,17 +3610,21 @@ async def health_check(db: Session = Depends(get_db)):
         }
     except:
         pass
+    
     if ai_assistant.is_available():
         health_status["ai_model"] = ai_assistant.model
     
     return health_status
 
 @app.get("/ready")
-async def readiness_check(db: Session = Depends(get_db)):
-    """Readiness probe for Kubernetes/deployment orchestration"""
+async def readiness_check():
+    """Readiness probe for Kubernetes/deployment orchestration - SUPABASE ONLY"""
     try:
-        # Check critical dependencies
-        db.execute(text("SELECT 1"))
+        # Check Supabase connection
+        if not supabase_manager.client:
+            raise HTTPException(status_code=503, detail="Database not configured")
+        
+        supabase_manager.client.table('leads').select("count", count='exact').limit(0).execute()
         
         # Verify model is loaded (optional for readiness)
         model_status = "loaded" if get_cached_model() else "not_loaded"
@@ -4227,42 +4229,55 @@ async def mark_all_notifications_read():
 # ============================================================
 
 @app.put("/api/hospitals/{hospital_id}", response_model=HospitalResponse)
-async def update_hospital(hospital_id: int, data: HospitalCreate, db: Session = Depends(get_db)):
-    """Update an existing hospital record."""
-    from sqlalchemy.exc import IntegrityError
-
-    hospital = db.query(DBHospital).filter(DBHospital.id == hospital_id).first()
-    if not hospital:
-        raise HTTPException(status_code=404, detail="Hospital not found")
-    for field, value in data.dict(exclude_unset=True).items():
-        setattr(hospital, field, value)
+async def update_hospital(hospital_id: int, data: HospitalCreate):
+    """Update an existing hospital record - SUPABASE ONLY"""
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    
     try:
-        db.commit()
-        db.refresh(hospital)
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="A hospital with this name already exists.")
+        # Check if hospital exists
+        existing = supabase_data.client.table('hospitals').select('id').eq('id', hospital_id).limit(1).execute()
+        if not existing.data:
+            raise HTTPException(status_code=404, detail="Hospital not found")
+        
+        # Update hospital
+        payload = data.dict(exclude_unset=True)
+        updated = supabase_data.update_hospital(hospital_id, payload)
+        if not updated:
+            raise HTTPException(status_code=500, detail="Failed to update hospital")
+        return updated
+    except HTTPException:
+        raise
     except Exception as e:
-        db.rollback()
+        error_msg = str(e)
+        if "duplicate key" in error_msg.lower() or "unique" in error_msg.lower():
+            raise HTTPException(status_code=409, detail="A hospital with this name already exists.")
         logger.error(f"update_hospital error: {e}")
         raise HTTPException(status_code=500, detail="Failed to update hospital.")
-    return hospital
 
 
 @app.delete("/api/hospitals/{hospital_id}")
-async def delete_hospital(hospital_id: int, db: Session = Depends(get_db)):
-    """Delete a hospital record."""
-    hospital = db.query(DBHospital).filter(DBHospital.id == hospital_id).first()
-    if not hospital:
-        raise HTTPException(status_code=404, detail="Hospital not found")
+async def delete_hospital(hospital_id: int):
+    """Delete a hospital record - SUPABASE ONLY"""
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    
     try:
-        db.delete(hospital)
-        db.commit()
+        # Check if hospital exists
+        existing = supabase_data.client.table('hospitals').select('id').eq('id', hospital_id).limit(1).execute()
+        if not existing.data:
+            raise HTTPException(status_code=404, detail="Hospital not found")
+        
+        # Delete hospital
+        success = supabase_data.delete_hospital(hospital_id)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to delete hospital")
+        return {"message": "Hospital deleted successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
-        db.rollback()
         logger.error(f"delete_hospital error: {e}")
         raise HTTPException(status_code=409, detail="Cannot delete hospital — it may be referenced by existing leads.")
-    return {"message": "Hospital deleted successfully"}
 
 
 # ============================================================
@@ -4270,42 +4285,57 @@ async def delete_hospital(hospital_id: int, db: Session = Depends(get_db)):
 # ============================================================
 
 @app.put("/api/courses/{course_id}", response_model=CourseResponse)
-async def update_course(course_id: int, data: CourseCreate, db: Session = Depends(get_db)):
-    """Update an existing course record."""
-    from sqlalchemy.exc import IntegrityError
-
-    course = db.query(DBCourse).filter(DBCourse.id == course_id).first()
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
-    for field, value in data.dict(exclude_unset=True).items():
-        setattr(course, field, value)
+async def update_course(course_id: int, data: CourseCreate):
+    """Update an existing course record - SUPABASE ONLY"""
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    
     try:
-        db.commit()
-        db.refresh(course)
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="A course with this name already exists.")
+        # Check if course exists
+        existing = supabase_data.client.table('courses').select('id').eq('id', course_id).limit(1).execute()
+        if not existing.data:
+            raise HTTPException(status_code=404, detail="Course not found")
+        
+        # Update course
+        payload = data.dict(exclude_unset=True)
+        updated = supabase_data.update_course(course_id, payload)
+        if not updated:
+            raise HTTPException(status_code=500, detail="Failed to update course")
+        invalidate_cache(COURSE_CACHE)
+        return updated
+    except HTTPException:
+        raise
     except Exception as e:
-        db.rollback()
+        error_msg = str(e)
+        if "duplicate key" in error_msg.lower() or "unique" in error_msg.lower():
+            raise HTTPException(status_code=409, detail="A course with this name already exists.")
         logger.error(f"update_course error: {e}")
         raise HTTPException(status_code=500, detail="Failed to update course.")
-    return course
 
 
 @app.delete("/api/courses/{course_id}")
-async def delete_course(course_id: int, db: Session = Depends(get_db)):
-    """Delete a course record."""
-    course = db.query(DBCourse).filter(DBCourse.id == course_id).first()
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
+async def delete_course(course_id: int):
+    """Delete a course record - SUPABASE ONLY"""
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    
     try:
-        db.delete(course)
-        db.commit()
+        # Check if course exists
+        existing = supabase_data.client.table('courses').select('id').eq('id', course_id).limit(1).execute()
+        if not existing.data:
+            raise HTTPException(status_code=404, detail="Course not found")
+        
+        # Delete course
+        success = supabase_data.delete_course(course_id)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to delete course")
+        invalidate_cache(COURSE_CACHE)
+        return {"message": "Course deleted successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
-        db.rollback()
         logger.error(f"delete_course error: {e}")
         raise HTTPException(status_code=409, detail="Cannot delete course — it may be referenced by existing leads.")
-    return {"message": "Course deleted successfully"}
 
 
 # ============================================================
@@ -4318,43 +4348,49 @@ class PasswordChangeRequest(BaseModel):
 
 
 @app.put("/api/users/{user_id}/password")
-async def change_password(user_id: int, data: PasswordChangeRequest, db: Session = Depends(get_db)):
-    """Allow a user to change their own password."""
+async def change_password(user_id: int, data: PasswordChangeRequest):
+    """Allow a user to change their own password - SUPABASE ONLY"""
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    
     import bcrypt as _bcrypt
 
-    user = db.query(DBUser).filter(DBUser.id == user_id).first()
+    user = supabase_data.get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     # Verify current password
     password_valid = False
-    if user.password:
-        if user.password.startswith('$2b$') or user.password.startswith('$2a$'):
+    if user.get('password'):
+        if user['password'].startswith('$2b$') or user['password'].startswith('$2a$'):
             try:
                 password_valid = _bcrypt.checkpw(
                     data.current_password.encode('utf-8'),
-                    user.password.encode('utf-8')
+                    user['password'].encode('utf-8')
                 )
             except Exception:
                 password_valid = False
         else:
             # plain text password (legacy)
-            password_valid = (user.password == data.current_password)
+            password_valid = (user['password'] == data.current_password)
 
     if not password_valid:
         raise HTTPException(status_code=400, detail="Current password is incorrect")
 
     # Hash new password
     try:
-        user.password = _bcrypt.hashpw(
+        new_hashed = _bcrypt.hashpw(
             data.new_password.encode('utf-8'),
             _bcrypt.gensalt()
         ).decode('utf-8')
     except Exception:
         # Fallback to plain text if bcrypt fails
-        user.password = data.new_password
+        new_hashed = data.new_password
 
-    db.commit()
+    # Update password in Supabase
+    updated = supabase_data.update_user(user_id, {'password': new_hashed})
+    if not updated:
+        raise HTTPException(status_code=500, detail="Failed to update password")
     return {"message": "Password updated successfully"}
 
 
@@ -4363,8 +4399,11 @@ class AdminPasswordResetRequest(BaseModel):
 
 
 @app.put("/api/users/{user_id}/admin-reset-password")
-async def admin_reset_password(user_id: int, data: AdminPasswordResetRequest, request: Request, db: Session = Depends(get_db)):
-    """Allow a Super Admin to reset any user's password without requiring the current password."""
+async def admin_reset_password(user_id: int, data: AdminPasswordResetRequest, request: Request):
+    """Allow a Super Admin to reset any user's password without requiring the current password - SUPABASE ONLY"""
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    
     # Verify caller is Super Admin
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
@@ -4378,9 +4417,10 @@ async def admin_reset_password(user_id: int, data: AdminPasswordResetRequest, re
             raise HTTPException(status_code=403, detail="Only Super Admins can reset user passwords")
     else:
         raise HTTPException(status_code=401, detail="Authentication required")
+    
     import bcrypt as _bcrypt
 
-    user = db.query(DBUser).filter(DBUser.id == user_id).first()
+    user = supabase_data.get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -4388,14 +4428,17 @@ async def admin_reset_password(user_id: int, data: AdminPasswordResetRequest, re
         raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
 
     try:
-        user.password = _bcrypt.hashpw(
+        new_hashed = _bcrypt.hashpw(
             data.new_password.encode('utf-8'),
             _bcrypt.gensalt()
         ).decode('utf-8')
     except Exception:
-        user.password = data.new_password
+        new_hashed = data.new_password
 
-    db.commit()
+    # Update password in Supabase
+    updated = supabase_data.update_user(user_id, {'password': new_hashed})
+    if not updated:
+        raise HTTPException(status_code=500, detail="Failed to reset password")
     return {"message": "Password reset successfully"}
 
 
