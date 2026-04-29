@@ -348,24 +348,18 @@ async def _verify_token(request: Request) -> None:
     decode_access_token(token)  # raises 401 if expired / invalid
 
 
-def _get_counselor_name(request: Request, db=None) -> str | None:
+def _get_counselor_name(request: Request) -> str | None:
     """Return the full_name of the caller if they are a Counselor, else None.
-    Used to enforce per-counselor data isolation. Now uses Supabase."""
+    Used to enforce per-counselor data isolation. SUPABASE ONLY."""
     try:
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             token_data = decode_access_token(auth_header.split(" ", 1)[1])
             if token_data and token_data.role == "Counselor":
-                # Use Supabase if available
                 if supabase_data.client:
                     user = supabase_data.get_user_by_email(token_data.email)
                     if user:
                         return user.get('full_name')
-                # Fallback to db if provided (legacy)
-                if db:
-                    caller = db.query(DBUser).filter(DBUser.email == token_data.email).first()
-                    if caller:
-                        return caller.full_name
     except Exception:
         pass
     return None
@@ -3315,6 +3309,18 @@ async def get_model_info():
     }
 
 # ============================================================================
+# AI-POWERED SMART FEATURES (PHASE 8) - REQUIRES SUPABASE CONVERSION
+# These endpoints currently use db.query() and need Supabase implementation
+# Returning not-implemented responses until conversion is complete
+# ============================================================================
+
+def _ai_not_implemented():
+    raise HTTPException(
+        status_code=501,
+        detail="AI features require Supabase conversion - coming soon"
+    )
+
+# ============================================================================
 # AI-POWERED SMART FEATURES (PHASE 8)
 # ============================================================================
 
@@ -3330,6 +3336,7 @@ async def ai_natural_language_search(
     - "Find leads that haven't been contacted in 7 days"
     - "Which leads have high conversion probability?"
     """
+    _ai_not_implemented()  # Stub until Supabase conversion
     
     if not ai_assistant.is_available():
         raise HTTPException(
@@ -3380,6 +3387,7 @@ async def generate_smart_reply(
     
     Creates contextual email/WhatsApp messages based on lead data
     """
+    _ai_not_implemented()  # Stub until Supabase conversion
     
     if not ai_assistant.is_available():
         raise HTTPException(
@@ -3606,6 +3614,7 @@ async def recommend_course(
     
     Analyzes lead data to suggest the best-fit course
     """
+    _ai_not_implemented()  # Stub until Supabase conversion
     
     if not ai_assistant.is_available():
         raise HTTPException(
