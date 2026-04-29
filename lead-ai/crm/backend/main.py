@@ -1321,7 +1321,16 @@ ai_scorer = AILeadScorer()
 # already import it from main continue to work during the migration.
 # ============================================================================
 
-# Removed: from deps import get_db - Supabase only, no local database
+# Stub function to prevent NameError during import
+# This allows endpoints with db: Session = Depends(get_db) to be defined
+# They will fail with 500 when called, but the app will start
+def get_db():
+    """Stub function - local database not supported"""
+    from fastapi import HTTPException
+    raise HTTPException(
+        status_code=500, 
+        detail="Local database not supported. This endpoint needs conversion to Supabase."
+    )
 
 # ============================================================================
 # API ENDPOINTS - AUTHENTICATION
