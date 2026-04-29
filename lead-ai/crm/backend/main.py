@@ -2661,52 +2661,7 @@ async def get_counselor_performance():
     except Exception as e:
         logger.error(f"Error getting counselor performance: {e}")
         return []
-            ).label("lost"),
-            sqlfunc.avg(DBLead.ai_score).label("avg_score"),
-            sqlfunc.sum(DBLead.actual_revenue).label("revenue"),
-            sqlfunc.sum(
-                case(
-                    (func.date(DBLead.follow_up_date) == today, 1),
-                    else_=0
-                )
-            ).label("followups_today"),
-            sqlfunc.sum(
-                case(
-                    (
-                        (DBLead.follow_up_date != None) &
-                        (DBLead.follow_up_date < now) &
-                        (DBLead.status.notin_(["Enrolled", "Not Interested", "Junk"])),
-                        1
-                    ),
-                    else_=0
-                )
-            ).label("overdue"),
-        )
-        .filter(DBLead.assigned_to != None)
-        .group_by(DBLead.assigned_to)
-        .all()
-    )
 
-    result = []
-    for r in rows:
-        total = r.total_leads or 0
-        enrolled = r.enrolled or 0
-        result.append({
-            "name": r.assigned_to,
-            "total_leads": total,
-            "enrolled": enrolled,
-            "hot_leads": r.hot_leads or 0,
-            "lost": r.lost or 0,
-            "conversion_rate": round((enrolled / total * 100), 1) if total > 0 else 0,
-            "avg_ai_score": round(r.avg_score or 0, 1),
-            "revenue": round(r.revenue or 0, 0),
-            "followups_today": r.followups_today or 0,
-            "overdue": r.overdue or 0,
-        })
-
-    # Sort by conversion rate desc
-    result.sort(key=lambda x: x["conversion_rate"], reverse=True)
-    return result
 
 # ============================================================================
 # USER MANAGEMENT ENDPOINTS
