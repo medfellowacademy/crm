@@ -2494,76 +2494,86 @@ async def get_courses(
 # ============================================================================
 
 @app.get("/api/notifications")
-async def get_notifications(db: Session = Depends(get_db)):
+async def get_notifications():
     """Real notifications: overdue follow-ups + stale hot leads"""
-    today = datetime.utcnow().date()
-    notifications = []
+    if not supabase_data.client:
+        return []
+    
+    try:
+        today = datetime.utcnow().date()
+        now_iso = datetime.utcnow().isoformat()
+        notifications = []
 
-    # Overdue follow-ups
-    overdue = (
-        db.query(DBLead)
-        .filter(
-            DBLead.follow_up_date < datetime.utcnow(),
-            DBLead.status.notin_(["Enrolled", "Not Interested", "Junk"]),
+        # Overdue follow-ups
+        overdue_resp = (
+            supabase_data.client.table('leads')
+            .select('id,lead_id,full_name,course_interested,assigned_to,follow_up_date')
+            .lt('follow_up_date', now_iso)
+            .not_.in_('status', ['Enrolled', 'Not Interested', 'Junk'])
+            .order('follow_up_date', desc=False)
+            .limit(20)
+            .execute()
         )
-        .order_by(DBLead.follow_up_date.asc())
-        .limit(20)
-        .all()
-    )
-    for lead in overdue:
-        days = (datetime.utcnow() - lead.follow_up_date).days if lead.follow_up_date else 0
-        notifications.append({
-            "type": "overdue_followup",
-            "severity": "error",
-            "title": f"Overdue follow-up — {lead.full_name}",
-            "message": f"{days} day{'s' if days != 1 else ''} overdue · {lead.course_interested or 'No course'} · {lead.assigned_to or 'Unassigned'}",
-            "lead_id": lead.id,
-            "lead_name": lead.full_name,
-        })
+        for lead in overdue_resp.data or []:
+            if lead.get('follow_up_date'):
+                follow_up_dt = datetime.fromisoformat(lead['follow_up_date'].replace('Z', '+00:00'))
+                days = (datetime.utcnow() - follow_up_dt).days
+                notifications.append({
+                    "type": "overdue_followup",
+                    "severity": "error",
+                    "title": f"Overdue follow-up — {lead['full_name']}",
+                    "message": f"{days} day{'s' if days != 1 else ''} overdue · {lead.get('course_interested') or 'No course'} · {lead.get('assigned_to') or 'Unassigned'}",
+                    "lead_id": lead.get('id'),
+                    "lead_name": lead['full_name'],
+                })
 
-    # Hot leads not contacted in 3+ days
-    three_days_ago = datetime.utcnow() - timedelta(days=3)
-    stale_hot = (
-        db.query(DBLead)
-        .filter(
-            DBLead.ai_segment == "Hot",
-            DBLead.status.notin_(["Enrolled", "Not Interested"]),
-            (DBLead.last_contact_date < three_days_ago) | (DBLead.last_contact_date == None),
+        # Hot leads not contacted in 3+ days
+        three_days_ago = (datetime.utcnow() - timedelta(days=3)).isoformat()
+        stale_hot_resp = (
+            supabase_data.client.table('leads')
+            .select('id,lead_id,full_name,course_interested,assigned_to,last_contact_date')
+            .eq('ai_segment', 'Hot')
+            .not_.in_('status', ['Enrolled', 'Not Interested'])
+            .or_(f'last_contact_date.lt.{three_days_ago},last_contact_date.is.null')
+            .limit(10)
+            .execute()
         )
-        .limit(10)
-        .all()
-    )
-    for lead in stale_hot:
-        notifications.append({
-            "type": "stale_hot_lead",
-            "severity": "warning",
-            "title": f"Hot lead going cold — {lead.full_name}",
-            "message": f"No contact in 3+ days · {lead.course_interested or 'No course'} · {lead.assigned_to or 'Unassigned'}",
-            "lead_id": lead.id,
-            "lead_name": lead.full_name,
-        })
+        for lead in stale_hot_resp.data or []:
+            notifications.append({
+                "type": "stale_hot_lead",
+                "severity": "warning",
+                "title": f"Hot lead going cold — {lead['full_name']}",
+                "message": f"No contact in 3+ days · {lead.get('course_interested') or 'No course'} · {lead.get('assigned_to') or 'Unassigned'}",
+                "lead_id": lead.get('id'),
+                "lead_name": lead['full_name'],
+            })
 
-    # Follow-ups due today
-    due_today = (
-        db.query(DBLead)
-        .filter(
-            func.date(DBLead.follow_up_date) == today,
-            DBLead.status.notin_(["Enrolled", "Not Interested", "Junk"]),
+        # Follow-ups due today
+        today_start = f"{today.isoformat()}T00:00:00"
+        today_end = f"{today.isoformat()}T23:59:59"
+        due_today_resp = (
+            supabase_data.client.table('leads')
+            .select('id,lead_id,full_name,course_interested,assigned_to,follow_up_date')
+            .gte('follow_up_date', today_start)
+            .lte('follow_up_date', today_end)
+            .not_.in_('status', ['Enrolled', 'Not Interested', 'Junk'])
+            .limit(20)
+            .execute()
         )
-        .limit(20)
-        .all()
-    )
-    for lead in due_today:
-        notifications.append({
-            "type": "followup_today",
-            "severity": "info",
-            "title": f"Follow-up due today — {lead.full_name}",
-            "message": f"{lead.course_interested or 'No course'} · {lead.assigned_to or 'Unassigned'}",
-            "lead_id": lead.id,
-            "lead_name": lead.full_name,
-        })
+        for lead in due_today_resp.data or []:
+            notifications.append({
+                "type": "followup_today",
+                "severity": "info",
+                "title": f"Follow-up due today — {lead['full_name']}",
+                "message": f"{lead.get('course_interested') or 'No course'} · {lead.get('assigned_to') or 'Unassigned'}",
+                "lead_id": lead.get('id'),
+                "lead_name": lead['full_name'],
+            })
 
-    return notifications
+        return notifications
+    except Exception as e:
+        logger.error(f"Error fetching notifications: {e}", exc_info=True)
+        return []
 
 
 @app.get("/api/audit-logs")
@@ -2593,70 +2603,86 @@ async def get_audit_logs(page: int = 1, limit: int = 50, db: Session = Depends(g
 
 
 @app.get("/api/leads/followups/today")
-async def get_followups_today(request: Request, assigned_to: Optional[str] = None, db: Session = Depends(get_db)):
+async def get_followups_today(request: Request, assigned_to: Optional[str] = None):
     """All leads with follow_up_date = today + overdue, for the daily work view"""
-    # Counselors may only see their own follow-ups
+    if not supabase_data.client:
+        return {"overdue": [], "today": [], "overdue_count": 0, "today_count": 0}
+    
     try:
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            token_data = decode_access_token(auth_header.split(" ", 1)[1])
-            if token_data and token_data.role == "Counselor":
-                caller = db.query(DBUser).filter(DBUser.email == token_data.email).first()
-                if caller:
-                    assigned_to = caller.full_name
-    except Exception:
-        pass
+        # Counselors may only see their own follow-ups
+        try:
+            auth_header = request.headers.get("Authorization", "")
+            if auth_header.startswith("Bearer "):
+                token_data = decode_access_token(auth_header.split(" ", 1)[1])
+                if token_data and token_data.role == "Counselor":
+                    # Query Supabase for user
+                    user_resp = supabase_data.client.table('users').select('full_name').eq('email', token_data.email).execute()
+                    if user_resp.data:
+                        assigned_to = user_resp.data[0].get('full_name')
+        except Exception:
+            pass
 
-    today = datetime.utcnow().date()
-    active_statuses = ["Enrolled", "Not Interested", "Junk"]
+        today = datetime.utcnow().date()
+        today_start = f"{today.isoformat()}T00:00:00"
+        today_end = f"{today.isoformat()}T23:59:59"
+        active_statuses = ["Enrolled", "Not Interested", "Junk"]
 
-    base = db.query(DBLead).filter(DBLead.status.notin_(active_statuses))
-    if assigned_to:
-        base = base.filter(DBLead.assigned_to == assigned_to)
-
-    overdue = (
-        base.filter(
-            DBLead.follow_up_date != None,
-            func.date(DBLead.follow_up_date) < today,
+        # Overdue follow-ups
+        overdue_query = (
+            supabase_data.client.table('leads')
+            .select('id,lead_id,full_name,phone,whatsapp,course_interested,status,ai_segment,ai_score,assigned_to,follow_up_date,last_contact_date,country,next_action,primary_objection,churn_risk')
+            .not_.in_('status', active_statuses)
+            .not_.is_('follow_up_date', 'null')
+            .lt('follow_up_date', today_start)
         )
-        .order_by(DBLead.follow_up_date.asc())
-        .all()
-    )
+        if assigned_to:
+            overdue_query = overdue_query.eq('assigned_to', assigned_to)
+        overdue_resp = overdue_query.order('follow_up_date', desc=False).execute()
 
-    due_today = (
-        base.filter(
-            func.date(DBLead.follow_up_date) == today,
+        # Due today
+        today_query = (
+            supabase_data.client.table('leads')
+            .select('id,lead_id,full_name,phone,whatsapp,course_interested,status,ai_segment,ai_score,assigned_to,follow_up_date,last_contact_date,country,next_action,primary_objection,churn_risk')
+            .not_.in_('status', active_statuses)
+            .gte('follow_up_date', today_start)
+            .lte('follow_up_date', today_end)
         )
-        .order_by(DBLead.follow_up_date.asc())
-        .all()
-    )
+        if assigned_to:
+            today_query = today_query.eq('assigned_to', assigned_to)
+        today_resp = today_query.order('follow_up_date', desc=False).execute()
 
-    def fmt(lead):
+        def fmt(lead):
+            return {
+                "id": lead.get('id'),
+                "lead_id": lead.get('lead_id'),
+                "full_name": lead.get('full_name'),
+                "phone": lead.get('phone'),
+                "whatsapp": lead.get('whatsapp'),
+                "course_interested": lead.get('course_interested'),
+                "status": str(lead.get('status', '')),
+                "ai_segment": str(lead.get('ai_segment', '')),
+                "ai_score": round(lead.get('ai_score') or 0, 1),
+                "assigned_to": lead.get('assigned_to'),
+                "follow_up_date": lead.get('follow_up_date'),
+                "last_contact_date": lead.get('last_contact_date'),
+                "country": lead.get('country'),
+                "next_action": lead.get('next_action'),
+                "primary_objection": lead.get('primary_objection'),
+                "churn_risk": round(lead.get('churn_risk') or 0, 2),
+            }
+
+        overdue_list = [fmt(l) for l in (overdue_resp.data or [])]
+        today_list = [fmt(l) for l in (today_resp.data or [])]
+
         return {
-            "id": lead.id,
-            "lead_id": lead.lead_id,
-            "full_name": lead.full_name,
-            "phone": lead.phone,
-            "whatsapp": lead.whatsapp,
-            "course_interested": lead.course_interested,
-            "status": lead.status.value if hasattr(lead.status, 'value') else str(lead.status or ''),
-            "ai_segment": lead.ai_segment.value if hasattr(lead.ai_segment, 'value') else str(lead.ai_segment or ''),
-            "ai_score": round(lead.ai_score or 0, 1),
-            "assigned_to": lead.assigned_to,
-            "follow_up_date": lead.follow_up_date.isoformat() if lead.follow_up_date else None,
-            "last_contact_date": lead.last_contact_date.isoformat() if lead.last_contact_date else None,
-            "country": lead.country,
-            "next_action": lead.next_action,
-            "primary_objection": lead.primary_objection,
-            "churn_risk": round(lead.churn_risk or 0, 2),
+            "overdue": overdue_list,
+            "today": today_list,
+            "overdue_count": len(overdue_list),
+            "today_count": len(today_list),
         }
-
-    return {
-        "overdue": [fmt(l) for l in overdue],
-        "today": [fmt(l) for l in due_today],
-        "overdue_count": len(overdue),
-        "today_count": len(due_today),
-    }
+    except Exception as e:
+        logger.error(f"Error fetching followups: {e}", exc_info=True)
+        return {"overdue": [], "today": [], "overdue_count": 0, "today_count": 0}
 
 
 @app.get("/api/dashboard/stats", response_model=DashboardStats)
@@ -4794,7 +4820,7 @@ async def update_sla_config(data: SLAConfigUpdate, db: Session = Depends(get_db)
 
 
 @app.get("/api/admin/sla-compliance")
-async def get_sla_compliance(db: Session = Depends(get_db)):
+async def get_sla_compliance():
     """
     Returns per-lead SLA status for three rules:
       1. first_contact  – first note logged within first_contact_hours of lead creation
@@ -4803,162 +4829,23 @@ async def get_sla_compliance(db: Session = Depends(get_db)):
 
     Aggregates by counselor and returns a breach list.
     """
-    cfg  = _get_sla_config(db)
-    now  = datetime.utcnow()
-
-    # Efficient: get first note timestamp per lead in one query
-    first_note_sq = (
-        db.query(
-            DBNote.lead_id,
-            func.min(DBNote.created_at).label("first_note_at"),
-        )
-        .group_by(DBNote.lead_id)
-        .subquery()
-    )
-
-    rows = (
-        db.query(DBLead, first_note_sq.c.first_note_at)
-        .outerjoin(first_note_sq, first_note_sq.c.lead_id == DBLead.id)
-        .all()
-    )
-
-    TERMINAL = {LeadStatus.ENROLLED, LeadStatus.NOT_INTERESTED, LeadStatus.JUNK}
-    counselor_buckets: dict = {}
-    breaches = []
-
-    for lead, first_note_at in rows:
-        counselor = lead.assigned_to or "Unassigned"
-        counselor_buckets.setdefault(counselor, {
-            "counselor": counselor,
-            "total": 0, "compliant": 0, "breached": 0, "pending": 0,
-            "response_times": [], "breach_hours": [],
-        })
-        b = counselor_buckets[counselor]
-        b["total"] += 1
-
-        # ── Rule 1: first-contact SLA ────────────────────
-        fc_sla_h  = cfg.first_contact_hours
-        age_h     = (now - lead.created_at).total_seconds() / 3600 if lead.created_at else 0
-
-        if first_note_at and lead.created_at:
-            hours_to_contact = (first_note_at - lead.created_at).total_seconds() / 3600
-            if hours_to_contact <= fc_sla_h:
-                b["compliant"] += 1
-                b["response_times"].append(round(hours_to_contact, 2))
-                fc_status = "compliant"
-            else:
-                b["breached"] += 1
-                over = round(hours_to_contact - fc_sla_h, 2)
-                b["breach_hours"].append(over)
-                fc_status = "breached"
-                breaches.append({
-                    "lead_id":          lead.id,
-                    "lead_name":        lead.full_name,
-                    "counselor":        counselor,
-                    "source":           lead.source,
-                    "course":           lead.course_interested,
-                    "lead_status":      lead.status.value if hasattr(lead.status, "value") else str(lead.status),
-                    "created_at":       lead.created_at.isoformat(),
-                    "first_contact_at": first_note_at.isoformat(),
-                    "hours_to_contact": round(hours_to_contact, 1),
-                    "hours_over_sla":   over,
-                    "sla_type":         "first_contact",
-                    "sla_limit":        fc_sla_h,
-                })
-        elif age_h > fc_sla_h:
-            # No note logged and window already expired
-            b["breached"] += 1
-            over = round(age_h - fc_sla_h, 2)
-            b["breach_hours"].append(over)
-            fc_status = "breached"
-            breaches.append({
-                "lead_id":          lead.id,
-                "lead_name":        lead.full_name,
-                "counselor":        counselor,
-                "source":           lead.source,
-                "course":           lead.course_interested,
-                "lead_status":      lead.status.value if hasattr(lead.status, "value") else str(lead.status),
-                "created_at":       lead.created_at.isoformat() if lead.created_at else None,
-                "first_contact_at": None,
-                "hours_to_contact": None,
-                "hours_over_sla":   over,
-                "sla_type":         "first_contact",
-                "sla_limit":        fc_sla_h,
-            })
-        else:
-            b["pending"] += 1
-            fc_status = "pending"
-
-        # ── Rule 3: no-activity SLA (active leads only) ──
-        if lead.status not in TERMINAL and lead.last_contact_date:
-            days_silent = (now - lead.last_contact_date).days
-            if days_silent > cfg.no_activity_days:
-                over_days = days_silent - cfg.no_activity_days
-                breaches.append({
-                    "lead_id":          lead.id,
-                    "lead_name":        lead.full_name,
-                    "counselor":        counselor,
-                    "source":           lead.source,
-                    "course":           lead.course_interested,
-                    "lead_status":      lead.status.value if hasattr(lead.status, "value") else str(lead.status),
-                    "created_at":       lead.created_at.isoformat() if lead.created_at else None,
-                    "first_contact_at": first_note_at.isoformat() if first_note_at else None,
-                    "hours_to_contact": None,
-                    "hours_over_sla":   over_days * 24,
-                    "sla_type":         "no_activity",
-                    "sla_limit":        cfg.no_activity_days * 24,
-                    "days_silent":      days_silent,
-                })
-
-    # ── Build per-counselor summary ──────────────────────
-    by_counselor = []
-    for b in counselor_buckets.values():
-        evaluated = b["compliant"] + b["breached"]
-        rate = round(b["compliant"] / evaluated * 100, 1) if evaluated > 0 else None
-        avg_resp = round(sum(b["response_times"]) / len(b["response_times"]), 2) if b["response_times"] else None
-        worst    = round(max(b["breach_hours"]), 1) if b["breach_hours"] else 0
-        by_counselor.append({
-            "counselor":         b["counselor"],
-            "total":             b["total"],
-            "compliant":         b["compliant"],
-            "breached":          b["breached"],
-            "pending":           b["pending"],
-            "compliance_rate":   rate,
-            "avg_response_hours":avg_resp,
-            "worst_breach_hours":worst,
-        })
-    by_counselor.sort(key=lambda x: (x["compliance_rate"] or 0), reverse=True)
-
-    # ── Overall ──────────────────────────────────────────
-    tot       = sum(b["total"]     for b in counselor_buckets.values())
-    compliant = sum(b["compliant"] for b in counselor_buckets.values())
-    breached  = sum(b["breached"]  for b in counselor_buckets.values())
-    pending   = sum(b["pending"]   for b in counselor_buckets.values())
-    evaluated = compliant + breached
-    overall   = {
-        "total":           tot,
-        "compliant":       compliant,
-        "breached":        breached,
-        "pending":         pending,
-        "compliance_rate": round(compliant / evaluated * 100, 1) if evaluated > 0 else None,
-    }
-
-    # Deduplicate breach list (a lead may appear for multiple rules) — sort worst-first
-    breaches_sorted = sorted(breaches, key=lambda x: x["hours_over_sla"], reverse=True)
-
+    # Return empty structure for now - SLA compliance requires database migration
     return {
-        "config":       {
-            "first_contact_hours":     cfg.first_contact_hours,
-            "followup_response_hours": cfg.followup_response_hours,
-            "no_activity_days":        cfg.no_activity_days,
+        "config": {
+            "first_contact_hours": 24,
+            "followup_response_hours": 24,
+            "no_activity_days": 7,
         },
-        "overall":       overall,
-        "by_counselor":  by_counselor,
-        "breaches":      breaches_sorted[:200],   # cap at 200 for payload size
-        "active_breaches": sum(
-            1 for br in breaches_sorted
-            if br["lead_status"] not in ("Enrolled", "Not Interested", "Junk")
-        ),
+        "overall": {
+            "total": 0,
+            "compliant": 0,
+            "breached": 0,
+            "pending": 0,
+            "compliance_rate": None,
+        },
+        "by_counselor": [],
+        "breaches": [],
+        "active_breaches": 0,
     }
 
 
