@@ -1877,11 +1877,11 @@ async def delete_lead(lead_id: str, request: Request):
     return {"message": "Lead deleted successfully"}
 
 @app.post("/api/leads/bulk-update")
-async def bulk_update_leads(
-    bulk_data: dict,
-    db: Session = Depends(get_db)
-):
-    """Bulk update multiple leads"""
+async def bulk_update_leads(bulk_data: dict):
+    """Bulk update multiple leads - SUPABASE ONLY"""
+    
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
     
     lead_ids = bulk_data.get("lead_ids", [])
     updates = bulk_data.get("updates", {})
@@ -1891,12 +1891,6 @@ async def bulk_update_leads(
     
     if not updates:
         raise HTTPException(status_code=400, detail="No updates provided")
-    
-    # Get all leads
-    leads = db.query(DBLead).filter(DBLead.lead_id.in_(lead_ids)).all()
-    
-    if not leads:
-        raise HTTPException(status_code=404, detail="No leads found")
     
     # Validate enum fields before applying updates
     _valid_statuses = {s.value for s in LeadStatus}
@@ -1913,26 +1907,28 @@ async def bulk_update_leads(
             detail=f"Invalid segment '{updates['ai_segment']}'. Must be one of: {sorted(_valid_segments)}"
         )
 
-    # Update each lead
+    # Update each lead in Supabase
     updated_count = 0
-    for lead in leads:
-        for key, value in updates.items():
-            if value is not None and hasattr(lead, key):
-                setattr(lead, key, value)
-        lead.updated_at = datetime.utcnow()
-        updated_count += 1
-
     try:
-        db.commit()
+        # Add updated_at timestamp
+        updates['updated_at'] = datetime.utcnow().isoformat()
+        
+        # Bulk update via Supabase - update all matching lead_ids
+        for lead_id in lead_ids:
+            result = supabase_data.update_lead(lead_id, updates)
+            if result:
+                updated_count += 1
+        
+        # Invalidate cache after bulk update
+        invalidate_cache(LEAD_CACHE)
+        
+        return {
+            "message": f"Successfully updated {updated_count} leads",
+            "updated_count": updated_count
+        }
     except Exception as e:
-        db.rollback()
-        logger.error(f"bulk_update_leads commit failed: {e}")
+        logger.error(f"bulk_update_leads failed: {e}")
         raise HTTPException(status_code=500, detail="Bulk update failed — database error.")
-
-    return {
-        "message": f"Successfully updated {updated_count} leads",
-        "updated_count": updated_count
-    }
 
 # ============================================================================
 # API ENDPOINTS - NOTES
