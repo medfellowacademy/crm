@@ -2431,14 +2431,6 @@ async def get_audit_logs(page: int = 1, limit: int = 50):
     except Exception as e:
         logger.error(f"Error getting audit logs: {e}")
         return {"logs": [], "total": 0, "page": page, "limit": limit, "pages": 0}
-            "action": a.activity_type,
-            "description": a.description,
-            "created_by": a.created_by,
-            "timestamp": a.created_at.isoformat() if a.created_at else None,
-        }
-        for a in activities
-    ]
-    return {"logs": logs, "total": total, "page": page, "limit": limit}
 
 
 @app.get("/api/leads/followups/today")
