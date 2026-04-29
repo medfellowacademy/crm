@@ -2540,8 +2540,15 @@ async def get_dashboard_stats():
             leads_today=today_resp.count if hasattr(today_resp, 'count') else 0,
             leads_this_week=week_resp.count if hasattr(week_resp, 'count') else 0,
             leads_this_month=month_resp.count if hasattr(month_resp, 'count') else 0,
-        avg_ai_score=avg_score
-    )
+            avg_ai_score=avg_score
+        )
+    except Exception as e:
+        logger.error(f"Error getting dashboard stats: {e}")
+        return DashboardStats(
+            total_leads=0, hot_leads=0, warm_leads=0, cold_leads=0, junk_leads=0,
+            total_conversions=0, conversion_rate=0, total_revenue=0, expected_revenue=0,
+            leads_today=0, leads_this_week=0, leads_this_month=0, avg_ai_score=0
+        )
 
 @app.get("/api/counselors", response_model=List[CounselorResponse])
 async def get_counselors():
