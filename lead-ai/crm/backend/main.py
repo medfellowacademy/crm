@@ -4232,9 +4232,6 @@ async def get_team_performance():
     except Exception as e:
         logger.error(f"Team performance error: {e}")
         return []
-    except Exception as e:
-        logger.error(f"Team performance error: {e}")
-        return []
 
 
 @app.get("/api/admin/funnel-analysis")
@@ -4305,12 +4302,6 @@ async def get_revenue_trend(days: int = 30):
                 except:
                     pass
         
-        result = [{"date": k, "revenue": v} for k, v in sorted(daily.items())]
-        return result
-    except Exception as e:
-        logger.error(f"Revenue trend error: {e}")
-        return []
-            daily[day_key] += (getattr(lead, 'potential_revenue', 0) or 0)
         result = [{"date": k, "revenue": v} for k, v in sorted(daily.items())]
         return result
     except Exception as e:
