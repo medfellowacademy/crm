@@ -259,6 +259,140 @@ class SupabaseDataLayer:
         except Exception as e:
             logger.error(f"Error deleting lead {lead_id}: {e}")
             return False
+    
+    def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        """Get user by email"""
+        try:
+            response = self.client.table('users').select("*").eq('email', email).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Error fetching user by email {email}: {e}")
+            return None
+    
+    def get_all_users(self) -> List[Dict[str, Any]]:
+        """Get all users"""
+        try:
+            response = self.client.table('users').select("*").order('id', desc=False).execute()
+            return response.data if response.data else []
+        except Exception as e:
+            logger.error(f"Error fetching users: {e}")
+            return []
+    
+    def get_courses(self, is_active: bool = True) -> List[Dict[str, Any]]:
+        """Get courses"""
+        try:
+            query = self.client.table('courses').select("*")
+            if is_active is not None:
+                query = query.eq('is_active', is_active)
+            response = query.order('course_name', desc=False).execute()
+            return response.data if response.data else []
+        except Exception as e:
+            logger.error(f"Error fetching courses: {e}")
+            return []
+    
+    def get_hospitals(self, country: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get hospitals"""
+        try:
+            query = self.client.table('hospitals').select("*")
+            if country:
+                query = query.eq('country', country)
+            response = query.order('hospital_name', desc=False).execute()
+            return response.data if response.data else []
+        except Exception as e:
+            logger.error(f"Error fetching hospitals: {e}")
+            return []
+    
+    def create_note(self, lead_id: int, content: str, channel: str, created_by: str) -> Optional[Dict[str, Any]]:
+        """Create a note for a lead"""
+        try:
+            note_data = {
+                'lead_id': lead_id,
+                'content': content,
+                'channel': channel,
+                'created_by': created_by,
+                'created_at': datetime.utcnow().isoformat()
+            }
+            response = self.client.table('notes').insert(note_data).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Error creating note: {e}")
+            return None
+    
+    def get_notes_for_lead(self, lead_id: int) -> List[Dict[str, Any]]:
+        """Get all notes for a lead (by internal ID)"""
+        try:
+            response = (
+                self.client.table('notes')
+                .select("*")
+                .eq('lead_id', lead_id)
+                .order('created_at', desc=True)
+                .execute()
+            )
+            return response.data if response.data else []
+        except Exception as e:
+            logger.error(f"Error fetching notes for lead {lead_id}: {e}")
+            return []
+    
+    def get_activities_for_lead(self, lead_id: int, activity_type: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get activities for a lead (by internal ID)"""
+        try:
+            query = self.client.table('activities').select("*").eq('lead_id', lead_id)
+            if activity_type:
+                query = query.eq('activity_type', activity_type)
+            response = query.order('created_at', desc=True).execute()
+            return response.data if response.data else []
+        except Exception as e:
+            logger.error(f"Error fetching activities for lead {lead_id}: {e}")
+            return []
+    
+    def create_activity(self, lead_id: int, activity_type: str, description: str, created_by: str) -> Optional[Dict[str, Any]]:
+        """Create an activity log"""
+        try:
+            activity_data = {
+                'lead_id': lead_id,
+                'activity_type': activity_type,
+                'description': description,
+                'created_by': created_by,
+                'created_at': datetime.utcnow().isoformat()
+            }
+            response = self.client.table('activities').insert(activity_data).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Error creating activity: {e}")
+            return None
+    
+    def get_dashboard_stats(self) -> Dict[str, Any]:
+        """Get dashboard statistics"""
+        try:
+            # Get all leads
+            all_leads_resp = self.client.table('leads').select('status,ai_segment,actual_revenue').execute()
+            leads = all_leads_resp.data if all_leads_resp.data else []
+            
+            # Calculate stats
+            total = len(leads)
+            hot = sum(1 for l in leads if l.get('ai_segment') == 'Hot')
+            warm = sum(1 for l in leads if l.get('ai_segment') == 'Warm')
+            cold = sum(1 for l in leads if l.get('ai_segment') == 'Cold')
+            junk = sum(1 for l in leads if l.get('ai_segment') == 'Junk')
+            conversions = sum(1 for l in leads if l.get('status') == 'Enrolled')
+            revenue = sum(l.get('actual_revenue', 0) or 0 for l in leads)
+            
+            return {
+                'total': total,
+                'hot': hot,
+                'warm': warm,
+                'cold': cold,
+                'junk': junk,
+                'conversions': conversions,
+                'revenue': round(revenue, 2),
+                'conversion_rate': round((conversions / total * 100) if total > 0 else 0, 1)
+            }
+        except Exception as e:
+            logger.error(f"Error getting dashboard stats: {e}")
+            return {
+                'total': 0, 'hot': 0, 'warm': 0, 'cold': 0, 'junk': 0,
+                'conversions': 0, 'revenue': 0, 'conversion_rate': 0
+            }
 
 
 # Global instance

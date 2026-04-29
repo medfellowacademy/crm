@@ -1,6 +1,6 @@
 """
 Database configuration and setup
-Centralized database connection - Uses Supabase REST API when configured, SQLite as fallback
+SUPABASE ONLY - No local SQLite database
 """
 
 import os
@@ -18,62 +18,52 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 def get_database_url():
     """
-    Get the database URL.
+    Get the database URL - SUPABASE ONLY.
     
-    Priority:
-    1. DATABASE_URL environment variable (direct PostgreSQL connection)
-    2. SQLite fallback for local development
+    This application requires Supabase to be configured.
+    Set SUPABASE_URL and SUPABASE_KEY environment variables.
     
-    Note: When SUPABASE_URL and SUPABASE_KEY are set, the application will use
-    Supabase REST API for data operations via supabase_client.py.
-    SQLite/PostgreSQL is only used for SQLAlchemy model initialization.
+    All data operations use Supabase REST API via supabase_client.py.
+    SQLAlchemy is only for model definitions (legacy compatibility).
     """
-    database_url = os.getenv("DATABASE_URL")
-    
-    if database_url:
-        return database_url
-    
     # Check if Supabase is configured
-    if SUPABASE_URL and SUPABASE_KEY:
-        # Use SQLite for SQLAlchemy models, actual operations via Supabase REST API
-        print("ℹ️  Using Supabase REST API for data operations")
-        return "sqlite:///./crm_database.db"
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError(
+            "❌ SUPABASE_URL and SUPABASE_KEY must be set in environment variables.\n"
+            "This application requires Supabase and does not support local SQLite.\n"
+            "Please configure your Supabase credentials in .env file."
+        )
     
-    # Fallback to SQLite for local development
-    print("⚠️  Using SQLite for local development")
+    print("✅ Using Supabase REST API for ALL data operations")
+    # Return a dummy SQLite URL for SQLAlchemy model initialization only
+    # All actual data operations go through Supabase REST API
     return "sqlite:///./crm_database.db"
 
 SQLALCHEMY_DATABASE_URL = get_database_url()
 
-# Create engine with appropriate settings
-if SQLALCHEMY_DATABASE_URL.startswith("postgresql"):
-    # PostgreSQL (Supabase) configuration — sized for production load
-    engine = create_engine(
-        SQLALCHEMY_DATABASE_URL,
-        pool_pre_ping=True,
-        pool_size=15,       # increased from 5 to handle concurrent requests
-        max_overflow=20,    # increased from 10; total max = 35 connections
-        pool_timeout=30,    # wait up to 30s for a free connection
-        pool_recycle=1800,  # recycle connections every 30 min to avoid stale connections
-        echo=False
-    )
-else:
-    # SQLite configuration
-    engine = create_engine(
-        SQLALCHEMY_DATABASE_URL,
-        connect_args={"check_same_thread": False},
-        echo=False
-    )
+# Create minimal engine for model definitions only
+# All actual data operations use Supabase REST API
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    connect_args={"check_same_thread": False},
+    echo=False
+)
 
-# Session factory
+# Session factory (for legacy endpoints being migrated)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # Base class for models
 Base = declarative_base()
 
-# Dependency for FastAPI routes
+# Dependency for FastAPI routes (DEPRECATED - use supabase_data instead)
 def get_db():
-    """Database session dependency"""
+    """
+    Database session dependency - DEPRECATED
+    
+    ⚠️ This is for legacy compatibility only.
+    All new endpoints should use supabase_data from supabase_data_layer.py
+    Local database is NOT synced with Supabase!
+    """
     db = SessionLocal()
     try:
         yield db
