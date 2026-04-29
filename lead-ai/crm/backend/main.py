@@ -2987,49 +2987,7 @@ async def trigger_welcome(lead_id: str):
         "message": "Welcome sequence triggered",
         "results": results
     }
-    
-    lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
-    if not lead:
-        raise HTTPException(status_code=404, detail="Lead not found")
-    
-    from communication_service import comm_service
-    
-    lead_data = {
-        "id": lead.lead_id,
-        "name": lead.full_name or "there",
-        "email": lead.email,
-        "whatsapp": lead.whatsapp,
-        "course": lead.course_interested or "our courses",
-        "counselor": lead.assigned_to or "Your counselor"
-    }
-    
-    try:
-        results = await comm_service.campaign.trigger_welcome_sequence(lead_data)
-    except Exception as e:
-        logger.error(f"trigger_welcome failed for lead {lead_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Communication service error: {str(e)}")
 
-    # Log results
-    for result in results:
-        note = DBNote(
-            lead_id=lead.id,
-            content=f"[{result['channel'].title()} - Welcome Sequence] {'Sent' if result.get('success') else 'Failed'}",
-            channel=result["channel"],
-            created_by="System",
-        )
-        db.add(note)
-
-    try:
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        logger.error(f"trigger_welcome DB commit failed: {e}")
-
-    return {
-        "success": True,
-        "message": "Welcome sequence triggered",
-        "results": results
-    }
 
 @app.post("/api/leads/{lead_id}/trigger-followup")
 async def trigger_followup(
