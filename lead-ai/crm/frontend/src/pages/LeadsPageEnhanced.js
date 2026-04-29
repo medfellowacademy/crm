@@ -187,8 +187,8 @@ const LeadsPageEnhanced = () => {
       limit: pageSize,
     };
 
-    if (quickFilter === 'hot') params.segment = 'Hot';
-    if (quickFilter === 'warm') params.segment = 'Warm';
+    if (quickFilter === 'hot') params.status = 'Hot';
+    if (quickFilter === 'warm') params.status = 'Warm';
     if (quickFilter === 'today') params.created_today = true;
     if (quickFilter === 'overdue') params.overdue = true;
     if (searchText) params.search = searchText;
@@ -282,8 +282,8 @@ const LeadsPageEnhanced = () => {
   // ── Stats ──────────────────────────────────────────────────────────────────
   const stats = {
     total: totalLeads,
-    hot: leads.filter(l => l.ai_segment === 'Hot').length,
-    warm: leads.filter(l => l.ai_segment === 'Warm').length,
+    hot: leads.filter(l => l.status === 'Hot').length,
+    warm: leads.filter(l => l.status === 'Warm').length,
     enrolled: leads.filter(l => l.status === 'Enrolled').length,
     followUpToday: leads.filter(l => l.follow_up_date && dayjs(l.follow_up_date).isSame(dayjs(), 'day')).length,
     overdue: leads.filter(l => l.follow_up_date && dayjs(l.follow_up_date).isBefore(dayjs(), 'day')).length,
@@ -603,14 +603,14 @@ const LeadsPageEnhanced = () => {
         }
         return (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Avatar size={42} style={{ backgroundColor: r.ai_segment === 'Hot' ? '#ff4d4f' : r.ai_segment === 'Warm' ? '#faad14' : '#52c41a', flexShrink: 0 }}>
+            <Avatar size={42} style={{ backgroundColor: r.status === 'Hot' ? '#ff4d4f' : r.status === 'Warm' ? '#faad14' : '#52c41a', flexShrink: 0 }}>
               {r.full_name?.charAt(0)?.toUpperCase()}
             </Avatar>
             <div style={{ minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
                 <a onClick={() => navigate(`/leads/${r.lead_id}`)} style={{ fontWeight: 600, fontSize: 13 }}>{r.full_name}</a>
-                <Tag style={{ marginLeft: 2 }} color={r.ai_segment === 'Hot' ? 'red' : r.ai_segment === 'Warm' ? 'orange' : 'green'}>
-                  {r.ai_segment === 'Hot' ? '🔥' : r.ai_segment === 'Warm' ? '⚡' : '❄️'} {r.ai_segment}
+                <Tag style={{ marginLeft: 2 }} color={r.status === 'Hot' ? 'red' : r.status === 'Warm' ? 'orange' : 'green'}>
+                  {r.status === 'Hot' ? '🔥' : r.status === 'Warm' ? '⚡' : '❄️'} {r.status}
                 </Tag>
                 {decayBadge}
               </div>
