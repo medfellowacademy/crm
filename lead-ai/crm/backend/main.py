@@ -2829,10 +2829,7 @@ async def conversion_funnel():
     except Exception as e:
         logger.error(f"Error getting conversion funnel: {e}")
         return {'stages': []}
-            {'name': 'Warm/Hot', 'count': warm_hot, 'percentage': (warm_hot/total*100) if total > 0 else 0},
-            {'name': 'Converted', 'count': converted, 'percentage': (converted/total*100) if total > 0 else 0},
-        ]
-    }
+
 
 # ============================================================================
 # COMMUNICATION ENDPOINTS
