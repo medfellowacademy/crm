@@ -1847,6 +1847,10 @@ async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, b
         if not updated_lead:
             raise HTTPException(status_code=404, detail="Lead not found")
         
+        # Invalidate caches to ensure UI shows updated data
+        invalidate_cache(LEAD_CACHE)
+        invalidate_cache(STATS_CACHE)
+        
         # TODO: Re-scoring with Supabase (needs refactoring of rescore_lead_async)
         # background_tasks.add_task(rescore_lead_async, lead_id)
         
@@ -1878,6 +1882,10 @@ async def delete_lead(lead_id: str, request: Request):
     success = supabase_data.delete_lead(lead_id)
     if not success:
         raise HTTPException(status_code=500, detail="Failed to delete lead")
+    
+    # Invalidate caches to update UI
+    invalidate_cache(LEAD_CACHE)
+    invalidate_cache(STATS_CACHE)
     
     return {"message": "Lead deleted successfully"}
 
@@ -1983,6 +1991,10 @@ async def add_note(lead_id: str, note: NoteCreate, request: Request, background_
     
     # Update last contact date
     supabase_data.update_lead(lead_id, {'last_contact_date': datetime.utcnow().isoformat()})
+    
+    # Invalidate caches to reflect updated lead data
+    invalidate_cache(LEAD_CACHE)
+    invalidate_cache(STATS_CACHE)
     
     # TODO: Re-scoring with Supabase (needs refactoring)
     # background_tasks.add_task(rescore_lead_async, lead_id)
@@ -3127,6 +3139,10 @@ async def reassign_lead(
             description=f"Lead reassigned to {request.new_counselor}. Reason: {request.reason}",
             created_by="System"
         )
+    
+    # Invalidate caches to reflect reassignment
+    invalidate_cache(LEAD_CACHE)
+    invalidate_cache(STATS_CACHE)
     
     return {
         "success": True,
