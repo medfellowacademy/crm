@@ -203,13 +203,18 @@ def get_cached_model():
             MODEL_INSTANCE_CACHE['catboost'] = None
     return MODEL_INSTANCE_CACHE['catboost']
 
-def get_cached_course_prices(db: Session, force_refresh: bool = False) -> Dict[str, float]:
-    """Get cached course prices using the unified COURSE_CACHE (1-hour TTL)."""
+def get_cached_course_prices(force_refresh: bool = False) -> Dict[str, float]:
+    """Get cached course prices using the unified COURSE_CACHE (1-hour TTL) - SUPABASE ONLY"""
     if not force_refresh and _COURSE_PRICES_KEY in COURSE_CACHE:
         return COURSE_CACHE[_COURSE_PRICES_KEY]
 
-    courses = db.query(DBCourse.course_name, DBCourse.price).all()
-    prices = {name: price for name, price in courses}
+    # Get courses from Supabase
+    if not supabase_data.client:
+        logger.warning("⚠️ Supabase not configured, returning empty course prices")
+        return {}
+    
+    courses = supabase_data.get_courses()
+    prices = {c['course_name']: c['price'] for c in courses if c.get('course_name') and c.get('price')}
     COURSE_CACHE[_COURSE_PRICES_KEY] = prices
     logger.info(f"✅ Course prices cached: {len(prices)} courses")
     return prices
@@ -250,14 +255,11 @@ async def lifespan(app: FastAPI):
     create_database_indexes(engine)
 
     # Pre-load model and course prices at startup
-    db = SessionLocal()
     try:
         get_cached_model()  # Load model into memory
-        get_cached_course_prices(db)  # Pre-cache course prices
+        get_cached_course_prices()  # Pre-cache course prices
     except Exception as e:
         logger.error(f"⚠️ Failed to pre-load caches: {e}")
-    finally:
-        db.close()
 
     # Auto-seed Supabase only in non-production environments (guard against wiping prod)
     _env = os.getenv("ENVIRONMENT", "development").lower()
@@ -1012,9 +1014,9 @@ class AILeadScorer:
         
         self.course_prices = {}  # Will be populated from DB
     
-    def load_course_prices(self, db: Session):
-        """Load course prices for revenue calculation (uses cache)"""
-        self.course_prices = get_cached_course_prices(db)
+    def load_course_prices(self):
+        """Load course prices for revenue calculation (uses cache) - SUPABASE ONLY"""
+        self.course_prices = get_cached_course_prices()
     
     def score_lead(self, lead: DBLead, notes: List[DBNote]) -> Dict[str, Any]:
         """Score a lead using hybrid ML + Rule-based intelligence"""
@@ -1994,23 +1996,8 @@ async def add_note(lead_id: str, note: NoteCreate, request: Request, background_
     return db_note
 
 
-def rescore_lead_async(lead_id: str, db: Session):
-    """Background task to re-score a lead after note addition"""
-    try:
-        lead = db.query(DBLead).filter(DBLead.lead_id == lead_id).first()
-        if not lead:
-            return
-        
-        ai_scorer.load_course_prices(db)
-        score_result = ai_scorer.score_lead(lead, lead.notes)
-        for key, value in score_result.items():
-            setattr(lead, key, value)
-        
-        db.commit()
-        logger.info(f"✅ Lead {lead_id} re-scored in background")
-    except Exception as e:
-        logger.error(f"❌ Failed to re-score lead {lead_id}: {e}")
-        db.rollback()
+# rescore_lead_async removed - not compatible with Supabase architecture
+# Re-scoring happens automatically on note creation via AI endpoints
 
 @app.get("/api/leads/{lead_id}/notes", response_model=List[NoteResponse])
 async def get_notes(lead_id: str):
@@ -5789,13 +5776,13 @@ def _seed_wa_templates(db: Session):
             variables=json.dumps(t.get("variables", [])),
             is_builtin=t.get("is_builtin", False),
             created_by="System",
-        ))
-    db.commit()
+        })
+        supabase_data.client.table('wa_templates').insert(template_data).execute()
 
 
 # Seed on startup
 try:
-    _seed_wa_templates(next(get_db()))
+    _seed_wa_templates()
 except Exception as _seed_err:
     logger.warning(f"Template seed skipped: {_seed_err}")
 
