@@ -739,6 +739,45 @@ def _normalise_status(v):
     return _STATUS_NORMALISE_MAP.get(key, v)
 
 
+# Canonical source values and their import aliases
+_CANONICAL_SOURCES = ['Website', 'Instagram', 'Facebook', 'Referral', 'WhatsApp']
+_SOURCE_ALIAS_MAP = {
+    # Website / Google
+    'website': 'Website', 'web': 'Website', 'site': 'Website', 'online': 'Website',
+    'google': 'Website', 'google ads': 'Website', 'google ad': 'Website',
+    'seo': 'Website', 'organic': 'Website', 'search': 'Website',
+    # Instagram
+    'instagram': 'Instagram', 'ig': 'Instagram', 'insta': 'Instagram',
+    # Facebook
+    'facebook': 'Facebook', 'fb': 'Facebook', 'fb ads': 'Facebook',
+    'facebook ads': 'Facebook', 'meta': 'Facebook', 'meta ads': 'Facebook',
+    # Referral
+    'referral': 'Referral', 'refer': 'Referral', 'reference': 'Referral',
+    'ref': 'Referral', 'word of mouth': 'Referral', 'wom': 'Referral',
+    'agent': 'Referral', 'friend': 'Referral', 'recommendation': 'Referral',
+    # WhatsApp
+    'whatsapp': 'WhatsApp', 'whats app': 'WhatsApp', 'wa': 'WhatsApp',
+    'wp': 'WhatsApp', 'wapp': 'WhatsApp',
+}
+
+def _normalise_source(v):
+    """Map any raw source string to one of the 5 canonical source values."""
+    if not v:
+        return v
+    key = str(v).lower().strip()
+    if key in _SOURCE_ALIAS_MAP:
+        return _SOURCE_ALIAS_MAP[key]
+    # Partial contains match
+    for alias, canonical in _SOURCE_ALIAS_MAP.items():
+        if key in alias or alias in key:
+            return canonical
+    # Already canonical (case-insensitive)
+    for src in _CANONICAL_SOURCES:
+        if src.lower() == key:
+            return src
+    return v  # preserve unknown values as-is
+
+
 class LeadCreate(BaseModel):
     full_name: str
     email: Optional[str] = None  # Changed from EmailStr to str for lenient import
@@ -773,6 +812,11 @@ class LeadCreate(BaseModel):
         if '@' not in v or v.startswith('@') or v.endswith('@') or len(v) < 3:
             return None
         return v
+
+    @field_validator('source', mode='before')
+    @classmethod
+    def _normalise_source_create(cls, v):
+        return _normalise_source(v)
 
     @field_validator('full_name', 'source', 'course_interested', 'assigned_to', 'qualification', 'notes', mode='before')
     @classmethod
@@ -817,6 +861,11 @@ class LeadUpdate(BaseModel):
         if '@' not in v or v.startswith('@') or v.endswith('@') or len(v) < 3:
             return None
         return v
+
+    @field_validator('source', mode='before')
+    @classmethod
+    def _normalise_source_update(cls, v):
+        return _normalise_source(v)
 
     @field_validator('full_name', 'source', 'course_interested', 'assigned_to', 'next_action',
                      'qualification', 'loss_reason', 'loss_note', mode='before')

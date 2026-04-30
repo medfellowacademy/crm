@@ -38,7 +38,7 @@ import {
 import { leadsAPI, coursesAPI, counselorsAPI, usersAPI } from '../api/api';
 import { COUNTRIES } from '../config/countries';
 
-const SOURCE_OPTIONS = ['Website','Facebook','Google Ads','Instagram','WhatsApp','Referral','Direct','LinkedIn','YouTube'];
+const SOURCE_OPTIONS = ['Website', 'Instagram', 'Facebook', 'Referral', 'WhatsApp'];
 
 // Call disposition map.  Keys are the "main" call status; values are arrays of
 // sub-statuses for that main status, split by call number (1st vs 2nd call).

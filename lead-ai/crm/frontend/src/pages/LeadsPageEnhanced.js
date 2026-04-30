@@ -145,7 +145,47 @@ const parseSpreadsheet = (data, isBinary) => {
 
 const REQUIRED_COLS = ['full_name', 'phone'];
 const STATUS_OPTIONS = ['Fresh', 'Follow Up', 'Warm', 'Hot', 'Not Interested', 'Not Answering', 'Enrolled', 'Junk'];
-const SOURCE_OPTIONS = ['Website', 'Facebook', 'Google Ads', 'Instagram', 'WhatsApp', 'Referral', 'Direct', 'LinkedIn', 'YouTube'];
+const SOURCE_OPTIONS = ['Website', 'Instagram', 'Facebook', 'Referral', 'WhatsApp'];
+
+// Map any import alias → canonical source name.
+// Keys are lowercase patterns that appear in raw imported values.
+const SOURCE_ALIAS_MAP = {
+  // Website
+  'website': 'Website', 'web': 'Website', 'site': 'Website', 'online': 'Website',
+  'google': 'Website', 'google ads': 'Website', 'google ad': 'Website', 'seo': 'Website',
+  'organic': 'Website', 'search': 'Website',
+  // Instagram
+  'instagram': 'Instagram', 'ig': 'Instagram', 'insta': 'Instagram',
+  // Facebook
+  'facebook': 'Facebook', 'fb': 'Facebook', 'fb ads': 'Facebook', 'facebook ads': 'Facebook',
+  'meta': 'Facebook', 'meta ads': 'Facebook',
+  // Referral
+  'referral': 'Referral', 'refer': 'Referral', 'reference': 'Referral', 'ref': 'Referral',
+  'word of mouth': 'Referral', 'wom': 'Referral', 'agent': 'Referral',
+  'friend': 'Referral', 'recommendation': 'Referral',
+  // WhatsApp
+  'whatsapp': 'WhatsApp', 'whats app': 'WhatsApp', 'wa': 'WhatsApp',
+  'wp': 'WhatsApp', 'wapp': 'WhatsApp',
+};
+
+/**
+ * Normalise a raw source string from an import file to one of the 5 canonical
+ * SOURCE_OPTIONS values. Falls back to 'Website' when no alias matches.
+ */
+const normalizeSource = (raw) => {
+  if (!raw) return null;
+  const lower = String(raw).toLowerCase().trim();
+  // Exact alias match
+  if (SOURCE_ALIAS_MAP[lower]) return SOURCE_ALIAS_MAP[lower];
+  // Partial / contains match (e.g. "IG Story" → Instagram)
+  for (const [alias, canonical] of Object.entries(SOURCE_ALIAS_MAP)) {
+    if (lower.includes(alias) || alias.includes(lower)) return canonical;
+  }
+  // Already a valid canonical value (case-insensitive)
+  const direct = SOURCE_OPTIONS.find(s => s.toLowerCase() === lower);
+  if (direct) return direct;
+  return null; // caller decides the fallback
+};
 const QUALIFICATION_OPTIONS = [
   'MBBS','MD','MS','DNB','MDS','BDS','BAMS','BHMS',
   'BPT','MPT','BUMS','BNYS','BSc Nursing','MSc Nursing',
@@ -577,7 +617,7 @@ const LeadsPageEnhanced = () => {
         email:            mappedLead.email            || undefined,
         whatsapp:         mappedLead.whatsapp         || mappedLead.phone,
         country:          mappedLead.country          || 'India',
-        source:           mappedLead.source           || 'Import',
+        source:           normalizeSource(mappedLead.source) || 'Website',
         course_interested: mappedLead.course_interested || 'Not Specified',
         qualification:    mappedLead.qualification    || undefined,
         company:          mappedLead.company          || undefined,
