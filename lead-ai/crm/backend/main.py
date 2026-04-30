@@ -4733,17 +4733,6 @@ async def get_call_timing(country: Optional[str] = None):
 # SLA CONFIG & COMPLIANCE
 # ============================================================
 
-def _get_sla_config(db: Session) -> DBSLAConfig:
-    """Return the singleton SLA config row, creating defaults if absent."""
-    cfg = db.query(DBSLAConfig).filter(DBSLAConfig.id == 1).first()
-    if not cfg:
-        cfg = DBSLAConfig(id=1)
-        db.add(cfg)
-        db.commit()
-        db.refresh(cfg)
-    return cfg
-
-
 @app.get("/api/admin/sla-config")
 async def get_sla_config():
     """Get SLA config from Supabase - SUPABASE ONLY"""
@@ -5710,11 +5699,13 @@ async def update_wa_template(
     if "category"    in payload: update_data["category"]    = payload["category"]
     if "is_active"   in payload: update_data["is_active"]   = payload["is_active"]
     if "body"        in payload:
-        t.body = payload["body"]
-        detected = re.findall(r"\{\{(\w+)\}\}", t.body)
-        t.variables = json.dumps(list(dict.fromkeys(detected)))
+        update_data["body"] = payload["body"]
+        detected = re.findall(r"\{\{(\w+)\}\}", payload["body"])
+        update_data["variables"] = json.dumps(list(dict.fromkeys(detected)))
 
-    db.commit()
+    if update_data:
+        supabase_data.client.table('wa_templates').update(update_data).eq('id', template_id).execute()
+    
     return {"message": "Template updated"}
 
 
@@ -5767,30 +5758,33 @@ async def send_wa_template(
     if not template_id:
         raise HTTPException(status_code=400, detail="template_id required")
 
-    t = db.query(DBWATemplate).filter(DBWATemplate.id == template_id).first()
-    if not t:
+    # Get template from Supabase
+    template_response = supabase_data.client.table('wa_templates').select('*').eq('id', template_id).execute()
+    if not template_response.data or len(template_response.data) == 0:
         raise HTTPException(status_code=404, detail="Template not found")
+    
+    t = template_response.data[0]
 
     # Build variable context — lead defaults first, then user overrides
     follow_up_str = (
-        lead.follow_up_date.strftime("%d %b %Y") if lead.follow_up_date else "TBD"
+        lead.get('follow_up_date', 'TBD') if lead.get('follow_up_date') else "TBD"
     )
     defaults = {
-        "lead_name":    lead.full_name or "there",
-        "first_name":   (lead.full_name or "there").split()[0],
-        "course":       lead.course_interested or "the course",
-        "counselor":    lead.assigned_to or current_user.get("full_name", "Your Counselor"),
-        "phone":        lead.phone or "",
-        "country":      lead.country or "",
-        "expected_fee": f"{int(lead.expected_revenue):,}" if lead.expected_revenue else "0",
-        "fee_amount":   f"{int(lead.expected_revenue):,}" if lead.expected_revenue else "0",
+        "lead_name":    lead.get('full_name') or "there",
+        "first_name":   (lead.get('full_name') or "there").split()[0],
+        "course":       lead.get('course_interested') or "the course",
+        "counselor":    lead.get('assigned_to') or current_user.get("full_name", "Your Counselor"),
+        "phone":        lead.get('phone') or "",
+        "country":      lead.get('country') or "",
+        "expected_fee": f"{int(lead.get('expected_revenue', 0)):,}" if lead.get('expected_revenue') else "0",
+        "fee_amount":   f"{int(lead.get('expected_revenue', 0)):,}" if lead.get('expected_revenue') else "0",
         "follow_up_date": follow_up_str,
         "enrollment_date": datetime.utcnow().strftime("%d %b %Y"),
     }
     overrides = payload.get("variable_overrides", {}) or {}
     variables = {**defaults, **overrides}
 
-    rendered = _render_template(t.body, variables)
+    rendered = _render_template(t['body'], variables)
 
     # Try to send via comm_service; fall through to note-only if unavailable
     send_success = False
@@ -5806,28 +5800,31 @@ async def send_wa_template(
         logger.warning(f"comm_service unavailable — logging only: {e}")
         send_success = True   # treat as success for note purposes
 
-    # Log the sent message as a note
-    note = DBNote(
-        lead_id    = lead.id,
-        content    = f"[WhatsApp Template: {t.name}]\n\n{rendered}",
-        channel    = "whatsapp",
-        created_by = current_user.get("full_name", "System"),
-    )
-    db.add(note)
+    # Log the sent message as a note in Supabase
+    try:
+        supabase_data.create_note(
+            lead_id=lead.get('id'),
+            content=f"[WhatsApp Template: {t['name']}]\n\n{rendered}",
+            channel="whatsapp",
+            created_by=current_user.get("full_name", "System")
+        )
+    except Exception as e:
+        logger.error(f"Failed to create note: {e}")
 
-    # Activity log
-    activity = DBActivity(
-        lead_id      = lead.id,
-        activity_type= "whatsapp",
-        description  = f"WhatsApp template '{t.name}' sent",
-        created_by   = current_user.get("full_name", "System"),
-    )
-    db.add(activity)
-    db.commit()
+    # Activity log in Supabase
+    try:
+        supabase_data.create_activity(
+            lead_id=lead.get('id'),
+            activity_type="whatsapp",
+            description=f"WhatsApp template '{t['name']}' sent",
+            created_by=current_user.get("full_name", "System")
+        )
+    except Exception as e:
+        logger.error(f"Failed to create activity: {e}")
 
     return {
         "success": send_success,
-        "template_name": t.name,
+        "template_name": t['name'],
         "rendered_message": rendered,
         "sent_to": phone,
     }
@@ -5992,49 +5989,9 @@ async def merge_leads(
         except Exception as e:
             logger.error(f"Supabase merge failed: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-
-    # ── SQLite fallback ─────────────────────────────────────────────────────
-    primary = db.query(DBLead).filter(DBLead.lead_id == primary_id).first()
-    if not primary:
-        raise HTTPException(status_code=404, detail="Primary lead not found")
-
-    if direct_updates:
-        for field, val in direct_updates.items():
-            if val is not None and field in MERGEABLE_FIELDS:
-                setattr(primary, field, val)
-        merge_label = "Updated with resolved field values from duplicate check."
-    elif secondary_id:
-        secondary = db.query(DBLead).filter(DBLead.lead_id == secondary_id).first()
-        if not secondary:
-            raise HTTPException(status_code=404, detail="Secondary lead not found")
-        choices = payload.get("field_choices", {})
-        for field in MERGEABLE_FIELDS:
-            winner = choices.get(field, "primary")
-            src    = secondary if winner == "secondary" else primary
-            val    = getattr(src, field, None)
-            if val is not None:
-                setattr(primary, field, val)
-        db.query(DBNote).filter(DBNote.lead_id == secondary.id).update({"lead_id": primary.id})
-        db.query(DBActivity).filter(DBActivity.lead_id == secondary.id).update({"lead_id": primary.id})
-        merge_label = f"Absorbed lead {secondary_id} ({secondary.full_name}) into this record."
-        db.delete(secondary)
-    else:
-        merge_label = "Updated."
-
-    merge_note = DBNote(
-        lead_id    = primary.id,
-        content    = f"[MERGED] {merge_label}",
-        channel    = "system",
-        created_by = current_user.get("full_name", "System"),
-    )
-    db.add(merge_note)
-    db.commit()
-    db.refresh(primary)
-
-    invalidate_cache(STATS_CACHE)
-    invalidate_cache(LEAD_CACHE)
-
-    return primary
+    
+    # If Supabase not configured (should never happen)
+    raise HTTPException(status_code=500, detail="Database not configured")
 
 
 if __name__ == "__main__":
