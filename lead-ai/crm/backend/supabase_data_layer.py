@@ -79,34 +79,52 @@ class SupabaseDataLayer:
 
             if status:
                 if ',' in status:
-                    query = query.in_('status', [s.strip() for s in status.split(',') if s.strip()])
+                    # Case-insensitive multi-value filter
+                    statuses = [s.strip() for s in status.split(',') if s.strip()]
+                    query = query.or_(','.join([f"status.ilike.{s}" for s in statuses]))
                 else:
-                    query = query.eq('status', status)
+                    # Case-insensitive single value filter
+                    query = query.ilike('status', status.strip())
             if country:
                 if ',' in country:
-                    query = query.in_('country', [c.strip() for c in country.split(',') if c.strip()])
+                    # Case-insensitive multi-value filter
+                    countries = [c.strip() for c in country.split(',') if c.strip()]
+                    query = query.or_(','.join([f"country.ilike.{c}" for c in countries]))
                 else:
-                    query = query.eq('country', country)
+                    # Case-insensitive single value filter
+                    query = query.ilike('country', country.strip())
             if segment:
                 if ',' in segment:
-                    query = query.in_('ai_segment', [s.strip() for s in segment.split(',') if s.strip()])
+                    # Case-insensitive multi-value filter
+                    segments = [s.strip() for s in segment.split(',') if s.strip()]
+                    query = query.or_(','.join([f"ai_segment.ilike.{s}" for s in segments]))
                 else:
-                    query = query.eq('ai_segment', segment)
+                    # Case-insensitive single value filter
+                    query = query.ilike('ai_segment', segment.strip())
             if assigned_to:
                 if ',' in assigned_to:
-                    query = query.in_('assigned_to', [a.strip() for a in assigned_to.split(',') if a.strip()])
+                    # Case-insensitive multi-value filter
+                    assignees = [a.strip() for a in assigned_to.split(',') if a.strip()]
+                    query = query.or_(','.join([f"assigned_to.ilike.{a}" for a in assignees]))
                 else:
-                    query = query.eq('assigned_to', assigned_to)
+                    # Case-insensitive single value filter
+                    query = query.ilike('assigned_to', assigned_to.strip())
             if course_interested:
                 if ',' in course_interested:
-                    query = query.in_('course_interested', [c.strip() for c in course_interested.split(',') if c.strip()])
+                    # Case-insensitive multi-value filter
+                    courses = [c.strip() for c in course_interested.split(',') if c.strip()]
+                    query = query.or_(','.join([f"course_interested.ilike.{c}" for c in courses]))
                 else:
-                    query = query.eq('course_interested', course_interested)
+                    # Case-insensitive single value filter
+                    query = query.ilike('course_interested', course_interested.strip())
             if source:
                 if ',' in source:
-                    query = query.in_('source', [s.strip() for s in source.split(',') if s.strip()])
+                    # Case-insensitive multi-value filter
+                    sources = [s.strip() for s in source.split(',') if s.strip()]
+                    query = query.or_(','.join([f"source.ilike.{s}" for s in sources]))
                 else:
-                    query = query.eq('source', source)
+                    # Case-insensitive single value filter
+                    query = query.ilike('source', source.strip())
             if min_score is not None:
                 query = query.gte('ai_score', min_score)
             if max_score is not None:
@@ -197,9 +215,9 @@ class SupabaseDataLayer:
             query = self.client.table('leads').select("*", count='exact')
             
             if status:
-                query = query.eq('status', status)
+                query = query.ilike('status', status.strip())
             if segment:
-                query = query.eq('ai_segment', segment)
+                query = query.ilike('ai_segment', segment.strip())
             
             response = query.execute()
             return response.count if hasattr(response, 'count') else 0
@@ -263,7 +281,8 @@ class SupabaseDataLayer:
     def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
         """Get user by email"""
         try:
-            response = self.client.table('users').select("*").eq('email', email).execute()
+            # Case-insensitive email lookup
+            response = self.client.table('users').select("*").ilike('email', email.strip()).execute()
             return response.data[0] if response.data else None
         except Exception as e:
             logger.error(f"Error fetching user by email {email}: {e}")
@@ -295,7 +314,8 @@ class SupabaseDataLayer:
         try:
             query = self.client.table('hospitals').select("*")
             if country:
-                query = query.eq('country', country)
+                # Case-insensitive country filter
+                query = query.ilike('country', country.strip())
             response = query.order('hospital_name', desc=False).execute()
             return response.data if response.data else []
         except Exception as e:
@@ -338,7 +358,8 @@ class SupabaseDataLayer:
         try:
             query = self.client.table('activities').select("*").eq('lead_id', lead_id)
             if activity_type:
-                query = query.eq('activity_type', activity_type)
+                # Case-insensitive activity type filter
+                query = query.ilike('activity_type', activity_type.strip())
             response = query.order('created_at', desc=True).execute()
             return response.data if response.data else []
         except Exception as e:
@@ -368,13 +389,13 @@ class SupabaseDataLayer:
             all_leads_resp = self.client.table('leads').select('status,ai_segment,actual_revenue').execute()
             leads = all_leads_resp.data if all_leads_resp.data else []
             
-            # Calculate stats
+            # Calculate stats with case-insensitive comparisons
             total = len(leads)
-            hot = sum(1 for l in leads if l.get('ai_segment') == 'Hot')
-            warm = sum(1 for l in leads if l.get('ai_segment') == 'Warm')
-            cold = sum(1 for l in leads if l.get('ai_segment') == 'Cold')
-            junk = sum(1 for l in leads if l.get('ai_segment') == 'Junk')
-            conversions = sum(1 for l in leads if l.get('status') == 'Enrolled')
+            hot = sum(1 for l in leads if str(l.get('ai_segment', '')).lower() == 'hot')
+            warm = sum(1 for l in leads if str(l.get('ai_segment', '')).lower() == 'warm')
+            cold = sum(1 for l in leads if str(l.get('ai_segment', '')).lower() == 'cold')
+            junk = sum(1 for l in leads if str(l.get('ai_segment', '')).lower() == 'junk')
+            conversions = sum(1 for l in leads if str(l.get('status', '')).lower() == 'enrolled')
             revenue = sum(l.get('actual_revenue', 0) or 0 for l in leads)
             
             return {
