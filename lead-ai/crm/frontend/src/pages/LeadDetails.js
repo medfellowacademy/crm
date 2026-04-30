@@ -105,7 +105,8 @@ const LeadDetails = () => {
   const [isEditing, setIsEditing] = useState(false);
 
   // Call-note state
-  const [noteType, setNoteType]         = useState('manual');   // 'manual' | '1st_call' | '2nd_call'
+  const [noteType, setNoteType]             = useState('manual');  // 'manual' | 'call'
+  const [callNumber, setCallNumber]         = useState(null);      // '1st' | '2nd' | '3rd' ...
   const [callMainStatus, setCallMainStatus] = useState(null);
   const [callSubStatus, setCallSubStatus]   = useState(null);
 
@@ -208,6 +209,7 @@ const LeadDetails = () => {
       message.success('Note added successfully!');
       noteForm.resetFields();
       setNoteType('manual');
+      setCallNumber(null);
       setCallMainStatus(null);
       setCallSubStatus(null);
       queryClient.invalidateQueries({ queryKey: ['lead', leadId] });
@@ -246,9 +248,9 @@ const LeadDetails = () => {
     let content = values.content || '';
     let channel = values.channel || 'manual';
 
-    if (noteType === '1st_call' || noteType === '2nd_call') {
+    if (noteType === 'call') {
       channel = 'call';
-      const label = noteType === '1st_call' ? '1st Call' : '2nd Call';
+      const label = callNumber ? `${callNumber} Call` : 'Call';
       const parts = [`[${label}]`];
       if (callMainStatus) parts.push(callMainStatus);
       if (callSubStatus)  parts.push(`→ ${callSubStatus}`);
@@ -640,12 +642,11 @@ const LeadDetails = () => {
           <Card title="Notes & Communication History">
             <Form form={noteForm} onFinish={handleAddNote} layout="vertical">
 
-              {/* Note type selector */}
+              {/* ── Note type toggle ─────────────────────────────────────── */}
               <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
                 {[
-                  { key: 'manual',   label: '📝 Manual Note', color: '#1890ff' },
-                  { key: '1st_call', label: '📞 1st Call',    color: '#fa8c16' },
-                  { key: '2nd_call', label: '📞 2nd Call',    color: '#52c41a' },
+                  { key: 'manual', label: '📝 Manual Note', color: '#1890ff' },
+                  { key: 'call',   label: '📞 Call Note',   color: '#fa8c16' },
                 ].map(({ key, label, color }) => (
                   <Button
                     key={key}
@@ -653,8 +654,10 @@ const LeadDetails = () => {
                     style={noteType === key ? { background: color, borderColor: color } : {}}
                     onClick={() => {
                       setNoteType(key);
+                      setCallNumber(null);
                       setCallMainStatus(null);
                       setCallSubStatus(null);
+                      noteForm.resetFields(['content']);
                     }}
                   >
                     {label}
@@ -662,94 +665,194 @@ const LeadDetails = () => {
                 ))}
               </div>
 
-              {/* Call disposition dropdowns */}
-              {(noteType === '1st_call' || noteType === '2nd_call') && (
-                <div style={{ background: '#fafafa', border: '1px solid #f0f0f0', borderRadius: 8, padding: 12, marginBottom: 12 }}>
-                  <div style={{ marginBottom: 8 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: '#595959', marginBottom: 4 }}>Call Status *</div>
+              {/* ── Call note flow (shown only when "Call Note" is selected) ── */}
+              {noteType === 'call' && (
+                <div style={{
+                  background: '#fffbf0',
+                  border: '1px solid #ffd591',
+                  borderRadius: 10,
+                  padding: 14,
+                  marginBottom: 14,
+                }}>
+
+                  {/* Step 1 — Which call? */}
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#874d00', marginBottom: 6 }}>
+                      Step 1 — Which call is this?
+                    </div>
                     <Select
                       style={{ width: '100%' }}
-                      placeholder="Select call outcome…"
-                      value={callMainStatus}
-                      onChange={(v) => { setCallMainStatus(v); setCallSubStatus(null); }}
-                    >
-                      {Object.keys(CALL_DISPOSITIONS).map(s => (
-                        <Option key={s} value={s}>{s}</Option>
-                      ))}
-                    </Select>
+                      placeholder="Select call number (1st, 2nd, 3rd…)"
+                      value={callNumber}
+                      onChange={(v) => {
+                        setCallNumber(v);
+                        setCallMainStatus(null);
+                        setCallSubStatus(null);
+                      }}
+                      options={[
+                        '1st','2nd','3rd','4th','5th',
+                        '6th','7th','8th','9th','10th',
+                        '11th','12th','13th','14th','15th',
+                      ].map(n => ({ label: `${n} Call`, value: n }))}
+                    />
                   </div>
 
-                  {callMainStatus && (
-                    <div>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: '#595959', marginBottom: 4 }}>Sub Status *</div>
-                      <Select
-                        style={{ width: '100%' }}
-                        placeholder="Select sub-status…"
-                        value={callSubStatus}
-                        onChange={setCallSubStatus}
-                      >
-                        {(CALL_DISPOSITIONS[callMainStatus]?.[noteType === '1st_call' ? 'first' : 'second'] || []).map(s => (
-                          <Option key={s} value={s}>{s}</Option>
-                        ))}
-                      </Select>
+                  {/* Step 2 & 3 — Outcome + Sub-status (only for 1st and 2nd call) */}
+                  {callNumber && (callNumber === '1st' || callNumber === '2nd') && (
+                    <>
+                      <div style={{ marginBottom: 12 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: '#874d00', marginBottom: 6 }}>
+                          Step 2 — Call outcome
+                        </div>
+                        <Select
+                          style={{ width: '100%' }}
+                          placeholder="Select call outcome…"
+                          value={callMainStatus}
+                          onChange={(v) => { setCallMainStatus(v); setCallSubStatus(null); }}
+                          options={Object.keys(CALL_DISPOSITIONS).map(s => ({ label: s, value: s }))}
+                        />
+                      </div>
+
+                      {callMainStatus && (
+                        <div>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: '#874d00', marginBottom: 6 }}>
+                            Step 3 — Sub-status
+                          </div>
+                          <Select
+                            style={{ width: '100%' }}
+                            placeholder="Select sub-status…"
+                            value={callSubStatus}
+                            onChange={setCallSubStatus}
+                            options={(
+                              CALL_DISPOSITIONS[callMainStatus]?.[
+                                callNumber === '1st' ? 'first' : 'second'
+                              ] || []
+                            ).map(s => ({ label: s, value: s }))}
+                          />
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {/* Progress indicator */}
+                  {callNumber && (
+                    <div style={{ marginTop: 10, display: 'flex', gap: 6, alignItems: 'center' }}>
+                      {(callNumber === '1st' || callNumber === '2nd') ? (
+                        // 3 steps for 1st and 2nd call
+                        [
+                          { done: !!callNumber,     label: 'Call #' },
+                          { done: !!callMainStatus, label: 'Outcome' },
+                          { done: !!callSubStatus,  label: 'Sub-status' },
+                        ].map((s, i) => (
+                          <span key={i} style={{
+                            padding: '2px 10px', borderRadius: 12, fontSize: 11,
+                            background: s.done ? '#52c41a20' : '#f0f0f0',
+                            color:      s.done ? '#389e0d'   : '#8c8c8c',
+                            border: `1px solid ${s.done ? '#b7eb8f' : '#d9d9d9'}`,
+                            fontWeight: s.done ? 700 : 400,
+                          }}>
+                            {s.done ? '✓' : (i + 1)} {s.label}
+                          </span>
+                        ))
+                      ) : (
+                        // Only 1 step needed for 3rd call onwards
+                        <span style={{
+                          padding: '2px 10px', borderRadius: 12, fontSize: 11,
+                          background: '#52c41a20', color: '#389e0d',
+                          border: '1px solid #b7eb8f', fontWeight: 700,
+                        }}>
+                          ✓ {callNumber} Call selected — add your note below
+                        </span>
+                      )}
                     </div>
                   )}
                 </div>
               )}
 
-              {/* Free-text note (always shown; optional for call notes) */}
-              <Form.Item
-                name="content"
-                rules={noteType === 'manual' ? [{ required: true, message: 'Please enter a note' }] : []}
-              >
-                <TextArea
-                  rows={3}
-                  placeholder={
-                    noteType === 'manual'
-                      ? 'Add note about conversation, objections, requirements…'
-                      : 'Additional remarks (optional)…'
-                  }
-                />
-              </Form.Item>
+              {/* ── Free-text note ─────────────────────────────────────────── */}
+              {/* 1st/2nd call: need outcome + sub-status first
+                  3rd+ call: just call number is enough             */}
+              {(noteType === 'manual' || (noteType === 'call' && callNumber && (
+                (callNumber === '1st' || callNumber === '2nd')
+                  ? (callMainStatus && callSubStatus)
+                  : true
+              ))) && (
+                <>
+                  <Form.Item
+                    name="content"
+                    rules={noteType === 'manual' ? [{ required: true, message: 'Please enter a note' }] : []}
+                  >
+                    <TextArea
+                      rows={3}
+                      placeholder={
+                        noteType === 'manual'
+                          ? 'Add note about conversation, objections, requirements…'
+                          : 'Additional remarks about this call (optional)…'
+                      }
+                    />
+                  </Form.Item>
 
-              {/* Channel selector (only for manual notes) */}
-              {noteType === 'manual' && (
-                <Form.Item name="channel" style={{ marginBottom: 12 }}>
-                  <Select placeholder="Channel" defaultValue="manual" style={{ width: '50%' }}>
-                    <Option value="manual">Manual Note</Option>
-                    <Option value="call">Phone Call</Option>
-                    <Option value="whatsapp">WhatsApp</Option>
-                    <Option value="email">Email</Option>
-                  </Select>
-                </Form.Item>
+                  {/* Channel (manual notes only) */}
+                  {noteType === 'manual' && (
+                    <Form.Item name="channel" style={{ marginBottom: 12 }}>
+                      <Select placeholder="Channel" defaultValue="manual" style={{ width: '50%' }}>
+                        <Option value="manual">Manual Note</Option>
+                        <Option value="call">Phone Call</Option>
+                        <Option value="whatsapp">WhatsApp</Option>
+                        <Option value="email">Email</Option>
+                      </Select>
+                    </Form.Item>
+                  )}
+
+                  <Button
+                    type="primary"
+                    htmlType="submit"
+                    icon={<SaveOutlined />}
+                    loading={addNoteMutation.isPending}
+                    style={noteType === 'call' ? { background: '#fa8c16', borderColor: '#fa8c16' } : {}}
+                  >
+                    {noteType === 'manual'
+                      ? 'Add Note'
+                      : `Save ${callNumber} Call Note`}
+                  </Button>
+                </>
               )}
 
-              <Button
-                type="primary"
-                htmlType="submit"
-                icon={<SaveOutlined />}
-                loading={addNoteMutation.isPending}
-                disabled={
-                  (noteType === '1st_call' || noteType === '2nd_call')
-                    ? !callMainStatus || !callSubStatus
-                    : false
-                }
-              >
-                {noteType === 'manual' ? 'Add Note' : `Save ${noteType === '1st_call' ? '1st' : '2nd'} Call Note`}
-              </Button>
+              {/* Prompt when call note not yet ready */}
+              {noteType === 'call' && callNumber && (callNumber === '1st' || callNumber === '2nd') && (!callMainStatus || !callSubStatus) && (
+                <div style={{
+                  color: '#8c8c8c', fontSize: 13, marginTop: 4,
+                  fontStyle: 'italic', padding: '4px 0',
+                }}>
+                  Complete outcome and sub-status to add your call note.
+                </div>
+              )}
+              {noteType === 'call' && !callNumber && (
+                <div style={{
+                  color: '#8c8c8c', fontSize: 13, marginTop: 4,
+                  fontStyle: 'italic', padding: '4px 0',
+                }}>
+                  Select which call number this is to continue.
+                </div>
+              )}
             </Form>
 
             <Divider />
 
             <Timeline style={{ marginTop: '24px' }}>
               {lead?.notes?.map((note) => {
-                // Detect structured call notes: first line starts with [1st Call] or [2nd Call]
+                // Detect structured call notes: [Nth Call] | outcome | → sub
                 const lines = (note.content || '').split('\n');
-                const callMatch = lines[0]?.match(/^\[(1st Call|2nd Call)\]\s*\|?\s*(.*)/);
+                const callMatch = lines[0]?.match(/^\[(\d*(?:1st|2nd|3rd|\d+th) Call)\]\s*\|?\s*(.*)/);
                 const isCallNote = !!callMatch;
-                const callLabel   = callMatch?.[1];
+                const callLabel   = callMatch?.[1] || '';
                 const callDetails = callMatch?.[2] || '';
                 const extraText   = isCallNote ? lines.slice(1).join('\n').trim() : note.content;
+
+                // Pick a colour per call number so each call looks distinct
+                const CALL_COLORS = ['orange','green','purple','cyan','magenta','red','gold','lime','volcano','geekblue'];
+                const callColorIdx = parseInt(callLabel) || (callLabel.startsWith('1') ? 0 : callLabel.startsWith('2') ? 1 : 2);
+                const callTagColor = CALL_COLORS[(callColorIdx - 1) % CALL_COLORS.length] || 'orange';
 
                 return (
                   <Timeline.Item
@@ -762,7 +865,7 @@ const LeadDetails = () => {
                   >
                     <div style={{ marginBottom: 6 }}>
                       {isCallNote ? (
-                        <Tag color={callLabel === '1st Call' ? 'orange' : 'green'} style={{ fontWeight: 600 }}>
+                        <Tag color={callTagColor} style={{ fontWeight: 600 }}>
                           📞 {callLabel}
                         </Tag>
                       ) : (
@@ -938,49 +1041,66 @@ const LeadDetails = () => {
             </div>
           </Card>
 
-          {/* Call Disposition Summary */}
+          {/* Call Disposition Summary — shows latest note per call number */}
           {(() => {
-            const callNotes = (lead?.notes || []).filter(n =>
-              /^\[(1st Call|2nd Call)\]/.test(n.content || '')
-            );
+            // Match any [Nth Call] format
+            const CALL_RE = /^\[(\d*(?:1st|2nd|3rd|\d+th) Call)\]\s*\|?\s*(.*)/;
+            const callNotes = (lead?.notes || []).filter(n => CALL_RE.test(n.content || ''));
             if (!callNotes.length) return null;
-            const parseCallNote = (content) => {
-              const m = content.match(/^\[(1st Call|2nd Call)\]\s*\|?\s*(.*)/);
-              if (!m) return null;
-              const parts = m[2].split('→').map(s => s.replace(/^\s*\|\s*/, '').trim());
-              return { label: m[1], mainStatus: parts[0] || '', subStatus: parts[1] || '' };
-            };
-            const first  = callNotes.filter(n => n.content.startsWith('[1st Call]'));
-            const second = callNotes.filter(n => n.content.startsWith('[2nd Call]'));
-            const lastFirst  = first[first.length - 1];
-            const lastSecond = second[second.length - 1];
+
+            // Group by call label, keep last note per group
+            const byLabel = {};
+            callNotes.forEach(n => {
+              const m = n.content.match(CALL_RE);
+              if (m) {
+                byLabel[m[1]] = byLabel[m[1]] || [];
+                byLabel[m[1]].push(n);
+              }
+            });
+
+            const CALL_COLORS = ['orange','green','purple','cyan','magenta','red','gold','lime','volcano','geekblue'];
+            const ordinalToNum = (label) => parseInt(label) || 1;
+
+            // Sort call labels by call number
+            const sortedLabels = Object.keys(byLabel).sort((a, b) => ordinalToNum(a) - ordinalToNum(b));
+
             return (
-              <Card title={<span>📞 Call Summary</span>} size="small" style={{ marginBottom: 24 }}>
-                {lastFirst && (() => {
-                  const p = parseCallNote(lastFirst.content);
-                  return p ? (
-                    <div style={{ marginBottom: 10 }}>
-                      <Tag color="orange" style={{ marginBottom: 4 }}>1st Call</Tag>
-                      <div style={{ fontSize: 12, fontWeight: 600 }}>{p.mainStatus}</div>
-                      {p.subStatus && <div style={{ fontSize: 11, color: '#595959' }}>→ {p.subStatus}</div>}
-                      <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 2 }}>{parseDate(lastFirst.created_at)?.format('MMM DD, hh:mm A')}</div>
+              <Card
+                title={<span>📞 Call Summary ({callNotes.length} call note{callNotes.length !== 1 ? 's' : ''} recorded)</span>}
+                size="small"
+                style={{ marginBottom: 24 }}
+              >
+                {sortedLabels.map((label, idx) => {
+                  const notes = byLabel[label];
+                  const latest = notes[notes.length - 1];
+                  const m = latest.content.match(CALL_RE);
+                  if (!m) return null;
+                  const rest = m[2] || '';
+                  const parts = rest.split('→').map(s => s.replace(/^\s*\|\s*/, '').trim()).filter(Boolean);
+                  const mainStatus = parts[0] || '';
+                  const subStatus  = parts[1] || '';
+                  const color = CALL_COLORS[idx % CALL_COLORS.length];
+                  return (
+                    <div key={label} style={{
+                      marginBottom: 10, padding: '8px 10px',
+                      background: '#fafafa', borderRadius: 8,
+                      border: '1px solid #f0f0f0',
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                        <Tag color={color} style={{ fontWeight: 700, margin: 0 }}>📞 {label}</Tag>
+                        {notes.length > 1 && (
+                          <span style={{ fontSize: 11, color: '#8c8c8c' }}>{notes.length} entries</span>
+                        )}
+                      </div>
+                      {mainStatus && <div style={{ fontSize: 12, fontWeight: 600, color: '#262626' }}>{mainStatus}</div>}
+                      {subStatus  && <div style={{ fontSize: 11, color: '#595959' }}>→ {subStatus}</div>}
+                      <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 2 }}>
+                        {parseDate(latest.created_at)?.format('MMM DD, hh:mm A')}
+                        {latest.created_by && ` · ${latest.created_by}`}
+                      </div>
                     </div>
-                  ) : null;
-                })()}
-                {lastSecond && (() => {
-                  const p = parseCallNote(lastSecond.content);
-                  return p ? (
-                    <div>
-                      <Tag color="green" style={{ marginBottom: 4 }}>2nd Call</Tag>
-                      <div style={{ fontSize: 12, fontWeight: 600 }}>{p.mainStatus}</div>
-                      {p.subStatus && <div style={{ fontSize: 11, color: '#595959' }}>→ {p.subStatus}</div>}
-                      <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 2 }}>{parseDate(lastSecond.created_at)?.format('MMM DD, hh:mm A')}</div>
-                    </div>
-                  ) : null;
-                })()}
-                <div style={{ marginTop: 8, fontSize: 11, color: '#8c8c8c', borderTop: '1px solid #f0f0f0', paddingTop: 6 }}>
-                  {first.length} first call{first.length !== 1 ? 's' : ''} · {second.length} second call{second.length !== 1 ? 's' : ''} recorded
-                </div>
+                  );
+                })}
               </Card>
             );
           })()}
