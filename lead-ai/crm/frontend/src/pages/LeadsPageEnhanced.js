@@ -289,12 +289,12 @@ const LeadsPageEnhanced = () => {
         throw err; // Re-throw to trigger error state
       }
     },
-    staleTime: 60 * 1000,   // 60 seconds cache
-    gcTime: 5 * 60 * 1000,  // Keep in cache for 5 minutes
+    staleTime: 60 * 1000,
+    gcTime: 5 * 60 * 1000,
     refetchInterval: false,
-    refetchOnWindowFocus: false,  // Prevent unnecessary refetches
-    retry: 2,
-    retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
+    refetchOnWindowFocus: false,
+    retry: 3,
+    retryDelay: (attemptIndex) => Math.min(2000 * 2 ** attemptIndex, 30000),
   });
 
   const leads = leadsResponse?.leads || [];
@@ -1142,12 +1142,20 @@ const LeadsPageEnhanced = () => {
         {isError && (
           <Alert
             style={{ marginBottom: 16 }}
-            message="Failed to load leads"
-            description={error?.message || 'An error occurred while fetching leads. Please try again.'}
-            type="error"
+            message={
+              error?.code === 'ECONNABORTED' || error?.message?.includes('timeout')
+                ? '⏳ Server is starting up…'
+                : 'Failed to load leads'
+            }
+            description={
+              error?.code === 'ECONNABORTED' || error?.message?.includes('timeout')
+                ? 'The API server on Render is waking up from sleep (free tier cold-start). This takes up to 60 seconds. Click Retry in a moment.'
+                : error?.message || 'An error occurred while fetching leads. Please try again.'
+            }
+            type={error?.code === 'ECONNABORTED' ? 'warning' : 'error'}
             showIcon
             action={
-              <Button size="small" onClick={() => refetch()}>
+              <Button size="small" type="primary" onClick={() => refetch()}>
                 Retry
               </Button>
             }
@@ -1193,7 +1201,7 @@ const LeadsPageEnhanced = () => {
           dataSource={filteredLeads}
           loading={{
             spinning: isLoading || isFetching,
-            tip: isLoading ? 'Loading leads...' : 'Refreshing...',
+            tip: isLoading ? 'Loading leads… (server may be waking up)' : 'Refreshing…',
           }}
           rowKey="lead_id"
           scroll={{ x: 1800 }}

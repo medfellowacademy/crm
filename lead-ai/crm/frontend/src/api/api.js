@@ -4,7 +4,9 @@ const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://medfellow-crm-api
 
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 15000,          // 15 s — prevents requests hanging indefinitely
+  // Render free tier cold-starts can take 30-60 s.
+  // 60 s gives the server time to wake up without the user seeing a timeout error.
+  timeout: 60000,
   headers: {
     'Content-Type': 'application/json',
   },
