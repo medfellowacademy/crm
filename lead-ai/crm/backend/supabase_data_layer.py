@@ -185,9 +185,11 @@ class SupabaseDataLayer:
                 response = query.execute()
             except Exception as col_err:
                 err_str = str(col_err)
-                # New columns (qualification, company) may not exist yet in Supabase
-                if 'qualification' in err_str or 'company' in err_str:
-                    missing = [c for c in ('qualification', 'company') if c in err_str]
+                # Any new column that doesn't exist yet triggers a fallback to
+                # LIST_COLUMNS_COMPAT (which strips all new/optional columns).
+                NEW_COLS = ('qualification', 'company', 'utm_source', 'utm_medium', 'utm_campaign')
+                if any(c in err_str for c in NEW_COLS):
+                    missing = [c for c in NEW_COLS if c in err_str]
                     for col in missing:
                         logger.warning(
                             f"'{col}' column missing in Supabase — run: "

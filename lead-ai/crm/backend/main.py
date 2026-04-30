@@ -818,7 +818,7 @@ class LeadCreate(BaseModel):
     def _normalise_source_create(cls, v):
         return _normalise_source(v)
 
-    @field_validator('full_name', 'source', 'course_interested', 'assigned_to', 'qualification', 'notes', mode='before')
+    @field_validator('full_name', 'course_interested', 'assigned_to', 'qualification', 'notes', mode='before')
     @classmethod
     def _sanitize(cls, v):
         return sanitize_text(v, max_length=500) if v else None
@@ -867,7 +867,7 @@ class LeadUpdate(BaseModel):
     def _normalise_source_update(cls, v):
         return _normalise_source(v)
 
-    @field_validator('full_name', 'source', 'course_interested', 'assigned_to', 'next_action',
+    @field_validator('full_name', 'course_interested', 'assigned_to', 'next_action',
                      'qualification', 'loss_reason', 'loss_note', mode='before')
     @classmethod
     def _sanitize(cls, v):
