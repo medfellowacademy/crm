@@ -103,6 +103,8 @@ const LeadDetails = () => {
   const [lossModal, setLossModal] = useState(false);
   const [pendingStatus, setPendingStatus] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
+  const [editingRevField, setEditingRevField] = useState(null); // 'expected' | 'actual' | null
+  const [revInputVal, setRevInputVal]         = useState(null);
 
   // Call-note state
   const [noteType, setNoteType]             = useState('manual');  // 'manual' | 'call'
@@ -1105,67 +1107,94 @@ const LeadDetails = () => {
             );
           })()}
 
-          {/* Revenue Card */}
-          <Card title={<span><DollarOutlined /> Revenue</span>} style={{ marginBottom: '24px' }}>
-            {isEditing ? (
-              <Row gutter={16}>
-                <Col span={12}>
-                  <Form.Item
-                    name="expected_revenue"
-                    label="Expected Revenue (₹)"
-                    tooltip="The revenue you expect if this lead converts"
-                  >
-                    <InputNumber
-                      style={{ width: '100%' }}
-                      min={0}
-                      step={1000}
-                      formatter={v => `₹ ${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
-                      parser={v => v.replace(/₹\s?|(,*)/g, '')}
-                      placeholder="e.g. 150000"
-                    />
-                  </Form.Item>
-                </Col>
-                <Col span={12}>
-                  <Form.Item
-                    name="actual_revenue"
-                    label="Actual Revenue (₹)"
-                    tooltip="Fill this once the lead is enrolled and payment is received"
-                  >
-                    <InputNumber
-                      style={{ width: '100%' }}
-                      min={0}
-                      step={1000}
-                      formatter={v => `₹ ${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
-                      parser={v => v.replace(/₹\s?|(,*)/g, '')}
-                      placeholder="e.g. 150000"
-                    />
-                  </Form.Item>
-                </Col>
-              </Row>
-            ) : (
-              <Row gutter={16}>
-                <Col span={12}>
-                  <Statistic
-                    title="Expected Revenue"
-                    value={lead?.expected_revenue || 0}
-                    precision={0}
-                    prefix="₹"
-                    valueStyle={{ color: '#faad14', fontSize: '24px' }}
+          {/* Revenue Card — always inline-editable (click any value to edit) */}
+          <Card
+            title={<span><DollarOutlined /> Revenue</span>}
+            style={{ marginBottom: '24px' }}
+            extra={<span style={{ fontSize: 11, color: '#8c8c8c' }}>Click a value to edit</span>}
+          >
+            <Row gutter={[16, 16]}>
+              {/* Expected Revenue */}
+              <Col span={12}>
+                <div style={{ marginBottom: 4, fontSize: 12, color: '#8c8c8c' }}>Expected Revenue</div>
+                {editingRevField === 'expected' ? (
+                  <InputNumber
+                    autoFocus
+                    style={{ width: '100%' }}
+                    min={0}
+                    step={1000}
+                    value={revInputVal}
+                    formatter={v => `₹ ${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+                    parser={v => v.replace(/₹\s?|(,*)/g, '')}
+                    onChange={setRevInputVal}
+                    onPressEnter={() => {
+                      if (revInputVal != null) updateLeadMutation.mutate({ expected_revenue: Number(revInputVal) });
+                      setEditingRevField(null);
+                    }}
+                    onBlur={() => {
+                      if (revInputVal != null) updateLeadMutation.mutate({ expected_revenue: Number(revInputVal) });
+                      setEditingRevField(null);
+                    }}
                   />
-                </Col>
-                {lead?.status === 'Enrolled' && (
-                  <Col span={12}>
-                    <Statistic
-                      title="Actual Revenue"
-                      value={lead?.actual_revenue || 0}
-                      precision={0}
-                      prefix="₹"
-                      valueStyle={{ color: '#52c41a', fontSize: '24px' }}
-                    />
-                  </Col>
+                ) : (
+                  <div
+                    onClick={() => { setEditingRevField('expected'); setRevInputVal(lead?.expected_revenue || 0); }}
+                    style={{
+                      cursor: 'pointer', fontSize: 24, fontWeight: 700,
+                      color: '#faad14', padding: '4px 0',
+                      borderBottom: '1px dashed #faad14',
+                      display: 'inline-block',
+                    }}
+                    title="Click to edit"
+                  >
+                    ₹{(lead?.expected_revenue || 0).toLocaleString('en-IN')}
+                    <span style={{ fontSize: 12, marginLeft: 6, color: '#8c8c8c' }}>✏️</span>
+                  </div>
                 )}
-              </Row>
-            )}
+              </Col>
+
+              {/* Actual Revenue */}
+              <Col span={12}>
+                <div style={{ marginBottom: 4, fontSize: 12, color: '#8c8c8c' }}>
+                  Actual Revenue{lead?.status !== 'Enrolled' && <span style={{ color: '#faad14', marginLeft: 4 }}>(fill when enrolled)</span>}
+                </div>
+                {editingRevField === 'actual' ? (
+                  <InputNumber
+                    autoFocus
+                    style={{ width: '100%' }}
+                    min={0}
+                    step={1000}
+                    value={revInputVal}
+                    formatter={v => `₹ ${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+                    parser={v => v.replace(/₹\s?|(,*)/g, '')}
+                    onChange={setRevInputVal}
+                    onPressEnter={() => {
+                      if (revInputVal != null) updateLeadMutation.mutate({ actual_revenue: Number(revInputVal) });
+                      setEditingRevField(null);
+                    }}
+                    onBlur={() => {
+                      if (revInputVal != null) updateLeadMutation.mutate({ actual_revenue: Number(revInputVal) });
+                      setEditingRevField(null);
+                    }}
+                  />
+                ) : (
+                  <div
+                    onClick={() => { setEditingRevField('actual'); setRevInputVal(lead?.actual_revenue || 0); }}
+                    style={{
+                      cursor: 'pointer', fontSize: 24, fontWeight: 700,
+                      color: lead?.status === 'Enrolled' ? '#52c41a' : '#bfbfbf',
+                      padding: '4px 0',
+                      borderBottom: `1px dashed ${lead?.status === 'Enrolled' ? '#52c41a' : '#bfbfbf'}`,
+                      display: 'inline-block',
+                    }}
+                    title="Click to edit"
+                  >
+                    ₹{(lead?.actual_revenue || 0).toLocaleString('en-IN')}
+                    <span style={{ fontSize: 12, marginLeft: 6, color: '#8c8c8c' }}>✏️</span>
+                  </div>
+                )}
+              </Col>
+            </Row>
           </Card>
 
           {/* Lead Profile Quality */}
