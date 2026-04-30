@@ -209,8 +209,6 @@ def get_cached_course_prices(force_refresh: bool = False) -> Dict[str, float]:
         return COURSE_CACHE[_COURSE_PRICES_KEY]
 
     # Get courses from Supabase
-    if not supabase_data.client:
-        logger.warning("⚠️ Supabase not configured, returning empty course prices")
         return {}
     
     courses = supabase_data.get_courses()
@@ -240,8 +238,6 @@ async def lifespan(app: FastAPI):
     # --- Warn on missing optional-but-important env vars ---
     if os.getenv("SUPABASE_URL") and not os.getenv("SUPABASE_KEY"):
         logger.warning("⚠️ SUPABASE_URL is set but SUPABASE_KEY is missing — Supabase will not connect.")
-    if not os.getenv("SUPABASE_URL") or not os.getenv("SUPABASE_KEY"):
-        logger.warning("⚠️ SUPABASE_URL/SUPABASE_KEY not set — using local SQLite. Data will NOT sync to Supabase.")
     if not os.getenv("OPENAI_API_KEY"):
         logger.warning("⚠️ OPENAI_API_KEY is not set — AI assistant features will be disabled.")
     if not os.getenv("RESEND_API_KEY"):
@@ -249,10 +245,7 @@ async def lifespan(app: FastAPI):
     if not os.getenv("TWILIO_ACCOUNT_SID") or not os.getenv("TWILIO_AUTH_TOKEN"):
         logger.warning("⚠️ TWILIO credentials not set — SMS/WhatsApp via Twilio will be disabled.")
 
-    logger.info(f"📊 Database: {SQLALCHEMY_DATABASE_URL}")
-
-    # Create database indexes for optimized queries
-    create_database_indexes(engine)
+    logger.info(f"📊 Database: Supabase (cloud PostgreSQL)")
 
     # Pre-load model and course prices at startup
     try:
@@ -274,22 +267,12 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"⚠️ Could not check/seed database: {e}")
 
-    # Warm up caches with frequently accessed data
-    db = SessionLocal()
-    try:
-        await warm_cache(db)
-        analyze_slow_queries(db)
-    except Exception as e:
-        logger.error(f"⚠️ Cache warming failed: {e}")
-    finally:
-        db.close()
-
     logger.info("✅ Application ready to accept requests")
 
-    # ── Start score-decay background scheduler ────────────────────────────
-    global _decay_task
-    _decay_task = _asyncio.create_task(_decay_scheduler_loop())
-    logger.info("⏱️  Score decay scheduler started")
+    # Note: Score decay scheduler disabled - requires Supabase migration
+    # global _decay_task
+    # _decay_task = _asyncio.create_task(_decay_scheduler_loop())
+    # logger.info("⏱️  Score decay scheduler started")
 
     yield
 
@@ -356,10 +339,9 @@ def _get_counselor_name(request: Request) -> str | None:
         if auth_header.startswith("Bearer "):
             token_data = decode_access_token(auth_header.split(" ", 1)[1])
             if token_data and token_data.role == "Counselor":
-                if supabase_data.client:
-                    user = supabase_data.get_user_by_email(token_data.email)
-                    if user:
-                        return user.get('full_name')
+                user = supabase_data.get_user_by_email(token_data.email)
+                if user:
+                    return user.get('full_name')
     except Exception:
         pass
     return None
@@ -411,30 +393,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-SQLALCHEMY_DATABASE_URL = supabase_manager.get_database_url()
+# ============================================================================
+# DATABASE MODELS (Structure only - no active ORM usage)
+# These models exist for FastAPI response_model schemas and AI scoring structure  
+# All actual database operations use Supabase REST API via supabase_data_layer.py
+# ============================================================================
 
-# Create engine with appropriate settings based on database type
-if SQLALCHEMY_DATABASE_URL.startswith("postgresql"):
-    # PostgreSQL (Supabase) configuration
-    engine = create_engine(
-        SQLALCHEMY_DATABASE_URL,
-        pool_size=10,
-        max_overflow=20,
-        pool_pre_ping=True,  # Verify connections before using
-        pool_recycle=1800,  # Recycle connections after 30 minutes
-        echo=False
-    )
-    logger.info("🐘 Using PostgreSQL database (Supabase)", extra={"system": "database"})
-else:
-    # SQLite (local development) configuration
-    engine = create_engine(
-        SQLALCHEMY_DATABASE_URL,
-        connect_args={"check_same_thread": False},
-        echo=False
-    )
-    logger.info("💾 Using SQLite database (local)", extra={"system": "database"})
-
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# Note: SQLAlchemy engine/SessionLocal removed - Supabase-only architecture
+# Base kept for model class definitions
 Base = declarative_base()
 
 # ============================================================================
@@ -707,7 +673,6 @@ class DBChatMessage(Base):
 
 
 # Create tables
-Base.metadata.create_all(bind=engine)
 
 # ============================================================================
 # PYDANTIC MODELS (API)
@@ -1341,8 +1306,6 @@ class LoginRequest(BaseModel):
 async def login(request: Request, body: LoginRequest):
     """Login with username (email) and password - validates against Supabase users table"""
     
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     user = supabase_data.get_user_by_email(body.username)
 
@@ -1416,8 +1379,6 @@ async def root():
 async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks):
     """Create a new lead with AI scoring - SUPABASE ONLY"""
 
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
 
     # Generate a collision-safe unique lead ID using timestamp + random suffix
     import uuid as _uuid
@@ -1510,8 +1471,6 @@ async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks):
 async def bulk_create_leads(leads: list[LeadCreate], background_tasks: BackgroundTasks, request: Request):
     """Bulk create multiple leads at once for import functionality - SUPABASE ONLY"""
     
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     # Get the importer's name for notes
     importer_name = _get_counselor_name(request)
@@ -1712,10 +1671,9 @@ async def get_leads(
             token_data = decode_access_token(auth_header.split(" ", 1)[1])
             if token_data and token_data.role == "Counselor":
                 # Use Supabase to get user
-                if supabase_data.client:
-                    caller = supabase_data.get_user_by_email(token_data.email)
-                    if caller:
-                        assigned_to = caller.get('full_name')
+                caller = supabase_data.get_user_by_email(token_data.email)
+                if caller:
+                    assigned_to = caller.get('full_name')
     except Exception:
         pass  # token errors already handled by _verify_token; never crash the endpoint
 
@@ -1736,11 +1694,9 @@ async def get_leads(
     if _cache_key in LEAD_CACHE:
         return LEAD_CACHE[_cache_key]
 
-    # Use Supabase REST API if available
-    if supabase_data.client:
-        # Use Supabase REST API
-        try:
-            leads_data = supabase_data.get_leads(
+    # Use Supabase REST API (mandatory)
+    try:
+        leads_data = supabase_data.get_leads(
                 skip=skip,
                 limit=limit,
                 status=status.value if status else None,
@@ -1772,16 +1728,14 @@ async def get_leads(
                 updated_before=updated_before.isoformat() if updated_before else None,
                 updated_from=updated_from.isoformat() if updated_from else None,
                 updated_to=updated_to.isoformat() if updated_to else None,
-            )
-            # Cache and return raw data from Supabase (already in correct format)
-            LEAD_CACHE[_cache_key] = leads_data
-            return leads_data
-        except Exception as e:
-            logger.error(f"Supabase query failed: {e}")
-            raise HTTPException(status_code=500, detail="Failed to fetch leads from database")
-    
-    # No Supabase client available
-    raise HTTPException(status_code=500, detail="Database not configured")
+        )
+        # Cache and return raw data from Supabase (already in correct format)
+        LEAD_CACHE[_cache_key] = leads_data
+        return leads_data
+    except Exception as e:
+        logger.error(f"Supabase query failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch leads from database")
+
 
 @app.get("/api/leads/{lead_id}")
 async def get_lead(lead_id: str, request: Request):
@@ -1790,8 +1744,6 @@ async def get_lead(lead_id: str, request: Request):
     _counselor_name = _get_counselor_name(request)
 
     # Use Supabase REST API
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         lead = supabase_data.get_lead_by_id(lead_id)
@@ -1824,8 +1776,6 @@ async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, b
     _counselor_name = _get_counselor_name(request)
 
     # Use Supabase REST API
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         # Counselors may only update leads assigned to them
@@ -1863,8 +1813,6 @@ async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, b
 async def delete_lead(lead_id: str, request: Request):
     """Delete lead - SUPABASE ONLY"""
 
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
 
     # Counselors cannot delete any lead
     _counselor_name = _get_counselor_name(request)
@@ -1891,8 +1839,6 @@ async def delete_lead(lead_id: str, request: Request):
 async def bulk_update_leads(bulk_data: dict):
     """Bulk update multiple leads - SUPABASE ONLY"""
     
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     lead_ids = bulk_data.get("lead_ids", [])
     updates = bulk_data.get("updates", {})
@@ -1949,8 +1895,6 @@ async def bulk_update_leads(bulk_data: dict):
 async def add_note(lead_id: str, note: NoteCreate, request: Request, background_tasks: BackgroundTasks):
     """Add note to lead - Supabase only"""
     
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     # Get lead
     lead = supabase_data.get_lead_by_id(lead_id)
@@ -2007,8 +1951,6 @@ async def add_note(lead_id: str, note: NoteCreate, request: Request, background_
 async def get_notes(lead_id: str):
     """Get all notes for a lead - Supabase only"""
 
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
@@ -2023,8 +1965,6 @@ async def get_notes(lead_id: str):
 async def get_lead_activities(lead_id: str, type: Optional[str] = None):
     """Get enriched activity timeline for a lead — notes, WhatsApp, calls, emails, status changes. Supabase only."""
     try:
-        if not supabase_data.client:
-            raise HTTPException(status_code=500, detail="Database not configured")
         
         lead_data = supabase_data.get_lead_by_id(lead_id)
         if not lead_data:
@@ -2139,8 +2079,6 @@ async def get_lead_activities(lead_id: str, type: Optional[str] = None):
 @app.get("/api/leads/{lead_id}/ai-summary")
 async def get_lead_ai_summary(lead_id: str):
     """Get AI-generated summary and insights for a lead - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         lead_data = supabase_data.get_lead_by_id(lead_id)
@@ -2208,8 +2146,6 @@ async def get_lead_ai_summary(lead_id: str):
 @app.post("/api/hospitals", response_model=HospitalResponse)
 async def create_hospital(hospital: HospitalCreate):
     """Create hospital - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         payload = hospital.dict()
@@ -2233,8 +2169,6 @@ async def get_hospitals(
     status: Optional[str] = None
 ):
     """Get hospitals with filters - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         query = supabase_data.client.table('hospitals').select('*')
@@ -2257,8 +2191,6 @@ async def get_hospitals(
 @app.post("/api/courses", response_model=CourseResponse)
 async def create_course(course: CourseCreate):
     """Create course - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         payload = course.dict()
@@ -2284,8 +2216,6 @@ async def get_courses(
     is_active: bool = True
 ):
     """Get courses with filters (cached for 1 hour)"""
-    if not supabase_data.client:
-        return []
     
     try:
         courses = supabase_data.get_courses(is_active=is_active)
@@ -2303,8 +2233,6 @@ async def get_courses(
 @app.get("/api/notifications")
 async def get_notifications():
     """Real notifications: overdue follow-ups + stale hot leads"""
-    if not supabase_data.client:
-        return []
     
     try:
         today = datetime.utcnow().date()
@@ -2386,8 +2314,6 @@ async def get_notifications():
 @app.get("/api/audit-logs")
 async def get_audit_logs(page: int = 1, limit: int = 50):
     """Get recent activity logs as audit trail - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         offset = (page - 1) * limit
@@ -2427,8 +2353,6 @@ async def get_audit_logs(page: int = 1, limit: int = 50):
 @app.get("/api/leads/followups/today")
 async def get_followups_today(request: Request, assigned_to: Optional[str] = None):
     """All leads with follow_up_date = today + overdue, for the daily work view"""
-    if not supabase_data.client:
-        return {"overdue": [], "today": [], "overdue_count": 0, "today_count": 0}
     
     try:
         # Counselors may only see their own follow-ups
@@ -2511,12 +2435,6 @@ async def get_followups_today(request: Request, assigned_to: Optional[str] = Non
 @cache_async_result(STATS_CACHE, "dashboard_stats")
 async def get_dashboard_stats():
     """Get dashboard statistics (cached for 1 minute)"""
-    if not supabase_data.client:
-        return DashboardStats(
-            total_leads=0, hot_leads=0, warm_leads=0, cold_leads=0, junk_leads=0,
-            total_conversions=0, conversion_rate=0, total_revenue=0, expected_revenue=0,
-            leads_today=0, leads_this_week=0, leads_this_month=0, avg_ai_score=0
-        )
     
     try:
         # Get basic stats from Supabase
@@ -2567,8 +2485,6 @@ async def get_dashboard_stats():
 @app.get("/api/counselors", response_model=List[CounselorResponse])
 async def get_counselors():
     """Get all counselors from users table"""
-    if not supabase_data.client:
-        return []
     
     try:
         # Get users with counselor roles
@@ -2607,8 +2523,6 @@ async def get_counselors():
 @app.get("/api/counselors/performance")
 async def get_counselor_performance():
     """Live counselor performance computed from leads table - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         # Get all leads
@@ -2661,8 +2575,6 @@ async def get_counselor_performance():
 @app.get("/api/users")
 async def get_users():
     """Get all users in the organization"""
-    if not supabase_data.client:
-        return {"users": [], "total": 0}
     
     try:
         users = supabase_data.get_all_users()
@@ -2674,8 +2586,6 @@ async def get_users():
 @app.get("/api/users/{user_id}", response_model=UserResponse)
 async def get_user(user_id: int):
     """Get a specific user by ID - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     user = supabase_data.get_user_by_id(user_id)
     if not user:
@@ -2685,8 +2595,6 @@ async def get_user(user_id: int):
 @app.post("/api/users", response_model=UserResponse)
 async def create_user(user: UserCreate):
     """Create a new user - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     # Check if email already exists
     existing = supabase_data.get_user_by_email(user.email)
@@ -2720,8 +2628,6 @@ async def create_user(user: UserCreate):
 @app.put("/api/users/{user_id}", response_model=UserResponse)
 async def update_user(user_id: int, user: UserUpdate):
     """Update user information - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     # Check if user exists
     db_user = supabase_data.get_user_by_id(user_id)
@@ -2740,8 +2646,6 @@ async def update_user(user_id: int, user: UserUpdate):
 @app.delete("/api/users/{user_id}")
 async def delete_user(user_id: int):
     """Delete a user - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     # Check if user exists
     db_user = supabase_data.get_user_by_id(user_id)
@@ -2756,8 +2660,6 @@ async def delete_user(user_id: int):
 @app.get("/api/analytics/revenue-by-country")
 async def revenue_by_country():
     """Get revenue breakdown by country - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         # Get all leads
@@ -2796,8 +2698,6 @@ async def revenue_by_country():
 @app.get("/api/analytics/conversion-funnel")
 async def conversion_funnel():
     """Get conversion funnel metrics - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         # Get all leads
@@ -2832,8 +2732,6 @@ async def send_whatsapp(
     request: WhatsAppRequest
 ):
     """Send WhatsApp message via Twilio - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
@@ -2886,8 +2784,6 @@ async def send_email(
     request: EmailRequest
 ):
     """Send email via Resend - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
@@ -2938,8 +2834,6 @@ async def send_email(
 @app.post("/api/leads/{lead_id}/trigger-welcome")
 async def trigger_welcome(lead_id: str):
     """Trigger automated welcome sequence (Email + WhatsApp) - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
@@ -2983,8 +2877,6 @@ async def trigger_followup(
     request: FollowUpRequest
 ):
     """Trigger automated follow-up sequence - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
@@ -3041,8 +2933,6 @@ async def assign_lead(
     Note: Advanced assignment strategies require conversion of assignment_service
     Currently implements basic assignment to specified counselor
     """
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     # Get lead
     lead = supabase_data.get_lead_by_id(lead_id)
@@ -3076,8 +2966,6 @@ async def assign_all_unassigned(
     request: AssignmentRequest
 ):
     """Assign all unassigned leads in bulk - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     # Get unassigned leads
     response = supabase_data.client.table('leads').select('lead_id').is_('assigned_to', 'null').execute()
@@ -3112,8 +3000,6 @@ async def reassign_lead(
     request: ReassignmentRequest
 ):
     """Reassign lead to different counselor - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     # Get lead
     lead = supabase_data.get_lead_by_id(lead_id)
@@ -3149,8 +3035,6 @@ async def reassign_lead(
 @cache_async_result(STATS_CACHE, "counselor_workload")
 async def get_counselor_workloads():
     """Get workload statistics for all counselors (cached for 1 minute) - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         # Get counselors
@@ -3193,8 +3077,6 @@ async def get_counselor_workloads():
 @app.post("/api/workflows/trigger")
 async def trigger_workflows():
     """Manually trigger automated workflows for all leads - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         # Get all leads
@@ -3447,8 +3329,6 @@ async def summarize_lead_notes(
     
     Returns key insights, sentiment, and recommended actions
     """
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     if not ai_assistant.is_available():
         raise HTTPException(
@@ -3569,8 +3449,6 @@ async def analyze_conversion_barriers(
     
     AI analyzes lead data and notes to find blockers
     """
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     if not ai_assistant.is_available():
         raise HTTPException(
@@ -3976,8 +3854,6 @@ class ChatMessageResponse(BaseModel):
 @app.get("/api/leads/{lead_id}/chat", response_model=List[ChatMessageResponse])
 async def get_chat_messages(lead_id: int):
     """Get all WhatsApp chat messages for a lead - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         response = supabase_data.client.table('chat_messages').select('*').eq('lead_db_id', lead_id).order('timestamp').execute()
@@ -3990,8 +3866,6 @@ async def get_chat_messages(lead_id: int):
 @app.post("/api/leads/{lead_id}/chat", response_model=ChatMessageResponse)
 async def send_chat_message(lead_id: int, req: ChatSendRequest):
     """Send a WhatsApp message (text or media) to a lead via Interakt - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     # Get lead by internal ID
     response = supabase_data.client.table('leads').select('*').eq('id', lead_id).execute()
@@ -4045,8 +3919,6 @@ async def send_chat_message(lead_id: int, req: ChatSendRequest):
 @app.post("/api/interakt/webhook")
 async def interakt_webhook(request: FARequest):
     """Receive incoming WhatsApp messages from Interakt webhook - SUPABASE ONLY"""
-    if not supabase_data.client:
-        return {"status": "ok"}
     
     try:
         payload = await request.json()
@@ -4161,8 +4033,6 @@ async def upload_file(file: UploadFile = File(...)):
 @app.get("/api/admin/stats")
 async def get_admin_stats():
     """Admin dashboard: total revenue, leads, conversion rate, trends - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         # Get all leads
@@ -4210,8 +4080,6 @@ async def get_admin_stats():
 @app.get("/api/admin/team-performance")
 async def get_team_performance():
     """Admin dashboard: per-counselor performance metrics - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         # Get counselors
@@ -4256,8 +4124,6 @@ async def get_team_performance():
 @app.get("/api/admin/funnel-analysis")
 async def get_funnel_analysis():
     """Funnel analysis - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         # Get all leads
@@ -4278,8 +4144,6 @@ async def get_funnel_analysis():
 @app.get("/api/admin/revenue-trend")
 async def get_revenue_trend(days: int = 30):
     """Admin dashboard: daily revenue trend for past N days - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         from collections import defaultdict
@@ -4319,8 +4183,6 @@ async def get_revenue_trend(days: int = 30):
 @app.get("/api/users/{user_id}/stats")
 async def get_user_stats(user_id: int):
     """Per-user stats for counselor dashboard - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         user = supabase_data.get_user_by_id(user_id)
@@ -4380,8 +4242,6 @@ async def get_user_stats(user_id: int):
 @app.get("/api/users/{user_id}/performance")
 async def get_user_performance(user_id: int, days: int = 7):
     """Per-user daily performance for sparkline charts - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         from collections import defaultdict
@@ -4449,8 +4309,6 @@ async def mark_all_notifications_read():
 @app.put("/api/hospitals/{hospital_id}", response_model=HospitalResponse)
 async def update_hospital(hospital_id: int, data: HospitalCreate):
     """Update an existing hospital record - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         # Check if hospital exists
@@ -4477,8 +4335,6 @@ async def update_hospital(hospital_id: int, data: HospitalCreate):
 @app.delete("/api/hospitals/{hospital_id}")
 async def delete_hospital(hospital_id: int):
     """Delete a hospital record - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         # Check if hospital exists
@@ -4505,8 +4361,6 @@ async def delete_hospital(hospital_id: int):
 @app.put("/api/courses/{course_id}", response_model=CourseResponse)
 async def update_course(course_id: int, data: CourseCreate):
     """Update an existing course record - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         # Check if course exists
@@ -4534,8 +4388,6 @@ async def update_course(course_id: int, data: CourseCreate):
 @app.delete("/api/courses/{course_id}")
 async def delete_course(course_id: int):
     """Delete a course record - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         # Check if course exists
@@ -4568,8 +4420,6 @@ class PasswordChangeRequest(BaseModel):
 @app.put("/api/users/{user_id}/password")
 async def change_password(user_id: int, data: PasswordChangeRequest):
     """Allow a user to change their own password - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     import bcrypt as _bcrypt
 
@@ -4619,8 +4469,6 @@ class AdminPasswordResetRequest(BaseModel):
 @app.put("/api/users/{user_id}/admin-reset-password")
 async def admin_reset_password(user_id: int, data: AdminPasswordResetRequest, request: Request):
     """Allow a Super Admin to reset any user's password without requiring the current password - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     # Verify caller is Super Admin
     auth_header = request.headers.get("Authorization", "")
@@ -4708,8 +4556,6 @@ def _is_connected(content: str) -> bool:
 @app.get("/api/analytics/call-timing")
 async def get_call_timing(country: Optional[str] = None):
     """Analyse call notes by local hour and day-of-week - SUPABASE ONLY (Simplified)"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         # Simplified version - return basic call stats
@@ -4736,8 +4582,6 @@ async def get_call_timing(country: Optional[str] = None):
 @app.get("/api/admin/sla-config")
 async def get_sla_config():
     """Get SLA config from Supabase - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         response = supabase_data.client.table('sla_config').select('*').limit(1).execute()
@@ -4779,8 +4623,6 @@ class SLAConfigUpdate(BaseModel):
 @app.put("/api/admin/sla-config")
 async def update_sla_config(data: SLAConfigUpdate):
     """Update SLA config in Supabase - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         # Check if config exists
@@ -4845,8 +4687,6 @@ async def get_sla_compliance():
 @app.get("/api/admin/cohort-analysis")
 async def get_cohort_analysis():
     """Cohort analysis grouped by month - SUPABASE ONLY (Simplified)"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         from datetime import datetime
@@ -4975,8 +4815,6 @@ async def get_cohort_analysis():
 @app.get("/api/admin/conversion-time")
 async def get_conversion_time():
     """Compute days from creation to enrollment - SUPABASE ONLY (Simplified)"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         from datetime import datetime
@@ -5089,8 +4927,6 @@ async def get_conversion_time():
 @app.get("/api/admin/source-analytics")
 async def get_source_analytics():
     """Per-source attribution metrics - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     try:
         # Get all leads
@@ -5376,8 +5212,6 @@ async def update_decay_config(
     current_user: dict = Depends(get_current_user)
 ):
     """Update decay config - SUPABASE ONLY (Simplified)"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     # Simplified - store in supabase config table
     return {"message": "Decay config updated (simplified)"}
@@ -5398,8 +5232,6 @@ async def get_decay_log(
     current_user: dict = Depends(get_current_user)
 ):
     """Return recent decay events, newest first - SUPABASE ONLY"""
-    if not supabase_data.client:
-        return {"logs": [], "count": 0}
     
     # Simplified - return empty for now
     return {"logs": [], "count": 0}
@@ -5555,8 +5387,6 @@ _BUILTIN_TEMPLATES = [
 
 def _seed_wa_templates():
     """Insert built-in templates once if the table is empty - SUPABASE ONLY"""
-    if not supabase_data.client:
-        return
     
     # Check if templates exist
     try:
@@ -5609,8 +5439,6 @@ async def list_wa_templates(
     current_user: dict = Depends(get_current_user),
 ):
     """Return all active templates, optionally filtered by category."""
-    if not supabase_data.client:
-        return []
     
     try:
         import json
@@ -5646,8 +5474,6 @@ async def create_wa_template(
     current_user: dict = Depends(get_current_user)
 ):
     """Create WhatsApp template - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     import json
     body_text = payload.get("body", "")
@@ -5683,8 +5509,6 @@ async def update_wa_template(
     current_user: dict = Depends(get_current_user)
 ):
     """Update WhatsApp template - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     import json
     # Get existing template
@@ -5715,8 +5539,6 @@ async def delete_wa_template(
     current_user: dict = Depends(get_current_user)
 ):
     """Delete WhatsApp template - SUPABASE ONLY"""
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     # Get template
     response = supabase_data.client.table('wa_templates').select('*').eq('id', template_id).execute()
@@ -5741,8 +5563,6 @@ async def send_wa_template(
     Render a template with variable overrides and send it via WhatsApp - SUPABASE ONLY
     payload = { template_id: int, variable_overrides: { key: value, ... } }
     """
-    if not supabase_data.client:
-        raise HTTPException(status_code=500, detail="Database not configured")
     
     import json
     
@@ -5862,8 +5682,6 @@ async def check_duplicates(
     Given phone / email / full_name of a *new* lead, return any existing leads
     that look like duplicates - SUPABASE ONLY (Simplified)
     """
-    if not supabase_data.client:
-        return {"duplicates": []}
     
     # Simplified implementation
     return {"duplicates": [], "match_count": 0}
@@ -5921,74 +5739,74 @@ async def merge_leads(
         "follow_up_date", "next_action", "priority_level",
     ]
 
-    if supabase_data.client:
-        try:
-            def _fetch(lid):
-                r = supabase_data.client.table("leads").select("*").eq("lead_id", lid).single().execute()
-                return r.data
+    # Use Supabase (mandatory)
+    try:
+        def _fetch(lid):
+            r = supabase_data.client.table("leads").select("*").eq("lead_id", lid).single().execute()
+            return r.data
 
-            primary = _fetch(primary_id)
-            if not primary:
-                raise HTTPException(status_code=404, detail="Primary lead not found")
+        primary = _fetch(primary_id)
+        if not primary:
+            raise HTTPException(status_code=404, detail="Primary lead not found")
 
-            # Build update dict — either from direct_updates (new-lead merge) or from two existing leads
-            if direct_updates:
-                updates = {k: v for k, v in direct_updates.items() if v is not None and k in MERGEABLE_FIELDS}
-            elif secondary_id:
-                secondary = _fetch(secondary_id)
-                if not secondary:
-                    raise HTTPException(status_code=404, detail="Secondary lead not found")
-                choices = payload.get("field_choices", {})
-                updates = {}
-                for field in MERGEABLE_FIELDS:
-                    winner = choices.get(field, "primary")
-                    src    = secondary if winner == "secondary" else primary
-                    val    = src.get(field)
-                    if val is not None:
-                        updates[field] = val
+        # Build update dict — either from direct_updates (new-lead merge) or from two existing leads
+        if direct_updates:
+            updates = {k: v for k, v in direct_updates.items() if v is not None and k in MERGEABLE_FIELDS}
+        elif secondary_id:
+            secondary = _fetch(secondary_id)
+            if not secondary:
+                raise HTTPException(status_code=404, detail="Secondary lead not found")
+            choices = payload.get("field_choices", {})
+            updates = {}
+            for field in MERGEABLE_FIELDS:
+                winner = choices.get(field, "primary")
+                src    = secondary if winner == "secondary" else primary
+                val    = src.get(field)
+                if val is not None:
+                    updates[field] = val
+        else:
+            updates = {}
+
+        if updates:
+            supabase_data.client.table("leads").update(updates).eq("lead_id", primary_id).execute()
+
+        prim_int_id = primary.get("id")
+
+        # Absorb secondary's notes + activities (only if secondary exists in DB)
+        if secondary_id and secondary_id != "__new__":
+            secondary = _fetch(secondary_id)
+            if secondary:
+                sec_int_id = secondary.get("id")
+                if prim_int_id and sec_int_id:
+                    supabase_data.client.table("notes").update({"lead_id": prim_int_id}).eq("lead_id", sec_int_id).execute()
+                    supabase_data.client.table("activities").update({"lead_id": prim_int_id}).eq("lead_id", sec_int_id).execute()
+                supabase_data.client.table("leads").delete().eq("lead_id", secondary_id).execute()
+                merge_label = f"Absorbed lead {secondary_id} ({secondary.get('full_name')}) into this record."
             else:
-                updates = {}
+                merge_label = "Merged with new lead entry (fields updated)."
+        else:
+            merge_label = "Updated with resolved field values from duplicate check."
 
-            if updates:
-                supabase_data.client.table("leads").update(updates).eq("lead_id", primary_id).execute()
+        # Merge note
+        if prim_int_id:
+            supabase_data.client.table("notes").insert({
+                "lead_id":    prim_int_id,
+                "content":    f"[MERGED] {merge_label}",
+                "channel":    "system",
+                "created_by": current_user.get("full_name", "System"),
+            }).execute()
 
-            prim_int_id = primary.get("id")
+        invalidate_cache(STATS_CACHE)
+        invalidate_cache(LEAD_CACHE)
 
-            # Absorb secondary's notes + activities (only if secondary exists in DB)
-            if secondary_id and secondary_id != "__new__":
-                secondary = _fetch(secondary_id)
-                if secondary:
-                    sec_int_id = secondary.get("id")
-                    if prim_int_id and sec_int_id:
-                        supabase_data.client.table("notes").update({"lead_id": prim_int_id}).eq("lead_id", sec_int_id).execute()
-                        supabase_data.client.table("activities").update({"lead_id": prim_int_id}).eq("lead_id", sec_int_id).execute()
-                    supabase_data.client.table("leads").delete().eq("lead_id", secondary_id).execute()
-                    merge_label = f"Absorbed lead {secondary_id} ({secondary.get('full_name')}) into this record."
-                else:
-                    merge_label = "Merged with new lead entry (fields updated)."
-            else:
-                merge_label = "Updated with resolved field values from duplicate check."
+        updated = supabase_data.client.table("leads").select("*").eq("lead_id", primary_id).single().execute()
+        return updated.data
 
-            # Merge note
-            if prim_int_id:
-                supabase_data.client.table("notes").insert({
-                    "lead_id":    prim_int_id,
-                    "content":    f"[MERGED] {merge_label}",
-                    "channel":    "system",
-                    "created_by": current_user.get("full_name", "System"),
-                }).execute()
-
-            invalidate_cache(STATS_CACHE)
-            invalidate_cache(LEAD_CACHE)
-
-            updated = supabase_data.client.table("leads").select("*").eq("lead_id", primary_id).single().execute()
-            return updated.data
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Supabase merge failed: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Supabase merge failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     
     # If Supabase not configured (should never happen)
     raise HTTPException(status_code=500, detail="Database not configured")
