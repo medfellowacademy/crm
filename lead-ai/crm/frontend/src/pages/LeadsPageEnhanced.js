@@ -552,7 +552,7 @@ const LeadsPageEnhanced = () => {
   const getActionMenu = (record) => ({
     items: [
       { key: 'view', icon: <EyeOutlined />, label: 'View Details', onClick: () => navigate(`/leads/${record.lead_id}`) },
-      { key: 'edit', icon: <EditOutlined />, label: 'Edit', onClick: () => { form.setFieldsValue({ ...record, follow_up_date: record.follow_up_date ? dayjs(record.follow_up_date) : null }); setDrawerVisible(true); } },
+      { key: 'edit', icon: <EditOutlined />, label: 'Edit', onClick: () => { form.setFieldsValue({ lead_id: record.lead_id, ...record, follow_up_date: record.follow_up_date ? dayjs(record.follow_up_date) : null }); setDrawerVisible(true); } },
       { key: 'whatsapp', icon: <WhatsAppOutlined />, label: 'WhatsApp', onClick: () => window.open(`https://wa.me/${record.phone?.replace(/[^0-9]/g, '')}`) },
       { key: 'wa-template', icon: <span>📋</span>, label: 'Send Template', onClick: () => setTemplateLead(record) },
       { key: 'email', icon: <MailOutlined />, label: 'Email', onClick: () => { window.location.href = `mailto:${record.email}`; } },
@@ -882,8 +882,26 @@ const LeadsPageEnhanced = () => {
                 <Button size="small" danger onClick={() => {
                   Modal.confirm({
                     title: `Delete ${selectedRows.length} leads?`,
-                    content: 'This cannot be undone.',
-                    onOk: async () => { for (const id of selectedRows) { await leadsAPI.delete(id).catch(() => {}); } setSelectedRows([]); queryClient.invalidateQueries({ queryKey: ['leads'] }); message.success('Deleted!'); },
+                    content: 'This action cannot be undone.',
+                    onOk: async () => {
+                      const total = selectedRows.length;
+                      let failed = 0;
+                      for (const id of selectedRows) {
+                        try {
+                          await leadsAPI.delete(id);
+                        } catch (err) {
+                          console.error(`Failed to delete lead ${id}:`, err);
+                          failed++;
+                        }
+                      }
+                      setSelectedRows([]);
+                      queryClient.invalidateQueries({ queryKey: ['leads'] });
+                      if (failed === 0) {
+                        message.success(`Successfully deleted ${total} leads!`);
+                      } else {
+                        message.warning(`Deleted ${total - failed} leads. ${failed} failed.`);
+                      }
+                    },
                   });
                 }}>Bulk Delete</Button>
               </Space>
@@ -1162,10 +1180,17 @@ const LeadsPageEnhanced = () => {
               } catch {
                 // If duplicate-check fails, proceed with creation normally
               }
+              createMutation.mutate(leadData);
+            } else {
+              // Update existing lead
+              updateMutation.mutate({ leadId: v.lead_id, data: leadData });
+              setDrawerVisible(false);
+              form.resetFields();
             }
-
-            createMutation.mutate(leadData);
           }}>
+          <Form.Item name="lead_id" hidden>
+            <Input />
+          </Form.Item>
           <Form.Item name="full_name" label="Full Name" rules={[{ required: true }]}>
             <Input prefix={<UserOutlined />} placeholder="John Doe" size="large" />
           </Form.Item>
