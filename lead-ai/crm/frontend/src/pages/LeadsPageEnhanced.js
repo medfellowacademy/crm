@@ -506,17 +506,23 @@ const LeadsPageEnhanced = () => {
       // Ensure defaults and fallbacks
       // Only include fields accepted by LeadCreate schema
       const lead = {
-        full_name: mappedLead.full_name,
-        phone: mappedLead.phone,
-        email: mappedLead.email || undefined,
-        whatsapp: mappedLead.whatsapp || mappedLead.phone,
-        country: mappedLead.country || 'India',
-        source: mappedLead.source || 'Import',
+        full_name:        mappedLead.full_name,
+        phone:            mappedLead.phone,
+        email:            mappedLead.email            || undefined,
+        whatsapp:         mappedLead.whatsapp         || mappedLead.phone,
+        country:          mappedLead.country          || 'India',
+        source:           mappedLead.source           || 'Import',
         course_interested: mappedLead.course_interested || 'Not Specified',
+        qualification:    mappedLead.qualification    || undefined,
+        // Use the value from the file; fall back to 'Fresh' only if not provided
+        status:           mappedLead.status           || 'Fresh',
+        expected_revenue: mappedLead.expected_revenue
+          ? parseFloat(mappedLead.expected_revenue) || undefined
+          : undefined,
         assigned_to: isCounselor
           ? (authUser?.full_name || undefined)
           : (mappedLead.assigned_to || undefined),
-        notes: mappedLead.notes || undefined,  // Include notes if mapped
+        notes: mappedLead.notes || undefined,
       };
       
       // Remove undefined/empty keys
