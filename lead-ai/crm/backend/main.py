@@ -951,6 +951,96 @@ class DashboardStats(BaseModel):
     avg_ai_score: float
 
 # ============================================================================
+# VALUE NORMALIZATION FOR IMPORTS
+# ============================================================================
+
+def normalize_lead_values(lead_data: dict) -> dict:
+    """Normalize imported lead values to match CRM standards (case-insensitive matching)"""
+    
+    # Status normalization - map variations to standard LeadStatus values
+    status_map = {
+        'fresh': 'Fresh',
+        'follow up': 'Follow Up',
+        'follow-up': 'Follow Up',
+        'followup': 'Follow Up',
+        'warm': 'Warm',
+        'hot': 'Hot',
+        'not interested': 'Not Interested',
+        'not-interested': 'Not Interested',
+        'notinterested': 'Not Interested',
+        'junk': 'Junk',
+        'not answering': 'Not Answering',
+        'not-answering': 'Not Answering',
+        'notanswering': 'Not Answering',
+        'enrolled': 'Enrolled',
+    }
+    
+    # Country normalization - common variations
+    country_map = {
+        'india': 'India',
+        'ind': 'India',
+        'in': 'India',
+        'usa': 'USA',
+        'us': 'USA',
+        'united states': 'USA',
+        'uk': 'UK',
+        'united kingdom': 'UK',
+        'uae': 'UAE',
+        'united arab emirates': 'UAE',
+        'russia': 'Russia',
+        'egypt': 'Egypt',
+        'eg': 'Egypt',
+        'albania': 'Albania',
+        'al': 'Albania',
+    }
+    
+    # Source normalization
+    source_map = {
+        'facebook': 'Facebook',
+        'fb': 'Facebook',
+        'import': 'Import',
+        'website': 'Website',
+        'referral': 'Referral',
+        'google': 'Google',
+        'instagram': 'Instagram',
+        'ig': 'Instagram',
+        'linkedin': 'LinkedIn',
+        'whatsapp': 'WhatsApp',
+        'wa': 'WhatsApp',
+    }
+    
+    normalized = lead_data.copy()
+    
+    # Normalize status
+    if 'status' in normalized and normalized['status']:
+        status_lower = str(normalized['status']).lower().strip()
+        normalized['status'] = status_map.get(status_lower, normalized['status'])
+    
+    # Normalize country
+    if 'country' in normalized and normalized['country']:
+        country_lower = str(normalized['country']).lower().strip()
+        normalized['country'] = country_map.get(country_lower, normalized['country'].title())
+    
+    # Normalize source
+    if 'source' in normalized and normalized['source']:
+        source_lower = str(normalized['source']).lower().strip()
+        normalized['source'] = source_map.get(source_lower, normalized['source'].title())
+    
+    # Normalize course name (title case)
+    if 'course_interested' in normalized and normalized['course_interested']:
+        normalized['course_interested'] = normalized['course_interested'].strip().title()
+    
+    # Normalize counselor name (title case)
+    if 'assigned_to' in normalized and normalized['assigned_to']:
+        normalized['assigned_to'] = normalized['assigned_to'].strip().title()
+    
+    # Normalize full name (title case)
+    if 'full_name' in normalized and normalized['full_name']:
+        normalized['full_name'] = normalized['full_name'].strip().title()
+    
+    return normalized
+
+# ============================================================================
 # AI SCORING ENGINE
 # ============================================================================
 
@@ -1381,6 +1471,16 @@ async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks):
     """Create a new lead with AI scoring - SUPABASE ONLY"""
 
 
+    # Normalize input values to match CRM standards
+    normalized = normalize_lead_values({
+        'full_name': lead.full_name,
+        'country': lead.country,
+        'source': lead.source,
+        'course_interested': lead.course_interested,
+        'assigned_to': lead.assigned_to,
+        'status': lead.status.value if hasattr(lead.status, 'value') else lead.status if lead.status else 'Fresh'
+    })
+
     # Generate a collision-safe unique lead ID using timestamp + random suffix
     import uuid as _uuid
     _ts = datetime.utcnow().strftime("%y%m%d%H%M%S")
@@ -1390,15 +1490,15 @@ async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks):
     # Build a temporary object just for AI scoring (not persisted)
     db_lead = DBLead(
         lead_id=lead_id,
-        full_name=lead.full_name,
+        full_name=normalized['full_name'],
         email=lead.email if lead.email else None,
         phone=lead.phone,
         whatsapp=lead.whatsapp or lead.phone,
-        country=lead.country,
-        source=lead.source,
-        course_interested=lead.course_interested,
-        assigned_to=lead.assigned_to,
-        status=lead.status or LeadStatus.FRESH  # Use user's selection or default to Fresh
+        country=normalized['country'],
+        source=normalized['source'],
+        course_interested=normalized['course_interested'],
+        assigned_to=normalized.get('assigned_to'),
+        status=LeadStatus(normalized['status'])  # Use normalized status
     )
 
     # AI scoring (load prices from Supabase)
@@ -1530,18 +1630,28 @@ async def bulk_create_leads(leads: list[LeadCreate], background_tasks: Backgroun
             except Exception as dup_check_err:
                 logger.warning(f"Duplicate check failed for lead {idx}: {dup_check_err}")
             
+            # Normalize input values to match CRM standards
+            normalized = normalize_lead_values({
+                'full_name': lead.full_name,
+                'country': lead.country,
+                'source': lead.source,
+                'course_interested': lead.course_interested,
+                'assigned_to': lead.assigned_to,
+                'status': lead.status.value if hasattr(lead.status, 'value') else lead.status if lead.status else 'Fresh'
+            })
+            
             # Build temporary object for AI scoring
             db_lead = DBLead(
                 lead_id=lead_id,
-                full_name=lead.full_name,
+                full_name=normalized['full_name'],
                 email=lead.email,
                 phone=lead.phone,
                 whatsapp=lead.whatsapp or lead.phone,
-                country=lead.country,
-                source=lead.source,
-                course_interested=lead.course_interested,
-                assigned_to=lead.assigned_to,
-                status=LeadStatus.FRESH
+                country=normalized['country'],
+                source=normalized['source'],
+                course_interested=normalized['course_interested'],
+                assigned_to=normalized.get('assigned_to'),
+                status=LeadStatus(normalized['status'])  # Use normalized status
             )
             
             # AI scoring (course prices already loaded once before loop)
