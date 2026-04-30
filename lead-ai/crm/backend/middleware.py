@@ -159,6 +159,21 @@ class ErrorHandlingMiddleware(BaseHTTPMiddleware):
                     "traceback": error_trace,
                 }
             )
+
+            # Surface response validation details in logs for easier debugging.
+            if type(exc).__name__ == "ResponseValidationError":
+                try:
+                    details = getattr(exc, "errors", lambda: [])()
+                except Exception:
+                    details = str(exc)
+                logger.error(
+                    "💥 ResponseValidationError details: {}",
+                    details,
+                    extra={
+                        "request_id": request_id,
+                        "path": request.url.path,
+                    },
+                )
             
             # Return generic error (don't expose internal details)
             return JSONResponse(

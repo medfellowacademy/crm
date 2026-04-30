@@ -5,6 +5,7 @@ Provides isolated test database, FastAPI test client, and sample data factories.
 
 import pytest
 from datetime import datetime, timedelta
+from uuid import uuid4
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
@@ -129,10 +130,11 @@ def created_lead(client, sample_lead_data):
 @pytest.fixture
 def sample_user_data():
     """Factory for user creation payloads."""
+    suffix = uuid4().hex[:8]
     return {
         "full_name": "Test Counselor",
-        "email": "counselor@test.com",
-        "phone": "+919876543211",
+        "email": f"counselor_{suffix}@test.com",
+        "phone": f"+9198765{suffix[:5]}",
         "password": "testpass123",
         "role": "Counselor",
     }

@@ -35,6 +35,17 @@ import {
 } from '@ant-design/icons';
 import { leadsAPI, coursesAPI, counselorsAPI } from '../api/api';
 import dayjs from 'dayjs';
+
+// Safely parse a server date string as UTC.
+// Supabase may return "2026-04-30T07:00:00" (no Z) which dayjs would wrongly
+// treat as local time. Appending Z ensures correct UTC→local conversion.
+const parseDate = (s) => {
+  if (!s) return null;
+  const str = String(s);
+  const hasOffset = str.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(str);
+  return dayjs(hasOffset ? str : str + 'Z');
+};
+
 import ActivityTimeline from '../features/activity/ActivityTimeline';
 import CallTimeWidget from '../components/leads/CallTimeWidget';
 import WhatsAppTemplateDrawer from '../components/whatsapp/WhatsAppTemplateDrawer';
@@ -72,8 +83,9 @@ const LeadDetails = () => {
     if (lead) {
       leadForm.setFieldsValue({
         course_interested: lead.course_interested,
+        qualification: lead.qualification || null,
         status: lead.status,
-        follow_up_date: lead.follow_up_date ? dayjs(lead.follow_up_date) : null,
+        follow_up_date: lead.follow_up_date ? parseDate(lead.follow_up_date) : null,
         assigned_to: lead.assigned_to,
       });
     }
@@ -120,6 +132,7 @@ const LeadDetails = () => {
     // Convert DatePicker value to ISO string
     const updateData = {
       ...values,
+      qualification: values.qualification || null,
       follow_up_date: values.follow_up_date ? values.follow_up_date.toISOString() : null,
     };
     updateLeadMutation.mutate(updateData);
@@ -144,7 +157,7 @@ const LeadDetails = () => {
     addNoteMutation.mutate({
       content: values.content,
       channel: values.channel || 'manual',
-      created_by: values.created_by, // Backend will use authenticated user's name
+      // created_by is resolved server-side from the JWT token
     });
   };
 
@@ -247,7 +260,7 @@ const LeadDetails = () => {
             <div>
               <div style={{ fontWeight: 600, marginBottom: '8px' }}>{lead.next_action}</div>
               <div style={{ fontSize: '12px', color: '#8c8c8c' }}>
-                Priority: {lead.priority_level} • Follow up: {lead.follow_up_date ? dayjs(lead.follow_up_date).format('MMM DD, hh:mm A') : 'Not set'}
+                Priority: {lead.priority_level} • Follow up: {lead.follow_up_date ? parseDate(lead.follow_up_date).format('MMM DD, hh:mm A') : 'Not set'}
               </div>
             </div>
           }
@@ -278,8 +291,9 @@ const LeadDetails = () => {
                       setIsEditing(false);
                       leadForm.setFieldsValue({
                         course_interested: lead.course_interested,
+                        qualification: lead.qualification || null,
                         status: lead.status,
-                        follow_up_date: lead.follow_up_date ? dayjs(lead.follow_up_date) : null,
+                        follow_up_date: lead.follow_up_date ? parseDate(lead.follow_up_date) : null,
                         assigned_to: lead.assigned_to,
                       });
                     }}>
@@ -288,7 +302,7 @@ const LeadDetails = () => {
                     <Button 
                       type="primary" 
                       icon={<SaveOutlined />}
-                      loading={updateLeadMutation.isLoading}
+                      loading={updateLeadMutation.isPending}
                       onClick={() => leadForm.submit()}
                     >
                       Save
@@ -318,6 +332,24 @@ const LeadDetails = () => {
                 </Descriptions.Item>
                 <Descriptions.Item label="Source">
                   <Tag>{lead?.source}</Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="Qualification">
+                  {!isEditing ? (
+                    lead?.qualification
+                      ? <Tag color="geekblue">{lead.qualification}</Tag>
+                      : <span style={{ color: '#8c8c8c' }}>—</span>
+                  ) : (
+                    <Form.Item name="qualification" noStyle>
+                      <Select style={{ width: '100%' }} allowClear placeholder="Select qualification">
+                        {[
+                          'MBBS','MD','MS','DNB','MDS','BDS','BAMS','BHMS',
+                          'BPT','MPT','BUMS','BNYS','BSc Nursing','MSc Nursing',
+                          'B.Pharm','M.Pharm','Pharm.D','DMLT','BMLT',
+                          'BOT','MOT','BSc MLT','MSc MLT','Other',
+                        ].map(q => <Option key={q} value={q}>{q}</Option>)}
+                      </Select>
+                    </Form.Item>
+                  )}
                 </Descriptions.Item>
                 <Descriptions.Item label="Course Interested" span={2}>
                   {!isEditing ? (
@@ -363,14 +395,14 @@ const LeadDetails = () => {
                 <Descriptions.Item label="Follow-up Date">
                   {!isEditing ? (
                     <span>
-                      {lead?.follow_up_date ? dayjs(lead.follow_up_date).format('MMM DD, YYYY hh:mm A') : '-'}
+                      {lead?.follow_up_date ? parseDate(lead.follow_up_date).format('MMM DD, YYYY hh:mm A') : '-'}
                     </span>
                   ) : (
                     <Form.Item name="follow_up_date" noStyle>
                       <DatePicker
-                        showTime
-                        style={{ width: '100%' }}
+                        showTime={{ format: 'hh:mm A', use12Hours: true }}
                         format="MMM DD, YYYY hh:mm A"
+                        style={{ width: '100%' }}
                       />
                     </Form.Item>
                   )}
@@ -403,34 +435,19 @@ const LeadDetails = () => {
                   placeholder="Add note about conversation, objections, requirements..."
                 />
               </Form.Item>
-              <Row gutter={16}>
-                <Col span={12}>
-                  <Form.Item name="channel">
-                    <Select placeholder="Channel" defaultValue="manual">
-                      <Option value="manual">Manual Note</Option>
-                      <Option value="call">Phone Call</Option>
-                      <Option value="whatsapp">WhatsApp</Option>
-                      <Option value="email">Email</Option>
-                    </Select>
-                  </Form.Item>
-                </Col>
-                <Col span={12}>
-                  <Form.Item name="created_by">
-                    <Select placeholder="Counselor" defaultValue={counselors?.[0]?.name}>
-                      {counselors?.map(counselor => (
-                        <Option key={counselor.id} value={counselor.name}>
-                          {counselor.name}
-                        </Option>
-                      ))}
-                    </Select>
-                  </Form.Item>
-                </Col>
-              </Row>
+              <Form.Item name="channel">
+                <Select placeholder="Channel" defaultValue="manual" style={{ width: '50%' }}>
+                  <Option value="manual">Manual Note</Option>
+                  <Option value="call">Phone Call</Option>
+                  <Option value="whatsapp">WhatsApp</Option>
+                  <Option value="email">Email</Option>
+                </Select>
+              </Form.Item>
               <Button
                 type="primary"
                 htmlType="submit"
                 icon={<SaveOutlined />}
-                loading={addNoteMutation.isLoading}
+                loading={addNoteMutation.isPending}
               >
                 Add Note
               </Button>
@@ -578,7 +595,12 @@ const LeadDetails = () => {
                   <Input
                     type="number"
                     defaultValue={lead?.actual_revenue}
-                    onBlur={(e) => handleUpdateField('actual_revenue', parseFloat(e.target.value))}
+                    onBlur={(e) => {
+                      const val = parseFloat(e.target.value);
+                      if (!isNaN(val)) {
+                        updateLeadMutation.mutate({ actual_revenue: val });
+                      }
+                    }}
                   />
                 </Form.Item>
               </div>

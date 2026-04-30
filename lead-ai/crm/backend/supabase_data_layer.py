@@ -51,139 +51,125 @@ class SupabaseDataLayer:
         updated_to: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Get leads with filters. Returns a paginated response dict."""
-        try:
-            # Only fetch columns needed by the leads list — avoids transferring
-            # heavy text columns (feature_importance JSON, recommended_script, etc.)
-            LIST_COLUMNS = (
-                "lead_id,full_name,email,phone,whatsapp,country,source,"
-                "course_interested,status,ai_score,ai_segment,"
-                "conversion_probability,expected_revenue,actual_revenue,"
-                "follow_up_date,assigned_to,created_at,updated_at,"
-                "last_contact_date,buying_signal_strength,churn_risk,"
-                "primary_objection,next_action,priority_level,"
-                "loss_reason,loss_note"
-            )
-            # Single query: data + exact count together (supabase-py v2 style)
-            # count='exact' tells PostgREST to return Content-Range with total
-            query = self.client.table('leads').select(LIST_COLUMNS, count='exact')
+        # Base column list. 'qualification' is included when the column exists in
+        # Supabase (after running: ALTER TABLE leads ADD COLUMN IF NOT EXISTS qualification text).
+        # If that migration has NOT been run yet, the query falls back to LIST_COLUMNS_COMPAT.
+        LIST_COLUMNS = (
+            "lead_id,full_name,email,phone,whatsapp,country,source,"
+            "course_interested,status,ai_score,ai_segment,"
+            "conversion_probability,expected_revenue,actual_revenue,"
+            "follow_up_date,assigned_to,created_at,updated_at,"
+            "last_contact_date,buying_signal_strength,churn_risk,"
+            "primary_objection,next_action,priority_level,"
+            "qualification,loss_reason,loss_note"
+        )
+        LIST_COLUMNS_COMPAT = LIST_COLUMNS.replace(",qualification", "")
 
-            # ---- apply filters ----
-            if status_in and not status:
-                status = status_in
-            if country_in and not country:
-                country = country_in
-            if segment_in and not segment:
-                segment = segment_in
-            if assigned_to_in and not assigned_to:
-                assigned_to = assigned_to_in
+        def _build_query(columns):
+            """Build the leads query with all filters applied."""
+            q = self.client.table('leads').select(columns, count='exact')
+            _status = status_in if (status_in and not status) else status
+            _country = country_in if (country_in and not country) else country
+            _segment = segment_in if (segment_in and not segment) else segment
+            _assigned = assigned_to_in if (assigned_to_in and not assigned_to) else assigned_to
 
-            if status:
-                if ',' in status:
-                    # Case-insensitive multi-value filter
-                    statuses = [s.strip() for s in status.split(',') if s.strip()]
-                    query = query.or_(','.join([f"status.ilike.{s}" for s in statuses]))
+            if _status:
+                if ',' in _status:
+                    statuses = [s.strip() for s in _status.split(',') if s.strip()]
+                    q = q.or_(','.join([f"status.ilike.{s}" for s in statuses]))
                 else:
-                    # Case-insensitive single value filter
-                    query = query.ilike('status', status.strip())
-            if country:
-                if ',' in country:
-                    # Case-insensitive multi-value filter
-                    countries = [c.strip() for c in country.split(',') if c.strip()]
-                    query = query.or_(','.join([f"country.ilike.{c}" for c in countries]))
+                    q = q.ilike('status', _status.strip())
+            if _country:
+                if ',' in _country:
+                    countries = [c.strip() for c in _country.split(',') if c.strip()]
+                    q = q.or_(','.join([f"country.ilike.{c}" for c in countries]))
                 else:
-                    # Case-insensitive single value filter
-                    query = query.ilike('country', country.strip())
-            if segment:
-                if ',' in segment:
-                    # Case-insensitive multi-value filter
-                    segments = [s.strip() for s in segment.split(',') if s.strip()]
-                    query = query.or_(','.join([f"ai_segment.ilike.{s}" for s in segments]))
+                    q = q.ilike('country', _country.strip())
+            if _segment:
+                if ',' in _segment:
+                    segments = [s.strip() for s in _segment.split(',') if s.strip()]
+                    q = q.or_(','.join([f"ai_segment.ilike.{s}" for s in segments]))
                 else:
-                    # Case-insensitive single value filter
-                    query = query.ilike('ai_segment', segment.strip())
-            if assigned_to:
-                if ',' in assigned_to:
-                    # Case-insensitive multi-value filter
-                    assignees = [a.strip() for a in assigned_to.split(',') if a.strip()]
-                    query = query.or_(','.join([f"assigned_to.ilike.{a}" for a in assignees]))
+                    q = q.ilike('ai_segment', _segment.strip())
+            if _assigned:
+                if ',' in _assigned:
+                    assignees = [a.strip() for a in _assigned.split(',') if a.strip()]
+                    q = q.or_(','.join([f"assigned_to.ilike.{a}" for a in assignees]))
                 else:
-                    # Case-insensitive single value filter
-                    query = query.ilike('assigned_to', assigned_to.strip())
+                    q = q.ilike('assigned_to', _assigned.strip())
             if course_interested:
                 if ',' in course_interested:
-                    # Case-insensitive multi-value filter
                     courses = [c.strip() for c in course_interested.split(',') if c.strip()]
-                    query = query.or_(','.join([f"course_interested.ilike.{c}" for c in courses]))
+                    q = q.or_(','.join([f"course_interested.ilike.{c}" for c in courses]))
                 else:
-                    # Case-insensitive single value filter
-                    query = query.ilike('course_interested', course_interested.strip())
+                    q = q.ilike('course_interested', course_interested.strip())
             if source:
                 if ',' in source:
-                    # Case-insensitive multi-value filter
                     sources = [s.strip() for s in source.split(',') if s.strip()]
-                    query = query.or_(','.join([f"source.ilike.{s}" for s in sources]))
+                    q = q.or_(','.join([f"source.ilike.{s}" for s in sources]))
                 else:
-                    # Case-insensitive single value filter
-                    query = query.ilike('source', source.strip())
+                    q = q.ilike('source', source.strip())
             if min_score is not None:
-                query = query.gte('ai_score', min_score)
+                q = q.gte('ai_score', min_score)
             if max_score is not None:
-                query = query.lte('ai_score', max_score)
+                q = q.lte('ai_score', max_score)
             if follow_up_from:
-                query = query.gte('follow_up_date', follow_up_from)
+                q = q.gte('follow_up_date', follow_up_from)
             if follow_up_to:
-                query = query.lte('follow_up_date', follow_up_to)
+                q = q.lte('follow_up_date', follow_up_to)
             if created_today:
                 today = datetime.utcnow().date().isoformat()
-                query = query.gte('created_at', f"{today}T00:00:00").lte('created_at', f"{today}T23:59:59")
+                q = q.gte('created_at', f"{today}T00:00:00").lte('created_at', f"{today}T23:59:59")
             if overdue:
-                now_iso = datetime.utcnow().isoformat()
-                query = query.lt('follow_up_date', now_iso)
+                q = q.lt('follow_up_date', datetime.utcnow().isoformat())
             if search:
-                # Sanitize search term to prevent injection via PostgREST filter string
-                # Strip characters that have special meaning in PostgREST filter syntax
                 safe_search = re.sub(r"[%_\(\),\"]", "", str(search)).strip()[:100]
                 if safe_search:
-                    query = query.or_(
+                    q = q.or_(
                         f"full_name.ilike.%{safe_search}%,"
                         f"email.ilike.%{safe_search}%,"
-                        f"phone.ilike.%{safe_search}%"
+                        f"phone.ilike.%{safe_search}%,"
+                        f"lead_id.ilike.%{safe_search}%"
                     )
-
             if created_on:
-                query = query.gte('created_at', f"{created_on}T00:00:00").lte('created_at', f"{created_on}T23:59:59")
+                q = q.gte('created_at', f"{created_on}T00:00:00").lte('created_at', f"{created_on}T23:59:59")
             elif created_from and created_to:
-                query = query.gte('created_at', created_from).lte('created_at', created_to)
+                q = q.gte('created_at', created_from).lte('created_at', created_to)
             elif created_after:
-                query = query.gt('created_at', created_after)
+                q = q.gt('created_at', created_after)
             elif created_before:
-                query = query.lt('created_at', created_before)
-
+                q = q.lt('created_at', created_before)
             if updated_on:
-                query = query.gte('updated_at', f"{updated_on}T00:00:00").lte('updated_at', f"{updated_on}T23:59:59")
+                q = q.gte('updated_at', f"{updated_on}T00:00:00").lte('updated_at', f"{updated_on}T23:59:59")
             elif updated_from and updated_to:
-                query = query.gte('updated_at', updated_from).lte('updated_at', updated_to)
+                q = q.gte('updated_at', updated_from).lte('updated_at', updated_to)
             elif updated_after:
-                query = query.gt('updated_at', updated_after)
+                q = q.gt('updated_at', updated_after)
             elif updated_before:
-                query = query.lt('updated_at', updated_before)
-
-            # ---- order + pagination ----
-            # Cap limit at 1000 (Supabase free-tier max_rows default)
+                q = q.lt('updated_at', updated_before)
             effective_limit = min(limit, 1000)
-            # AI-scored leads first; fall back to newest-first for unscored leads
-            query = query.order('ai_score', desc=True, nullsfirst=False).order('created_at', desc=True)
-
+            q = q.order('ai_score', desc=True, nullsfirst=False).order('created_at', desc=True)
             if skip > 0:
-                query = query.range(skip, skip + effective_limit - 1)
+                q = q.range(skip, skip + effective_limit - 1)
             else:
-                query = query.limit(effective_limit)
+                q = q.limit(effective_limit)
+            return q, effective_limit
 
-            response = query.execute()
+        try:
+            query, effective_limit = _build_query(LIST_COLUMNS)
+            try:
+                response = query.execute()
+            except Exception as col_err:
+                # 'qualification' column may not exist yet — retry without it
+                if 'qualification' in str(col_err):
+                    logger.warning("'qualification' column missing in Supabase — run: "
+                                   "ALTER TABLE leads ADD COLUMN IF NOT EXISTS qualification text;")
+                    query, effective_limit = _build_query(LIST_COLUMNS_COMPAT)
+                    response = query.execute()
+                else:
+                    raise
             leads = response.data if response.data else []
-            # response.count is the TOTAL matching rows (not capped by limit)
             total = response.count if hasattr(response, 'count') and response.count is not None else len(leads)
-
             return {
                 "leads": leads,
                 "total": total,
@@ -191,7 +177,6 @@ class SupabaseDataLayer:
                 "limit": effective_limit,
                 "has_more": (skip + effective_limit) < total,
             }
-
         except Exception as e:
             logger.error(f"Error fetching leads from Supabase: {e}", exc_info=True)
             return {"leads": [], "total": 0, "skip": skip, "limit": limit, "has_more": False}
@@ -272,6 +257,13 @@ class SupabaseDataLayer:
     def delete_lead(self, lead_id: str) -> bool:
         """Delete lead"""
         try:
+            lead = self.get_lead_by_id(lead_id)
+            if lead and lead.get("id") is not None:
+                internal_id = lead.get("id")
+                # Remove dependent rows first to satisfy FK constraints.
+                self.client.table('activities').delete().eq('lead_id', internal_id).execute()
+                self.client.table('notes').delete().eq('lead_id', internal_id).execute()
+
             self.client.table('leads').delete().eq('lead_id', lead_id).execute()
             return True
         except Exception as e:

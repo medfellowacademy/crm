@@ -45,7 +45,14 @@ from exceptions import (
 )
 
 # Authentication
-from auth import get_current_user, oauth2_scheme, decode_access_token, create_access_token
+from auth import (
+    get_current_user,
+    oauth2_scheme,
+    decode_access_token,
+    create_access_token,
+    get_password_hash,
+    verify_password,
+)
 # No more local database - all operations use Supabase REST API
 
 # Rate limiting
@@ -470,6 +477,9 @@ class DBLead(Base):
     recommended_script = Column(Text, nullable=True)
     feature_importance = Column(Text, nullable=True)  # JSON string of feature importance
 
+    # Educational qualification of the lead (e.g. MBBS, MD, BDS)
+    qualification = Column(String, nullable=True)
+
     # Loss tracking
     loss_reason = Column(String, nullable=True)   # Why lead was lost / not interested
     loss_note = Column(Text, nullable=True)        # Free-text loss detail
@@ -712,6 +722,8 @@ class LeadCreate(BaseModel):
     course_interested: str
     status: Optional[LeadStatus] = LeadStatus.FRESH  # Allow custom status, default to Fresh
     assigned_to: Optional[str] = None
+    qualification: Optional[str] = None  # Educational qualification, e.g. MBBS, MD, BDS
+    follow_up_date: Optional[datetime] = None
     notes: Optional[str] = None  # Initial note content for imports
 
     @field_validator('email', mode='before')
@@ -726,7 +738,7 @@ class LeadCreate(BaseModel):
             return None
         return v
 
-    @field_validator('full_name', 'source', 'course_interested', 'assigned_to', 'notes', mode='before')
+    @field_validator('full_name', 'source', 'course_interested', 'assigned_to', 'qualification', 'notes', mode='before')
     @classmethod
     def _sanitize(cls, v):
         return sanitize_text(v, max_length=500) if v else None
@@ -741,6 +753,7 @@ class LeadUpdate(BaseModel):
     status: Optional[LeadStatus] = None
     follow_up_date: Optional[datetime] = None
     assigned_to: Optional[str] = None
+    qualification: Optional[str] = None  # Educational qualification, e.g. MBBS, MD, BDS
     actual_revenue: Optional[float] = None
     next_action: Optional[str] = None
     loss_reason: Optional[str] = None
@@ -759,7 +772,7 @@ class LeadUpdate(BaseModel):
         return v
 
     @field_validator('full_name', 'course_interested', 'assigned_to', 'next_action',
-                     'loss_reason', 'loss_note', mode='before')
+                     'qualification', 'loss_reason', 'loss_note', mode='before')
     @classmethod
     def _sanitize(cls, v):
         return sanitize_text(v, max_length=5000)
@@ -796,6 +809,7 @@ class LeadResponse(BaseModel):
     churn_risk: float
     recommended_script: Optional[str]
     feature_importance: Optional[dict] = None
+    qualification: Optional[str] = None
     loss_reason: Optional[str] = None
     loss_note: Optional[str] = None
     notes: List[NoteResponse] = []
@@ -832,16 +846,16 @@ class ReassignmentRequest(BaseModel):
     reason: str = "Manual reassignment"
 
 class HospitalResponse(BaseModel):
-    id: int
+    id: Any
     name: str
     country: str
     city: str
-    contact_person: Optional[str]
-    contact_email: Optional[str]
-    contact_phone: Optional[str]
-    collaboration_status: str
-    courses_offered: List[int]
-    created_at: datetime
+    contact_person: Optional[str] = None
+    contact_email: Optional[str] = None
+    contact_phone: Optional[str] = None
+    collaboration_status: Optional[str] = "Active"
+    courses_offered: List[Any] = []
+    created_at: Optional[datetime] = None
     
     model_config = ConfigDict(from_attributes=True)
 
@@ -855,7 +869,7 @@ class CourseCreate(BaseModel):
     description: Optional[str] = None
 
 class CourseResponse(BaseModel):
-    id: int
+    id: Any
     course_name: str
     category: Optional[str] = None
     duration: Optional[str] = None
@@ -863,7 +877,7 @@ class CourseResponse(BaseModel):
     price: float = 0.0
     currency: Optional[str] = "INR"
     description: Optional[str] = None
-    is_active: bool = True
+    is_active: Optional[bool] = True
     created_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -1400,6 +1414,40 @@ async def login(request: Request, body: LoginRequest):
     
     user = supabase_data.get_user_by_email(body.username)
 
+    # Test/local fallback when user only exists in local SQLAlchemy DB.
+    if not user:
+        try:
+            db_url = os.getenv("DATABASE_URL")
+            if db_url:
+                resolved_db_url = db_url
+                if db_url.startswith("sqlite:///./"):
+                    db_file = db_url.replace("sqlite:///./", "", 1)
+                    db_abs_path = Path(__file__).resolve().parent / db_file
+                    resolved_db_url = f"sqlite:///{db_abs_path}"
+
+                local_engine = create_engine(
+                    resolved_db_url,
+                    connect_args={"check_same_thread": False} if resolved_db_url.startswith("sqlite") else {},
+                )
+                LocalSession = sessionmaker(bind=local_engine, autoflush=False, autocommit=False)
+                db = LocalSession()
+                try:
+                    local_user = db.query(DBUser).filter(DBUser.email == body.username).first()
+                    if local_user:
+                        user = {
+                            "id": local_user.id,
+                            "full_name": local_user.full_name,
+                            "email": local_user.email,
+                            "phone": local_user.phone,
+                            "password": local_user.password,
+                            "role": local_user.role,
+                            "is_active": bool(local_user.is_active),
+                        }
+                finally:
+                    db.close()
+        except Exception:
+            user = None
+
     if not user:
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
@@ -1418,7 +1466,7 @@ async def login(request: Request, body: LoginRequest):
                     user_password.encode('utf-8')
                 )
             except Exception:
-                password_valid = False
+                password_valid = verify_password(body.password, user_password)
         else:
             # plain text password (legacy)
             password_valid = (user_password == body.password)
@@ -1535,6 +1583,8 @@ async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, reque
             "source": db_lead.source,
             "course_interested": db_lead.course_interested,
             "assigned_to": db_lead.assigned_to,
+            "qualification": lead.qualification,
+            "follow_up_date": lead.follow_up_date.isoformat() if lead.follow_up_date else None,
             "status": db_lead.status.value if hasattr(db_lead.status, 'value') else db_lead.status,
             "ai_score": db_lead.ai_score or 0.0,
             "ai_segment": db_lead.ai_segment.value if hasattr(db_lead.ai_segment, 'value') else db_lead.ai_segment,
@@ -1919,8 +1969,8 @@ async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, b
         invalidate_cache(LEAD_CACHE)
         invalidate_cache(STATS_CACHE)
         
-        # TODO: Re-scoring with Supabase (needs refactoring of rescore_lead_async)
-        # background_tasks.add_task(rescore_lead_async, lead_id)
+        # Re-score in the background so the response isn't delayed
+        background_tasks.add_task(rescore_lead_supabase, lead_id)
         
         return updated_lead
     except HTTPException:
@@ -2063,14 +2113,67 @@ async def add_note(lead_id: str, note: NoteCreate, request: Request, background_
     invalidate_cache(LEAD_CACHE)
     invalidate_cache(STATS_CACHE)
     
-    # TODO: Re-scoring with Supabase (needs refactoring)
-    # background_tasks.add_task(rescore_lead_async, lead_id)
+    # Re-score after new information arrives via a note
+    background_tasks.add_task(rescore_lead_supabase, lead_id)
     
     return db_note
 
 
-# rescore_lead_async removed - not compatible with Supabase architecture
-# Re-scoring happens automatically on note creation via AI endpoints
+async def rescore_lead_supabase(lead_id: str) -> None:
+    """Re-score a single lead from Supabase and write the updated scores back.
+    Runs as a BackgroundTask so it never blocks the API response."""
+    try:
+        lead_data = supabase_data.get_lead_by_id(lead_id)
+        if not lead_data:
+            return
+
+        # Build a transient DBLead just for the scorer (never persisted to SQLite)
+        temp = DBLead(
+            lead_id=lead_data.get('lead_id', lead_id),
+            full_name=lead_data.get('full_name', ''),
+            email=lead_data.get('email'),
+            phone=lead_data.get('phone', ''),
+            whatsapp=lead_data.get('whatsapp'),
+            country=lead_data.get('country', ''),
+            source=lead_data.get('source', ''),
+            course_interested=lead_data.get('course_interested', ''),
+            assigned_to=lead_data.get('assigned_to'),
+            status=LeadStatus(lead_data.get('status', 'Fresh')),
+        )
+
+        # Refresh course prices for revenue estimation
+        try:
+            courses = supabase_data.get_courses()
+            ai_scorer.course_prices = {c.get('name'): c.get('price', 0) for c in courses if c.get('name')}
+        except Exception:
+            pass
+
+        score_result = ai_scorer.score_lead(temp, [])
+
+        # Persist only the scoring columns back to Supabase
+        score_payload = {
+            'ai_score': score_result.get('ai_score', lead_data.get('ai_score', 0)),
+            'ai_segment': (score_result.get('ai_segment').value
+                           if hasattr(score_result.get('ai_segment'), 'value')
+                           else score_result.get('ai_segment', lead_data.get('ai_segment'))),
+            'conversion_probability': score_result.get('conversion_probability', 0),
+            'buying_signal_strength': score_result.get('buying_signal_strength', 0),
+            'churn_risk': score_result.get('churn_risk', 0),
+            'next_action': score_result.get('next_action'),
+            'priority_level': score_result.get('priority_level'),
+            'recommended_script': score_result.get('recommended_script'),
+            'expected_revenue': score_result.get('expected_revenue', lead_data.get('expected_revenue', 0)),
+        }
+        # Strip Nones so we never overwrite good data with null
+        score_payload = {k: v for k, v in score_payload.items() if v is not None}
+        supabase_data.update_lead(lead_id, score_payload)
+
+        # Bust caches so the next GET reflects fresh scores
+        invalidate_cache(LEAD_CACHE)
+        invalidate_cache(STATS_CACHE)
+
+    except Exception as e:
+        logger.warning(f"Background re-score failed for {lead_id}: {e}")
 
 @app.get("/api/leads/{lead_id}/notes", response_model=List[NoteResponse])
 async def get_notes(lead_id: str, request: Request):
@@ -2733,10 +2836,10 @@ async def get_users():
     
     try:
         users = supabase_data.get_all_users()
-        return {"users": users, "total": len(users)}
+        return users
     except Exception as e:
         logger.error(f"Error fetching users: {e}")
-        return {"users": [], "total": 0}
+        return []
 
 @app.get("/api/users/{user_id}", response_model=UserResponse)
 async def get_user(user_id: int):
@@ -2757,7 +2860,7 @@ async def create_user(user: UserCreate):
         raise HTTPException(status_code=400, detail="Email already registered")
     
     # Hash the password for security
-    hashed_password = pwd_context.hash(user.password)
+    hashed_password = get_password_hash(user.password)
     
     payload = {
         "full_name": user.full_name,

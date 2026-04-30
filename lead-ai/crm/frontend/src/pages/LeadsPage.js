@@ -285,14 +285,14 @@ const LeadsPage = () => {
           {record.status === 'Enrolled' ? (
             <div>
               <div style={{ color: '#52c41a', fontWeight: 600 }}>
-                ₹{(record.actual_revenue / 1000).toFixed(0)}K
+                ₹{((record.actual_revenue || 0) / 1000).toFixed(0)}K
               </div>
               <div style={{ fontSize: '12px', color: '#8c8c8c' }}>Total Revenue</div>
             </div>
           ) : (
             <div>
               <div style={{ color: '#faad14', fontWeight: 600 }}>
-                ₹{(record.expected_revenue / 1000).toFixed(0)}K
+                ₹{((record.expected_revenue || 0) / 1000).toFixed(0)}K
               </div>
               <div style={{ fontSize: '12px', color: '#8c8c8c' }}>Expected</div>
             </div>
@@ -459,7 +459,7 @@ const LeadsPage = () => {
         dataSource={leads}
         columns={columns}
         loading={isLoading}
-        rowKey="id"
+        rowKey="lead_id"
         scroll={{ x: 1800 }}
         pagination={{
           pageSize: 20,

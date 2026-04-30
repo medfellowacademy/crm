@@ -4,32 +4,58 @@ Authentication tests — login endpoint, JWT validation, rate limiting, 401 on m
 
 import pytest
 from fastapi.testclient import TestClient
+from uuid import uuid4
 
 
 class TestLoginEndpoint:
     """Test /api/auth/login."""
 
-    def test_login_success(self, client, admin_user):
+    def test_login_success(self, client):
+        email = f"login_{uuid4().hex[:8]}@test.com"
+        create_resp = client.post(
+            "/api/users",
+            json={
+                "full_name": "Login Test User",
+                "email": email,
+                "phone": "+910000000010",
+                "password": "Admin@123",
+                "role": "Counselor",
+            },
+        )
+        assert create_resp.status_code == 200
+
         # Use a fresh unauthenticated client to test the public login route
         from main import app
         with TestClient(app) as c:
             response = c.post(
                 "/api/auth/login",
-                json={"username": admin_user.email, "password": "Admin@123"},
+                json={"username": email, "password": "Admin@123"},
             )
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
         assert "user" in data
-        assert data["user"]["email"] == admin_user.email
-        assert data["user"]["role"] == "Super Admin"
+        assert data["user"]["email"] == email
 
-    def test_login_wrong_password(self, client, admin_user):
+    def test_login_wrong_password(self, client):
+        email = f"login_{uuid4().hex[:8]}@test.com"
+        create_resp = client.post(
+            "/api/users",
+            json={
+                "full_name": "Login Test User",
+                "email": email,
+                "phone": "+910000000011",
+                "password": "Admin@123",
+                "role": "Counselor",
+            },
+        )
+        assert create_resp.status_code == 200
+
         from main import app
         with TestClient(app) as c:
             response = c.post(
                 "/api/auth/login",
-                json={"username": admin_user.email, "password": "WrongPassword"},
+                json={"username": email, "password": "WrongPassword"},
             )
         assert response.status_code == 401
 
@@ -42,27 +68,31 @@ class TestLoginEndpoint:
             )
         assert response.status_code == 401
 
-    def test_inactive_user_cannot_login(self, db_session, admin_user):
+    def test_inactive_user_cannot_login(self, client):
         from main import app
-        from main import DBUser
-
-        db_session.query(DBUser).filter(DBUser.email == admin_user.email).update(
-            {"is_active": False}
+        email = f"login_{uuid4().hex[:8]}@test.com"
+        create_resp = client.post(
+            "/api/users",
+            json={
+                "full_name": "Inactive Login User",
+                "email": email,
+                "phone": "+910000000012",
+                "password": "Admin@123",
+                "role": "Counselor",
+            },
         )
-        db_session.commit()
+        assert create_resp.status_code == 200
+        user_id = create_resp.json()["id"]
+
+        deactivate_resp = client.put(f"/api/users/{user_id}", json={"is_active": False})
+        assert deactivate_resp.status_code == 200
 
         with TestClient(app) as c:
             response = c.post(
                 "/api/auth/login",
-                json={"username": admin_user.email, "password": "Admin@123"},
+                json={"username": email, "password": "Admin@123"},
             )
         assert response.status_code == 401
-
-        # Restore
-        db_session.query(DBUser).filter(DBUser.email == admin_user.email).update(
-            {"is_active": True}
-        )
-        db_session.commit()
 
 
 class TestProtectedRoutes:

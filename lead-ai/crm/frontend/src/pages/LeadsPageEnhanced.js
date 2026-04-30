@@ -32,6 +32,18 @@ import * as XLSX from 'xlsx';
 dayjs.extend(relativeTime);
 dayjs.extend(isBetween);
 
+// Safely parse a date string from the server.
+// Supabase may return timestamps without a timezone indicator, e.g.
+// "2026-04-30T07:00:00" instead of "2026-04-30T07:00:00Z".
+// Without the Z, dayjs treats it as LOCAL time, which would be wrong
+// for a UTC-stored value. This helper always appends Z when no offset present.
+const parseDate = (s) => {
+  if (!s) return null;
+  const str = String(s);
+  const hasOffset = str.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(str);
+  return dayjs(hasOffset ? str : str + 'Z');
+};
+
 const { RangePicker } = DatePicker;
 const { Option } = Select;
 const { Text, Title } = Typography;
@@ -133,6 +145,18 @@ const parseSpreadsheet = (data, isBinary) => {
 
 const REQUIRED_COLS = ['full_name', 'phone'];
 const STATUS_OPTIONS = ['Fresh', 'Follow Up', 'Warm', 'Hot', 'Not Interested', 'Not Answering', 'Enrolled', 'Junk'];
+const SOURCE_OPTIONS = ['Website', 'Facebook', 'Google Ads', 'Instagram', 'WhatsApp', 'Referral', 'Direct', 'LinkedIn', 'YouTube'];
+const QUALIFICATION_OPTIONS = [
+  'MBBS','MD','MS','DNB','MDS','BDS','BAMS','BHMS',
+  'BPT','MPT','BUMS','BNYS','BSc Nursing','MSc Nursing',
+  'B.Pharm','M.Pharm','Pharm.D','DMLT','BMLT',
+  'BOT','MOT','BSc MLT','MSc MLT','Other',
+];
+const STATUS_COLOR_MAP = {
+  Enrolled: 'green', Hot: 'red', Warm: 'orange',
+  Fresh: 'blue', 'Follow Up': 'purple',
+  'Not Interested': 'default', 'Not Answering': 'gray', Junk: 'volcano',
+};
 
 // ════════════════════════════════════════════════════════════════════════════
 const LeadsPageEnhanced = () => {
@@ -176,6 +200,18 @@ const LeadsPageEnhanced = () => {
   // WhatsApp template drawer (for quick-send from table row)
   const [templateLead,    setTemplateLead]    = useState(null);
 
+  // Inline cell editing — tracks which cell (leadId + field) is actively being edited
+  const [editingCell,  setEditingCell]  = useState({});   // { leadId, field }
+  const [editingValue, setEditingValue] = useState(null);
+
+  const commitEdit = (leadId, field, value) => {
+    if (value !== null && value !== undefined && value !== '') {
+      updateMutation.mutate({ leadId, data: { [field]: value } });
+    }
+    setEditingCell({});
+    setEditingValue(null);
+  };
+
   // Debounce search text (500ms delay)
   React.useEffect(() => {
     if (searchTimeoutRef.current) {
@@ -214,8 +250,8 @@ const LeadsPageEnhanced = () => {
     if (advFilters.segment?.length) params.segment_in = advFilters.segment.join(',');
     if (advFilters.country?.length) params.country_in = advFilters.country.join(',');
     if (advFilters.assigned?.length) params.assigned_to_in = advFilters.assigned.join(',');
-    if (advFilters.course?.length === 1) params.course_interested = advFilters.course[0];
-    if (advFilters.source?.length === 1) params.source = advFilters.source[0];
+    if (advFilters.course?.length > 0) params.course_interested = advFilters.course.join(',');
+    if (advFilters.source?.length > 0) params.source = advFilters.source.join(',');
     if (advFilters.minScore != null) params.min_score = advFilters.minScore;
     if (advFilters.maxScore != null) params.max_score = advFilters.maxScore;
 
@@ -323,8 +359,8 @@ const LeadsPageEnhanced = () => {
       hot: leads.filter(l => l.status === 'Hot').length,
       warm: leads.filter(l => l.status === 'Warm').length,
       enrolled: leads.filter(l => l.status === 'Enrolled').length,
-      followUpToday: leads.filter(l => l.follow_up_date && dayjs(l.follow_up_date).isSame(today, 'day')).length,
-      overdue: leads.filter(l => l.follow_up_date && dayjs(l.follow_up_date).isBefore(today, 'day')).length,
+      followUpToday: leads.filter(l => l.follow_up_date && parseDate(l.follow_up_date).isSame(today, 'day')).length,
+      overdue: leads.filter(l => l.follow_up_date && parseDate(l.follow_up_date).isBefore(today, 'day')).length,
       avgScore: leads.length ? (leads.reduce((s, l) => s + (l.ai_score || 0), 0) / leads.length).toFixed(1) : 0,
       revenue: leads.filter(l => l.status === 'Enrolled').reduce((s, l) => s + (l.actual_revenue || 0), 0),
     };
@@ -570,27 +606,79 @@ const LeadsPageEnhanced = () => {
     setFieldMapping({});
   };
 
-  // ── Export ─────────────────────────────────────────────────────────────────
-  const handleExport = () => {
-    const exportData = filteredLeads.map(l => ({
+  // ── Export helpers ──────────────────────────────────────────────────────────
+  const [isExporting, setIsExporting] = React.useState(false);
+
+  const buildCsv = (rows) => {
+    if (!rows.length) return null;
+    const mapped = rows.map(l => ({
       'Lead ID': l.lead_id, Name: l.full_name, Email: l.email, Phone: l.phone,
-      Country: l.country, Course: l.course_interested, Status: l.status,
+      Country: l.country, Qualification: l.qualification || '',
+      Course: l.course_interested, Status: l.status,
       Segment: l.ai_segment, Score: l.ai_score, Source: l.source,
       'Assigned To': l.assigned_to, 'Follow Up': l.follow_up_date,
       Revenue: l.status === 'Enrolled' ? l.actual_revenue : l.expected_revenue,
       Created: l.created_at,
     }));
-    const csv = [Object.keys(exportData[0]).join(','), ...exportData.map(r => Object.values(r).map(v => `"${v ?? ''}"`).join(','))].join('\n');
+    return [
+      Object.keys(mapped[0]).join(','),
+      ...mapped.map(r => Object.values(r).map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')),
+    ].join('\n');
+  };
+
+  const triggerDownload = (csv, filename) => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    a.download = `leads_${dayjs().format('YYYY-MM-DD')}.csv`;
+    a.download = filename;
     a.click();
-    message.success('Exported!');
+  };
+
+  // Export current page only
+  const handleExport = () => {
+    if (!filteredLeads.length) { message.warning('No leads to export'); return; }
+    const csv = buildCsv(filteredLeads);
+    if (csv) {
+      triggerDownload(csv, `leads_page_${dayjs().format('YYYY-MM-DD')}.csv`);
+      message.success(`Exported ${filteredLeads.length} leads (current page)`);
+    }
+  };
+
+  // Export ALL leads matching current filters — fetches every page from the API
+  const handleExportAll = async () => {
+    if (isExporting) return;
+    setIsExporting(true);
+    const hide = message.loading('Fetching all leads for export…', 0);
+    try {
+      const PAGE = 1000; // max per request
+      let allLeads = [];
+      let skip = 0;
+      let hasMore = true;
+      while (hasMore) {
+        const res = await leadsAPI.getAll({ ...leadQueryParams, skip, limit: PAGE });
+        const batch = res.data?.leads || [];
+        allLeads = [...allLeads, ...batch];
+        const total = res.data?.total || 0;
+        skip += PAGE;
+        hasMore = skip < total;
+      }
+      hide();
+      if (!allLeads.length) { message.warning('No leads to export'); return; }
+      const csv = buildCsv(allLeads);
+      if (csv) {
+        triggerDownload(csv, `leads_all_${dayjs().format('YYYY-MM-DD')}.csv`);
+        message.success(`Exported all ${allLeads.length} leads`);
+      }
+    } catch (err) {
+      hide();
+      message.error('Export failed: ' + (err.message || 'Unknown error'));
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   // ── Download template ──────────────────────────────────────────────────────
   const downloadTemplate = () => {
-    const csv = 'full_name,email,phone,whatsapp,country,source,course_interested,status,assigned_to,expected_revenue\nJohn Doe,john@email.com,+919876543210,+919876543210,India,Website,MBBS MD,Fresh,,150000';
+    const csv = 'full_name,email,phone,whatsapp,country,source,course_interested,qualification,status,assigned_to,expected_revenue\nJohn Doe,john@email.com,+919876543210,+919876543210,India,Website,MBBS MD,MBBS,Fresh,,150000';
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
     a.download = 'leads_import_template.csv';
@@ -601,7 +689,7 @@ const LeadsPageEnhanced = () => {
   const getActionMenu = useCallback((record) => ({
     items: [
       { key: 'view', icon: <EyeOutlined />, label: 'View Details', onClick: () => navigate(`/leads/${record.lead_id}`) },
-      { key: 'edit', icon: <EditOutlined />, label: 'Edit', onClick: () => { form.setFieldsValue({ lead_id: record.lead_id, ...record, follow_up_date: record.follow_up_date ? dayjs(record.follow_up_date) : null }); setDrawerVisible(true); } },
+      { key: 'edit', icon: <EditOutlined />, label: 'Edit', onClick: () => { form.setFieldsValue({ lead_id: record.lead_id, ...record, qualification: record.qualification || null, follow_up_date: record.follow_up_date ? parseDate(record.follow_up_date) : null }); setDrawerVisible(true); } },
       { key: 'whatsapp', icon: <WhatsAppOutlined />, label: 'WhatsApp', onClick: () => window.open(`https://wa.me/${record.phone?.replace(/[^0-9]/g, '')}`) },
       { key: 'wa-template', icon: <span>📋</span>, label: 'Send Template', onClick: () => setTemplateLead(record) },
       { key: 'email', icon: <MailOutlined />, label: 'Email', onClick: () => { window.location.href = `mailto:${record.email}`; } },
@@ -650,20 +738,50 @@ const LeadsPageEnhanced = () => {
             }
           }
         }
+        const editingName  = editingCell.leadId === r.lead_id && editingCell.field === 'full_name';
+        const editingPhone = editingCell.leadId === r.lead_id && editingCell.field === 'phone';
         return (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <Avatar size={42} style={{ backgroundColor: r.status === 'Hot' ? '#ff4d4f' : r.status === 'Warm' ? '#faad14' : '#52c41a', flexShrink: 0 }}>
               {r.full_name?.charAt(0)?.toUpperCase()}
             </Avatar>
-            <div style={{ minWidth: 0 }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
-                <a onClick={() => navigate(`/leads/${r.lead_id}`)} style={{ fontWeight: 600, fontSize: 13 }}>{r.full_name}</a>
-                <Tag style={{ marginLeft: 2 }} color={r.status === 'Hot' ? 'red' : r.status === 'Warm' ? 'orange' : 'green'}>
-                  {r.status === 'Hot' ? '🔥' : r.status === 'Warm' ? '⚡' : '❄️'} {r.status}
-                </Tag>
+                {editingName ? (
+                  <Input
+                    autoFocus size="small" defaultValue={r.full_name}
+                    style={{ width: 140, fontWeight: 600 }}
+                    onPressEnter={e => commitEdit(r.lead_id, 'full_name', e.target.value)}
+                    onBlur={e => commitEdit(r.lead_id, 'full_name', e.target.value)}
+                  />
+                ) : (
+                  <>
+                    <a onClick={() => navigate(`/leads/${r.lead_id}`)} style={{ fontWeight: 600, fontSize: 13 }}>{r.full_name}</a>
+                    <EditOutlined
+                      style={{ fontSize: 10, color: '#bbb', cursor: 'pointer', marginLeft: 2 }}
+                      onClick={() => setEditingCell({ leadId: r.lead_id, field: 'full_name' })}
+                    />
+                  </>
+                )}
                 {decayBadge}
               </div>
-              <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}><PhoneOutlined /> {r.phone}</div>
+              {editingPhone ? (
+                <Input
+                  autoFocus size="small" defaultValue={r.phone}
+                  prefix={<PhoneOutlined />}
+                  style={{ marginTop: 2, width: 150, fontSize: 11 }}
+                  onPressEnter={e => commitEdit(r.lead_id, 'phone', e.target.value)}
+                  onBlur={e => commitEdit(r.lead_id, 'phone', e.target.value)}
+                />
+              ) : (
+                <div style={{ fontSize: 11, color: '#888', marginTop: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <PhoneOutlined /> {r.phone}
+                  <EditOutlined
+                    style={{ fontSize: 9, color: '#ccc', cursor: 'pointer' }}
+                    onClick={() => setEditingCell({ leadId: r.lead_id, field: 'phone' })}
+                  />
+                </div>
+              )}
             </div>
           </div>
         );
@@ -673,41 +791,86 @@ const LeadsPageEnhanced = () => {
       title: 'Country',
       dataIndex: 'country',
       key: 'country',
-      width: 130,
+      width: 150,
       filters: uniqueCountries.map(c => ({ text: c, value: c })),
       onFilter: (v, r) => r.country === v,
-      render: c => c ? <><GlobalOutlined /> {c}</> : <Text type="secondary">—</Text>,
+      render: (c, r) => (
+        <Select
+          variant="borderless"
+          value={c || undefined}
+          placeholder={<Text type="secondary"><GlobalOutlined /> Country</Text>}
+          size="small"
+          style={{ width: '100%', minWidth: 120 }}
+          showSearch
+          allowClear
+          filterOption={(input, opt) => opt.value.toLowerCase().includes(input.toLowerCase())}
+          options={COUNTRIES.map(ct => ({ value: ct, label: ct }))}
+          onChange={v => updateMutation.mutate({ leadId: r.lead_id, data: { country: v || null } })}
+        />
+      ),
     },
     {
       title: 'Course',
       dataIndex: 'course_interested',
       key: 'course',
-      width: 180,
+      width: 200,
       filters: uniqueCourses.map(c => ({ text: c, value: c })),
       onFilter: (v, r) => r.course_interested === v,
-      ellipsis: true,
-      render: c => c ? <><BookOutlined style={{ color: '#1890ff', marginRight: 4 }} />{c}</> : <Text type="secondary">—</Text>,
+      render: (c, r) => (
+        <Select
+          variant="borderless"
+          value={c || undefined}
+          placeholder={<Text type="secondary"><BookOutlined /> Course</Text>}
+          size="small"
+          style={{ width: '100%', minWidth: 160 }}
+          showSearch
+          allowClear
+          filterOption={(input, opt) => opt.label.toLowerCase().includes(input.toLowerCase())}
+          options={uniqueCourses.map(co => ({ value: co, label: co }))}
+          onChange={v => updateMutation.mutate({ leadId: r.lead_id, data: { course_interested: v || null } })}
+        />
+      ),
     },
     {
       title: 'Source',
       dataIndex: 'source',
       key: 'source',
-      width: 120,
+      width: 140,
       filters: uniqueSources.map(s => ({ text: s, value: s })),
       onFilter: (v, r) => r.source === v,
-      render: s => s ? <Tag>{s}</Tag> : <Text type="secondary">—</Text>,
+      render: (s, r) => (
+        <Select
+          variant="borderless"
+          value={s || undefined}
+          placeholder={<Text type="secondary">Source</Text>}
+          size="small"
+          style={{ width: '100%', minWidth: 110 }}
+          allowClear
+          options={SOURCE_OPTIONS.map(o => ({ value: o, label: o }))}
+          onChange={v => updateMutation.mutate({ leadId: r.lead_id, data: { source: v || null } })}
+        />
+      ),
     },
     {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
-      width: 140,
+      width: 160,
       filters: uniqueStatuses.map(s => ({ text: s, value: s })),
       onFilter: (v, r) => r.status === v,
-      render: (s) => {
-        const colorMap = { Enrolled: 'green', Hot: 'red', Warm: 'orange', Fresh: 'blue', 'Follow Up': 'purple', 'Not Interested': 'default', 'Not Answering': 'gray', Junk: 'volcano' };
-        return <Tag color={colorMap[s] || 'default'}>{s}</Tag>;
-      },
+      render: (s, r) => (
+        <Select
+          variant="borderless"
+          value={s || undefined}
+          size="small"
+          style={{ width: '100%', minWidth: 130 }}
+          onChange={v => updateMutation.mutate({ leadId: r.lead_id, data: { status: v } })}
+          options={STATUS_OPTIONS.map(opt => ({
+            value: opt,
+            label: <Tag color={STATUS_COLOR_MAP[opt] || 'default'} style={{ marginRight: 0 }}>{opt}</Tag>,
+          }))}
+        />
+      ),
     },
     {
       title: 'AI Score',
@@ -749,14 +912,36 @@ const LeadsPageEnhanced = () => {
         return (aR || 0) - (bR || 0);
       },
       render: (_, r) => {
-        const rev = r.status === 'Enrolled' ? r.actual_revenue : r.expected_revenue;
-        const actual = r.status === 'Enrolled';
+        const isEnrolled = r.status === 'Enrolled';
+        const field = isEnrolled ? 'actual_revenue' : 'expected_revenue';
+        const rev = isEnrolled ? r.actual_revenue : r.expected_revenue;
+        const isEditingRev = editingCell.leadId === r.lead_id && editingCell.field === field;
+        if (isEditingRev) {
+          return (
+            <InputNumber
+              autoFocus
+              size="small"
+              defaultValue={rev || 0}
+              style={{ width: 100 }}
+              min={0}
+              formatter={v => `₹ ${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+              parser={v => v.replace(/₹\s?|(,*)/g, '')}
+              onChange={v => setEditingValue(v)}
+              onPressEnter={() => commitEdit(r.lead_id, field, editingValue ?? rev ?? 0)}
+              onBlur={() => commitEdit(r.lead_id, field, editingValue ?? rev ?? 0)}
+            />
+          );
+        }
         return (
-          <div>
-            <div style={{ fontWeight: 600, color: actual ? '#52c41a' : '#faad14' }}>
+          <div
+            style={{ cursor: 'pointer' }}
+            onClick={() => { setEditingCell({ leadId: r.lead_id, field }); setEditingValue(rev || 0); }}
+          >
+            <div style={{ fontWeight: 600, color: isEnrolled ? '#52c41a' : '#faad14', display: 'flex', alignItems: 'center', gap: 4 }}>
               ₹{((rev || 0) / 1000).toFixed(0)}K
+              <EditOutlined style={{ fontSize: 10, color: '#ccc' }} />
             </div>
-            <Text type="secondary" style={{ fontSize: 11 }}>{actual ? 'Actual' : 'Expected'}</Text>
+            <Text type="secondary" style={{ fontSize: 11 }}>{isEnrolled ? 'Actual' : 'Expected'}</Text>
           </div>
         );
       },
@@ -768,20 +953,34 @@ const LeadsPageEnhanced = () => {
       width: 140,
       sorter: (a, b) => new Date(a.follow_up_date || 0) - new Date(b.follow_up_date || 0),
       ...makeDateFilter('follow_up_date'),
-      render: (date) => {
-        if (!date) return <Text type="secondary">—</Text>;
-        const d = dayjs(date);
-        const overdue = d.isBefore(dayjs(), 'day');
-        const today = d.isSame(dayjs(), 'day');
+      render: (date, r) => {
+        const d = date ? parseDate(date) : null;
+        const overdue = d && d.isBefore(dayjs(), 'day');
+        const isToday  = d && d.isSame(dayjs(), 'day');
         return (
-          <Tooltip title={d.format('YYYY-MM-DD')}>
-            <div style={{ color: overdue ? '#ff4d4f' : today ? '#faad14' : undefined }}>
-              <CalendarOutlined /> {d.format('MMM DD')}
-              {overdue && <Tag color="red" style={{ marginLeft: 4, fontSize: 10 }}>Overdue</Tag>}
-              {today && <Tag color="orange" style={{ marginLeft: 4, fontSize: 10 }}>Today</Tag>}
-            </div>
-            <Text type="secondary" style={{ fontSize: 11 }}>{d.fromNow()}</Text>
-          </Tooltip>
+          <DatePicker
+            variant="borderless"
+            value={d}
+            showTime={{ format: 'hh:mm A', use12Hours: true }}
+            format="MMM DD hh:mm A"
+            size="small"
+            placeholder="Set follow-up"
+            style={{
+              width: '100%', minWidth: 150,
+              color: overdue ? '#ff4d4f' : isToday ? '#faad14' : undefined,
+            }}
+            allowClear
+            onChange={v => updateMutation.mutate({ leadId: r.lead_id, data: { follow_up_date: v ? v.toISOString() : null } })}
+            renderExtraFooter={() =>
+              d ? (
+                <div style={{ fontSize: 11, color: '#888', padding: '2px 4px' }}>
+                  {d.fromNow()}
+                  {overdue && <Tag color="red" style={{ marginLeft: 6, fontSize: 10 }}>Overdue</Tag>}
+                  {isToday && <Tag color="orange" style={{ marginLeft: 6, fontSize: 10 }}>Today</Tag>}
+                </div>
+              ) : null
+            }
+          />
         );
       },
     },
@@ -836,7 +1035,7 @@ const LeadsPageEnhanced = () => {
         </Space>
       ),
     },
-  ], [uniqueCountries, uniqueCourses, uniqueSources, uniqueStatuses, uniqueAssigned, isCounselor, authUser, users, navigate, decayConfig, updateMutation, getActionMenu]);
+  ], [uniqueCountries, uniqueCourses, uniqueSources, uniqueStatuses, uniqueAssigned, isCounselor, authUser, users, navigate, decayConfig, updateMutation, getActionMenu, editingCell, setEditingCell, commitEdit, setEditingValue]);
 
   const activeAdvFilters = Object.values(advFilters).filter(v => v && (Array.isArray(v) ? v.length > 0 : true)).length;
 
@@ -920,7 +1119,16 @@ const LeadsPageEnhanced = () => {
             <Button icon={<SyncOutlined />} onClick={() => { setAdvFilters({}); setFilters({}); setSearchText(''); setQuickFilter('all'); message.success('Filters cleared'); }}>Clear</Button>
             <Button icon={<DownloadOutlined />} onClick={downloadTemplate}>Template</Button>
             <Button icon={<ImportOutlined />} onClick={() => { resetImport(); setImportVisible(true); }}>Import</Button>
-            <Button icon={<ExportOutlined />} onClick={handleExport}>Export</Button>
+            <Dropdown
+              menu={{
+                items: [
+                  { key: 'page', label: `Export current page (${filteredLeads.length})`, icon: <ExportOutlined />, onClick: handleExport },
+                  { key: 'all', label: `Export all ${totalLeads} leads`, icon: <DownloadOutlined />, onClick: handleExportAll },
+                ],
+              }}
+            >
+              <Button icon={<ExportOutlined />} loading={isExporting}>Export</Button>
+            </Dropdown>
             <Button icon={<ReloadOutlined />} onClick={() => refetch()} />
             <Button type="primary" icon={<PlusOutlined />} onClick={() => { form.resetFields(); setDrawerVisible(true); }}>Add Lead</Button>
           </Space>
@@ -958,15 +1166,10 @@ const LeadsPageEnhanced = () => {
                     content: 'This action cannot be undone.',
                     onOk: async () => {
                       const total = selectedRows.length;
-                      let failed = 0;
-                      for (const id of selectedRows) {
-                        try {
-                          await leadsAPI.delete(id);
-                        } catch (err) {
-                          console.error(`Failed to delete lead ${id}:`, err);
-                          failed++;
-                        }
-                      }
+                      const results = await Promise.allSettled(
+                        selectedRows.map(id => leadsAPI.delete(id))
+                      );
+                      const failed = results.filter(r => r.status === 'rejected').length;
                       setSelectedRows([]);
                       queryClient.invalidateQueries({ queryKey: ['leads'] });
                       if (failed === 0) {
@@ -1014,7 +1217,7 @@ const LeadsPageEnhanced = () => {
             showQuickJumper: true,
           }}
           locale={{ emptyText: <Empty description="No leads found"><Button type="primary" icon={<PlusOutlined />} onClick={() => setDrawerVisible(true)}>Add First Lead</Button></Empty> }}
-          rowClassName={r => r.follow_up_date && dayjs(r.follow_up_date).isBefore(dayjs(), 'day') ? 'overdue-row' : ''}
+          rowClassName={r => r.follow_up_date && parseDate(r.follow_up_date).isBefore(dayjs(), 'day') ? 'overdue-row' : ''}
         />
       </Card>
 
@@ -1237,6 +1440,10 @@ const LeadsPageEnhanced = () => {
               source: v.source || 'Direct',
               course_interested: v.course_interested,
               assigned_to: v.assigned_to || null,
+              qualification: v.qualification || null,
+              status: v.status || 'Fresh',
+              follow_up_date: v.follow_up_date ? v.follow_up_date.toISOString() : null,
+              notes: v.notes || null,
             };
 
             if (isNew) {
@@ -1304,13 +1511,29 @@ const LeadsPageEnhanced = () => {
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item name="course_interested" label="Course Interested" rules={[{ required: true }]}>
-            <Select placeholder="Select course" showSearch
-              onChange={name => { const c = courses.find(c => c.course_name === name); if (c) { form.setFieldValue('expected_revenue', c.price); message.info(`Price ₹${(c.price/1000).toFixed(0)}K auto-filled`); } }}
-              filterOption={(i, o) => o.children.toLowerCase().includes(i.toLowerCase())}>
-              {courses.map(c => <Option key={c.id} value={c.course_name}>{c.course_name} — ₹{(c.price/1000).toFixed(0)}K</Option>)}
-            </Select>
-          </Form.Item>
+          <Row gutter={16}>
+            <Col span={16}>
+              <Form.Item name="course_interested" label="Course Interested" rules={[{ required: true }]}>
+                <Select placeholder="Select course" showSearch
+                  onChange={name => { const c = courses.find(c => c.course_name === name); if (c) { form.setFieldValue('expected_revenue', c.price); message.info(`Price ₹${(c.price/1000).toFixed(0)}K auto-filled`); } }}
+                  filterOption={(i, o) => o.children.toLowerCase().includes(i.toLowerCase())}>
+                  {courses.map(c => <Option key={c.id} value={c.course_name}>{c.course_name} — ₹{(c.price/1000).toFixed(0)}K</Option>)}
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="qualification" label="Qualification">
+                <Select placeholder="Select" allowClear showSearch>
+                  {[
+                    'MBBS','MD','MS','DNB','MDS','BDS','BAMS','BHMS',
+                    'BPT','MPT','BUMS','BNYS','BSc Nursing','MSc Nursing',
+                    'B.Pharm','M.Pharm','Pharm.D','DMLT','BMLT',
+                    'BOT','MOT','BSc MLT','MSc MLT','Other',
+                  ].map(q => <Option key={q} value={q}>{q}</Option>)}
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
           <Row gutter={16}>
             <Col span={12}>
               <Form.Item name="status" label="Status" initialValue="Fresh">
@@ -1318,8 +1541,13 @@ const LeadsPageEnhanced = () => {
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="follow_up_date" label="Follow-up Date">
-                <DatePicker style={{ width: '100%' }} />
+              <Form.Item name="follow_up_date" label="Follow-up Date & Time">
+                <DatePicker
+                  showTime={{ format: 'hh:mm A', use12Hours: true }}
+                  format="MMM DD, YYYY hh:mm A"
+                  style={{ width: '100%' }}
+                  placeholder="Select date and time"
+                />
               </Form.Item>
             </Col>
           </Row>
@@ -1370,7 +1598,7 @@ const LeadsPageEnhanced = () => {
             const updates = {};
             if (v.status) updates.status = v.status;
             if (v.assigned_to) updates.assigned_to = v.assigned_to;
-            if (v.follow_up_date) updates.follow_up_date = v.follow_up_date.format('YYYY-MM-DD');
+            if (v.follow_up_date) updates.follow_up_date = v.follow_up_date.toISOString();
             if (v.source) updates.source = v.source;
             
             // Check if at least one field is filled
@@ -1386,7 +1614,14 @@ const LeadsPageEnhanced = () => {
             <Select placeholder="Keep unchanged" allowClear showSearch
               options={users.map(u => ({ label: `${u.full_name} (${u.role})`, value: u.full_name }))} />
           </Form.Item>
-          <Form.Item name="follow_up_date" label="Follow-up Date"><DatePicker style={{ width: '100%' }} /></Form.Item>
+          <Form.Item name="follow_up_date" label="Follow-up Date & Time">
+            <DatePicker
+              showTime={{ format: 'hh:mm A', use12Hours: true }}
+              format="MMM DD, YYYY hh:mm A"
+              style={{ width: '100%' }}
+              placeholder="Select date and time"
+            />
+          </Form.Item>
           <Form.Item name="source" label="Source"><Select placeholder="Keep unchanged" allowClear>{['Website','Facebook','Google Ads','Instagram','Referral','Direct','LinkedIn','YouTube'].map(s => <Option key={s} value={s}>{s}</Option>)}</Select></Form.Item>
         </Form>
       </Drawer>
