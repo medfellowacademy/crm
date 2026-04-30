@@ -2076,9 +2076,9 @@ async def bulk_update_leads(bulk_data: dict):
     # Update each lead in Supabase
     updated_count = 0
     try:
-        # Add updated_at timestamp
-        updates['updated_at'] = datetime.utcnow().isoformat()
-        
+        # Add updated_at timestamp with explicit Z suffix
+        updates['updated_at'] = datetime.utcnow().isoformat() + 'Z'
+
         # Bulk update via Supabase - update all matching lead_ids
         for lead_id in lead_ids:
             result = supabase_data.update_lead(lead_id, updates)

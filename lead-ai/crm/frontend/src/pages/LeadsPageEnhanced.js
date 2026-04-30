@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -388,10 +388,29 @@ const LeadsPageEnhanced = () => {
     onSuccess: (_, { leadId }) => { 
       message.success('Lead updated!'); 
       queryClient.invalidateQueries({ queryKey: ['leads'] }); 
-      queryClient.invalidateQueries({ queryKey: ['lead', leadId] }); // Invalidate individual lead cache
+      queryClient.invalidateQueries({ queryKey: ['lead', leadId] });
     },
     onError: (e) => message.error(`Failed: ${e.message}`),
   });
+
+  // Debounced inline update — prevents rapid-fire API calls when user
+  // clicks through dropdown options quickly. Waits 400ms after the last
+  // change before sending the PUT request.
+  const _inlineTimer = useRef({});
+  const inlineUpdate = useCallback((leadId, field, value) => {
+    const key = `${leadId}:${field}`;
+    if (_inlineTimer.current[key]) clearTimeout(_inlineTimer.current[key]);
+    _inlineTimer.current[key] = setTimeout(() => {
+      delete _inlineTimer.current[key];
+      updateMutation.mutate({ leadId, data: { [field]: value } });
+    }, 400);
+  }, [updateMutation]);
+
+  // Cancel all pending inline timers on unmount
+  useEffect(() => {
+    const timers = _inlineTimer.current;
+    return () => Object.values(timers).forEach(clearTimeout);
+  }, []);
 
   const deleteMutation = useMutation({
     mutationFn: (id) => leadsAPI.delete(id),
@@ -817,7 +836,7 @@ const LeadsPageEnhanced = () => {
           allowClear
           filterOption={(input, opt) => opt.value.toLowerCase().includes(input.toLowerCase())}
           options={COUNTRIES.map(ct => ({ value: ct, label: ct }))}
-          onChange={v => updateMutation.mutate({ leadId: r.lead_id, data: { country: v || null } })}
+          onChange={v => inlineUpdate(r.lead_id, 'country', v || null)}
         />
       ),
     },
@@ -839,7 +858,7 @@ const LeadsPageEnhanced = () => {
           allowClear
           filterOption={(input, opt) => opt.label.toLowerCase().includes(input.toLowerCase())}
           options={uniqueCourses.map(co => ({ value: co, label: co }))}
-          onChange={v => updateMutation.mutate({ leadId: r.lead_id, data: { course_interested: v || null } })}
+          onChange={v => inlineUpdate(r.lead_id, 'course_interested', v || null)}
         />
       ),
     },
@@ -859,7 +878,7 @@ const LeadsPageEnhanced = () => {
           style={{ width: '100%', minWidth: 110 }}
           allowClear
           options={SOURCE_OPTIONS.map(o => ({ value: o, label: o }))}
-          onChange={v => updateMutation.mutate({ leadId: r.lead_id, data: { source: v || null } })}
+          onChange={v => inlineUpdate(r.lead_id, 'source', v || null)}
         />
       ),
     },
@@ -879,7 +898,7 @@ const LeadsPageEnhanced = () => {
           style={{ width: '100%', minWidth: 90 }}
           allowClear
           options={COMPANY_OPTIONS.map(o => ({ value: o, label: o }))}
-          onChange={v => updateMutation.mutate({ leadId: r.lead_id, data: { company: v || null } })}
+          onChange={v => inlineUpdate(r.lead_id, 'company', v || null)}
         />
       ),
     },
@@ -896,7 +915,7 @@ const LeadsPageEnhanced = () => {
           value={s || undefined}
           size="small"
           style={{ width: '100%', minWidth: 130 }}
-          onChange={v => updateMutation.mutate({ leadId: r.lead_id, data: { status: v } })}
+          onChange={v => inlineUpdate(r.lead_id, 'status', v)}
           options={STATUS_OPTIONS.map(opt => ({
             value: opt,
             label: <Tag color={STATUS_COLOR_MAP[opt] || 'default'} style={{ marginRight: 0 }}>{opt}</Tag>,
@@ -928,7 +947,7 @@ const LeadsPageEnhanced = () => {
       render: (val, r) => (
         <Select value={val || undefined} placeholder="Assign..." size="small" style={{ width: '100%' }} allowClear
           disabled={isCounselor}
-          onChange={v => updateMutation.mutate({ leadId: r.lead_id, data: { assigned_to: v || null } })}
+          onChange={v => inlineUpdate(r.lead_id, 'assigned_to', v || null)}
           options={isCounselor
             ? (authUser?.full_name ? [{ label: authUser.full_name, value: authUser.full_name }] : [])
             : users.map(u => ({ label: u.full_name, value: u.full_name }))} />
@@ -1002,7 +1021,7 @@ const LeadsPageEnhanced = () => {
               color: overdue ? '#ff4d4f' : isToday ? '#faad14' : undefined,
             }}
             allowClear
-            onChange={v => updateMutation.mutate({ leadId: r.lead_id, data: { follow_up_date: v ? v.toISOString() : null } })}
+            onChange={v => inlineUpdate(r.lead_id, 'follow_up_date', v ? v.toISOString() : null)}
             renderExtraFooter={() =>
               d ? (
                 <div style={{ fontSize: 11, color: '#888', padding: '2px 4px' }}>
@@ -1067,7 +1086,7 @@ const LeadsPageEnhanced = () => {
         </Space>
       ),
     },
-  ], [uniqueCountries, uniqueCourses, uniqueSources, uniqueStatuses, uniqueAssigned, isCounselor, authUser, users, navigate, decayConfig, updateMutation, getActionMenu, editingCell, setEditingCell, commitEdit, setEditingValue]);
+  ], [uniqueCountries, uniqueCourses, uniqueSources, uniqueStatuses, uniqueAssigned, isCounselor, authUser, users, navigate, decayConfig, updateMutation, inlineUpdate, getActionMenu, editingCell, setEditingCell, commitEdit, setEditingValue]);
 
   const activeAdvFilters = Object.values(advFilters).filter(v => v && (Array.isArray(v) ? v.length > 0 : true)).length;
 

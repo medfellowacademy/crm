@@ -216,38 +216,59 @@ class SupabaseDataLayer:
             return 0
     
     def update_lead(self, lead_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Update lead"""
+        """Update lead — resilient to missing columns (e.g. new fields not yet migrated)."""
+        # Always UTC with Z suffix so the frontend parseDate helper works correctly.
+        data['updated_at'] = datetime.utcnow().isoformat() + 'Z'
+
+        # Convert any datetime objects to ISO strings for JSON serialisation.
+        for key, value in list(data.items()):
+            if isinstance(value, datetime):
+                iso = value.isoformat()
+                data[key] = iso if iso.endswith('Z') or '+' in iso else iso + 'Z'
+
+        # Strip None values — we never want to accidentally null-out a good column.
+        cleaned_data = {k: v for k, v in data.items() if v is not None}
+
+        # New columns (e.g. 'company', 'qualification') may not exist in Supabase
+        # until the migration is run.  If Supabase complains about an unknown column,
+        # drop that column and retry so the other fields are still saved.
+        NEW_COLUMNS = {'company', 'qualification'}
         try:
-            # Add updated_at timestamp (always UTC with explicit Z suffix)
-            data['updated_at'] = datetime.utcnow().isoformat() + 'Z'
-            
-            # Convert any datetime objects to ISO strings for JSON serialization
-            for key, value in data.items():
-                if isinstance(value, datetime):
-                    data[key] = value.isoformat() + 'Z'
-            
-            # Remove None values to avoid overwriting with null unintentionally
-            # Keep empty strings and 0 values
-            cleaned_data = {k: v for k, v in data.items() if v is not None}
-            
             response = self.client.table('leads').update(cleaned_data).eq('lead_id', lead_id).execute()
             return response.data[0] if response.data else None
         except Exception as e:
+            err_str = str(e)
+            missing = [c for c in NEW_COLUMNS if c in err_str]
+            if missing:
+                for col in missing:
+                    cleaned_data.pop(col, None)
+                    logger.warning(
+                        f"Column '{col}' missing in Supabase — update skipped for this field. "
+                        f"Run: ALTER TABLE leads ADD COLUMN IF NOT EXISTS {col} text;"
+                    )
+                try:
+                    response = self.client.table('leads').update(cleaned_data).eq('lead_id', lead_id).execute()
+                    return response.data[0] if response.data else None
+                except Exception as e2:
+                    logger.error(f"Error updating lead {lead_id} (fallback): {e2}", exc_info=True)
+                    return None
             logger.error(f"Error updating lead {lead_id}: {e}", exc_info=True)
             return None
     
     def create_lead(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Create new lead"""
         try:
-            # Add timestamps
-            now = datetime.utcnow().isoformat()
+            # Always store timestamps with explicit Z suffix (UTC) so the frontend
+            # parseDate helper doesn't need to guess the timezone.
+            now = datetime.utcnow().isoformat() + 'Z'
             data['created_at'] = now
             data['updated_at'] = now
-            
-            # Convert any datetime objects to ISO strings for JSON serialization
-            for key, value in data.items():
+
+            # Convert any datetime objects to ISO strings for JSON serialisation.
+            for key, value in list(data.items()):
                 if isinstance(value, datetime):
-                    data[key] = value.isoformat()
+                    iso = value.isoformat()
+                    data[key] = iso if iso.endswith('Z') or '+' in iso else iso + 'Z'
             
             # Remove None values to avoid Supabase constraint issues
             # Keep empty strings and 0 values, just remove None
