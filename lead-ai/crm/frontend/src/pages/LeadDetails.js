@@ -10,6 +10,7 @@ import {
   Button,
   Input,
   Select,
+  AutoComplete,
   Form,
   message,
   Timeline,
@@ -32,8 +33,12 @@ import {
   DollarOutlined,
   WarningOutlined,
   FireOutlined,
+  DeleteOutlined,
 } from '@ant-design/icons';
-import { leadsAPI, coursesAPI, counselorsAPI } from '../api/api';
+import { leadsAPI, coursesAPI, counselorsAPI, usersAPI } from '../api/api';
+import { COUNTRIES } from '../config/countries';
+
+const SOURCE_OPTIONS = ['Website','Facebook','Google Ads','Instagram','WhatsApp','Referral','Direct','LinkedIn','YouTube'];
 import dayjs from 'dayjs';
 
 // Safely parse a server date string as UTC.
@@ -82,6 +87,12 @@ const LeadDetails = () => {
   React.useEffect(() => {
     if (lead) {
       leadForm.setFieldsValue({
+        full_name: lead.full_name,
+        email: lead.email || '',
+        phone: lead.phone,
+        whatsapp: lead.whatsapp || lead.phone,
+        country: lead.country,
+        source: lead.source,
         course_interested: lead.course_interested,
         qualification: lead.qualification || null,
         status: lead.status,
@@ -100,6 +111,13 @@ const LeadDetails = () => {
     queryKey: ['counselors'],
     queryFn: () => counselorsAPI.getAll().then(res => Array.isArray(res.data) ? res.data : [])
   });
+
+  const { data: usersData } = useQuery({
+    queryKey: ['users'],
+    queryFn: async () => { try { return (await usersAPI.getAll()).data; } catch { return { users: [] }; } },
+    staleTime: 5 * 60 * 1000,
+  });
+  const allUsers = Array.isArray(usersData) ? usersData : (usersData?.users || []);
 
   // Update lead mutation
   const updateLeadMutation = useMutation({
@@ -152,6 +170,30 @@ const LeadDetails = () => {
       message.error(`Failed to add note: ${error.message}`);
     },
   });
+
+  const deleteLeadMutation = useMutation({
+    mutationFn: () => leadsAPI.delete(leadId),
+    onSuccess: () => {
+      message.success('Lead deleted successfully');
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      navigate('/leads');
+    },
+    onError: (e) => {
+      const detail = e.response?.data?.detail;
+      message.error(`Delete failed: ${detail || e.message || 'Unknown error'}`);
+    },
+  });
+
+  const handleDeleteLead = () => {
+    Modal.confirm({
+      title: 'Delete this lead?',
+      content: `"${lead?.full_name}" and all associated notes, activities and chat history will be permanently removed. This cannot be undone.`,
+      okText: 'Yes, Delete',
+      okType: 'danger',
+      cancelText: 'Cancel',
+      onOk: () => deleteLeadMutation.mutate(),
+    });
+  };
 
   const handleAddNote = (values) => {
     addNoteMutation.mutate({
@@ -249,6 +291,14 @@ const LeadDetails = () => {
           >
             Email
           </Button>
+          <Button
+            icon={<DeleteOutlined />}
+            danger
+            loading={deleteLeadMutation.isPending}
+            onClick={handleDeleteLead}
+          >
+            Delete
+          </Button>
         </Space>
       </div>
 
@@ -290,6 +340,12 @@ const LeadDetails = () => {
                     <Button onClick={() => {
                       setIsEditing(false);
                       leadForm.setFieldsValue({
+                        full_name: lead.full_name,
+                        email: lead.email || '',
+                        phone: lead.phone,
+                        whatsapp: lead.whatsapp || lead.phone,
+                        country: lead.country,
+                        source: lead.source,
                         course_interested: lead.course_interested,
                         qualification: lead.qualification || null,
                         status: lead.status,
@@ -316,22 +372,68 @@ const LeadDetails = () => {
             <Form form={leadForm} onFinish={handleSaveChanges} layout="vertical">
               <Descriptions column={2} bordered>
                 <Descriptions.Item label="Full Name">
-                  {lead?.full_name}
+                  {!isEditing ? (
+                    <span style={{ fontWeight: 500 }}>{lead?.full_name}</span>
+                  ) : (
+                    <Form.Item name="full_name" noStyle rules={[{ required: true, message: 'Name is required' }]}>
+                      <Input placeholder="Full name" />
+                    </Form.Item>
+                  )}
                 </Descriptions.Item>
                 <Descriptions.Item label="Email">
-                  {lead?.email || '-'}
+                  {!isEditing ? (
+                    <span>{lead?.email || '-'}</span>
+                  ) : (
+                    <Form.Item name="email" noStyle>
+                      <Input placeholder="Email address" />
+                    </Form.Item>
+                  )}
                 </Descriptions.Item>
                 <Descriptions.Item label="Phone">
-                  {lead?.phone}
+                  {!isEditing ? (
+                    <span>{lead?.phone}</span>
+                  ) : (
+                    <Form.Item name="phone" noStyle rules={[{ required: true, message: 'Phone is required' }]}>
+                      <Input placeholder="+91 9876543210" />
+                    </Form.Item>
+                  )}
                 </Descriptions.Item>
                 <Descriptions.Item label="WhatsApp">
-                  {lead?.whatsapp || lead?.phone}
+                  {!isEditing ? (
+                    <span>{lead?.whatsapp || lead?.phone}</span>
+                  ) : (
+                    <Form.Item name="whatsapp" noStyle>
+                      <Input placeholder="WhatsApp number" />
+                    </Form.Item>
+                  )}
                 </Descriptions.Item>
                 <Descriptions.Item label="Country">
-                  <Tag color="blue">{lead?.country}</Tag>
+                  {!isEditing ? (
+                    <Tag color="blue">{lead?.country}</Tag>
+                  ) : (
+                    <Form.Item name="country" noStyle>
+                      <AutoComplete
+                        placeholder="Search country…"
+                        allowClear
+                        style={{ width: '100%' }}
+                        filterOption={(input, option) =>
+                          option.value.toLowerCase().includes(input.toLowerCase())
+                        }
+                        options={COUNTRIES.map(c => ({ value: c, label: c }))}
+                      />
+                    </Form.Item>
+                  )}
                 </Descriptions.Item>
                 <Descriptions.Item label="Source">
-                  <Tag>{lead?.source}</Tag>
+                  {!isEditing ? (
+                    <Tag>{lead?.source}</Tag>
+                  ) : (
+                    <Form.Item name="source" noStyle>
+                      <Select style={{ width: '100%' }} allowClear placeholder="Select source">
+                        {SOURCE_OPTIONS.map(s => <Option key={s} value={s}>{s}</Option>)}
+                      </Select>
+                    </Form.Item>
+                  )}
                 </Descriptions.Item>
                 <Descriptions.Item label="Qualification">
                   {!isEditing ? (
@@ -412,13 +514,11 @@ const LeadDetails = () => {
                     <span>{lead?.assigned_to || '-'}</span>
                   ) : (
                     <Form.Item name="assigned_to" noStyle>
-                      <Select style={{ width: '100%' }} allowClear>
-                        {counselors?.map(counselor => (
-                          <Option key={counselor.id} value={counselor.name}>
-                            {counselor.name}
-                          </Option>
-                        ))}
-                      </Select>
+                      <Select style={{ width: '100%' }} allowClear showSearch
+                        filterOption={(i, o) => o.label.toLowerCase().includes(i.toLowerCase())}
+                        options={allUsers.map(u => ({ label: `${u.full_name} (${u.role})`, value: u.full_name }))}
+                        placeholder="Select counselor"
+                      />
                     </Form.Item>
                   )}
                 </Descriptions.Item>

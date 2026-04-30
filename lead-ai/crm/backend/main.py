@@ -1981,13 +1981,7 @@ async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, b
 
 @app.delete("/api/leads/{lead_id}")
 async def delete_lead(lead_id: str, request: Request):
-    """Delete lead - SUPABASE ONLY"""
-
-
-    # Counselors cannot delete any lead
-    _counselor_name = _get_counselor_name(request)
-    if _counselor_name:
-        raise HTTPException(status_code=403, detail="Counselors are not permitted to delete leads")
+    """Delete lead - available to all authenticated users"""
 
     # Check if lead exists
     lead = supabase_data.get_lead_by_id(lead_id)
