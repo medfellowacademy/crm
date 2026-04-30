@@ -382,11 +382,14 @@ class SupabaseDataLayer:
             logger.error(f"Error creating activity: {e}")
             return None
     
-    def get_dashboard_stats(self) -> Dict[str, Any]:
-        """Get dashboard statistics"""
+    def get_dashboard_stats(self, assigned_to: Optional[str] = None) -> Dict[str, Any]:
+        """Get dashboard statistics, optionally filtered by assigned_to for counselors"""
         try:
-            # Get all leads
-            all_leads_resp = self.client.table('leads').select('status,ai_segment,actual_revenue').execute()
+            # Get all leads (filtered by assigned_to for counselors)
+            query = self.client.table('leads').select('status,ai_segment,actual_revenue,assigned_to')
+            if assigned_to:
+                query = query.ilike('assigned_to', assigned_to)
+            all_leads_resp = query.execute()
             leads = all_leads_resp.data if all_leads_resp.data else []
             
             # Calculate stats with case-insensitive comparisons

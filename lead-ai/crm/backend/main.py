@@ -1467,9 +1467,13 @@ async def root():
 # ============================================================================
 
 @app.post("/api/leads", response_model=LeadResponse)
-async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks):
+async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, request: Request):
     """Create a new lead with AI scoring - SUPABASE ONLY"""
 
+    # Auto-assign to counselor if they are creating the lead
+    _counselor_name = _get_counselor_name(request)
+    if _counselor_name:
+        lead.assigned_to = _counselor_name  # Override assigned_to for counselors
 
     # Normalize input values to match CRM standards
     normalized = normalize_lead_values({
@@ -1639,6 +1643,11 @@ async def bulk_create_leads(leads: list[LeadCreate], background_tasks: Backgroun
                 'assigned_to': lead.assigned_to,
                 'status': lead.status.value if hasattr(lead.status, 'value') else lead.status if lead.status else 'Fresh'
             })
+            
+            # Auto-assign to counselor if they are importing the leads
+            _counselor_name_import = _get_counselor_name(request)
+            if _counselor_name_import:
+                normalized['assigned_to'] = _counselor_name_import  # Override for counselors
             
             # Build temporary object for AI scoring
             db_lead = DBLead(
@@ -2014,6 +2023,11 @@ async def add_note(lead_id: str, note: NoteCreate, request: Request, background_
     
     # Get the actual logged-in user's name from the request
     counselor_name = _get_counselor_name(request)
+    
+    # Counselors may only add notes to their own leads
+    if counselor_name and lead.get("assigned_to") != counselor_name:
+        raise HTTPException(status_code=403, detail="Access denied: You can only add notes to your assigned leads")
+    
     if not counselor_name:
         # If not a counselor, try to get the user's full name from the token
         try:
@@ -2059,13 +2073,18 @@ async def add_note(lead_id: str, note: NoteCreate, request: Request, background_
 # Re-scoring happens automatically on note creation via AI endpoints
 
 @app.get("/api/leads/{lead_id}/notes", response_model=List[NoteResponse])
-async def get_notes(lead_id: str):
+async def get_notes(lead_id: str, request: Request):
     """Get all notes for a lead - Supabase only"""
 
+    _counselor_name = _get_counselor_name(request)
     
     lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
+    
+    # Counselors may only view notes for their own leads
+    if _counselor_name and lead.get("assigned_to") != _counselor_name:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     lead_internal_id = lead.get('id')
     notes = supabase_data.get_notes_for_lead(lead_internal_id)
@@ -2073,13 +2092,18 @@ async def get_notes(lead_id: str):
 
 
 @app.get("/api/leads/{lead_id}/activities")
-async def get_lead_activities(lead_id: str, type: Optional[str] = None):
+async def get_lead_activities(lead_id: str, type: Optional[str] = None, request: Request = None):
     """Get enriched activity timeline for a lead — notes, WhatsApp, calls, emails, status changes. Supabase only."""
     try:
+        _counselor_name = _get_counselor_name(request)
         
         lead_data = supabase_data.get_lead_by_id(lead_id)
         if not lead_data:
             raise HTTPException(status_code=404, detail="Lead not found")
+        
+        # Counselors may only view activities for their own leads
+        if _counselor_name and lead_data.get("assigned_to") != _counselor_name:
+            raise HTTPException(status_code=403, detail="Access denied")
         
         lead_internal_id = lead_data.get('id')
         if not lead_internal_id:
@@ -2544,29 +2568,49 @@ async def get_followups_today(request: Request, assigned_to: Optional[str] = Non
 
 @app.get("/api/dashboard/stats", response_model=DashboardStats)
 @cache_async_result(STATS_CACHE, "dashboard_stats")
-async def get_dashboard_stats():
-    """Get dashboard statistics (cached for 1 minute)"""
+async def get_dashboard_stats(request: Request):
+    """Get dashboard statistics (cached for 1 minute). Counselors see only their stats."""
+    
+    # Check if user is a counselor and restrict to their leads
+    _counselor_name = _get_counselor_name(request)
     
     try:
-        # Get basic stats from Supabase
-        basic_stats = supabase_data.get_dashboard_stats()
+        # Get basic stats from Supabase (filtered for counselors)
+        basic_stats = supabase_data.get_dashboard_stats(assigned_to=_counselor_name)
         
-        # Get time-based stats
+        # Get time-based stats (filtered for counselors)
         now = datetime.utcnow()
         today_start = f"{now.date().isoformat()}T00:00:00"
         week_start = (now - timedelta(days=7)).isoformat()
         month_start = (now - timedelta(days=30)).isoformat()
         
-        today_resp = supabase_data.client.table('leads').select('id', count='exact').gte('created_at', today_start).execute()
-        week_resp = supabase_data.client.table('leads').select('id', count='exact').gte('created_at', week_start).execute()
-        month_resp = supabase_data.client.table('leads').select('id', count='exact').gte('created_at', month_start).execute()
+        today_query = supabase_data.client.table('leads').select('id', count='exact').gte('created_at', today_start)
+        if _counselor_name:
+            today_query = today_query.ilike('assigned_to', _counselor_name)
+        today_resp = today_query.execute()
         
-        # Get expected revenue
-        revenue_resp = supabase_data.client.table('leads').select('expected_revenue').execute()
+        week_query = supabase_data.client.table('leads').select('id', count='exact').gte('created_at', week_start)
+        if _counselor_name:
+            week_query = week_query.ilike('assigned_to', _counselor_name)
+        week_resp = week_query.execute()
+        
+        month_query = supabase_data.client.table('leads').select('id', count='exact').gte('created_at', month_start)
+        if _counselor_name:
+            month_query = month_query.ilike('assigned_to', _counselor_name)
+        month_resp = month_query.execute()
+        
+        # Get expected revenue (filtered for counselors)
+        revenue_query = supabase_data.client.table('leads').select('expected_revenue')
+        if _counselor_name:
+            revenue_query = revenue_query.ilike('assigned_to', _counselor_name)
+        revenue_resp = revenue_query.execute()
         expected_revenue = sum(l.get('expected_revenue', 0) or 0 for l in (revenue_resp.data or []))
         
-        # Get avg score
-        score_resp = supabase_data.client.table('leads').select('ai_score').not_.is_('ai_score', 'null').execute()
+        # Get avg score (filtered for counselors)
+        score_query = supabase_data.client.table('leads').select('ai_score').not_.is_('ai_score', 'null')
+        if _counselor_name:
+            score_query = score_query.ilike('assigned_to', _counselor_name)
+        score_resp = score_query.execute()
         scores = [l.get('ai_score', 0) for l in (score_resp.data or []) if l.get('ai_score')]
         avg_score = sum(scores) / len(scores) if scores else 0
         
