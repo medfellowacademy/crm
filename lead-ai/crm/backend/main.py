@@ -2126,10 +2126,86 @@ async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, b
             iso = dt.isoformat() if hasattr(dt, 'isoformat') else str(dt)
             update_data['follow_up_date'] = iso if iso.endswith('Z') or '+' in iso else iso + 'Z'
         
+        # Fetch the existing lead BEFORE update so we can diff changed fields
+        existing_for_diff = supabase_data.get_lead_by_id(lead_id) if not _counselor_name else existing
+
         updated_lead = supabase_data.update_lead(lead_id, update_data)
         if not updated_lead:
             raise HTTPException(status_code=404, detail="Lead not found")
-        
+
+        # ── Record activity for every meaningful field change ─────────────────
+        try:
+            def _get_actor_name(req: Request) -> str:
+                """Return the current user's full name from JWT, regardless of role."""
+                try:
+                    ah = req.headers.get("Authorization", "")
+                    if ah.startswith("Bearer "):
+                        td = decode_access_token(ah.split(" ", 1)[1])
+                        if td:
+                            u = supabase_data.get_user_by_email(td.email)
+                            if u:
+                                return u.get("full_name") or td.email or "System"
+                except Exception:
+                    pass
+                return "System"
+
+            actor = _get_actor_name(request)
+            internal_id = (existing_for_diff or {}).get("id")
+
+            # Fields we care about tracking (skip internal/timestamp fields)
+            _TRACKED_FIELDS = {
+                "status":             "Status",
+                "full_name":          "Full Name",
+                "email":              "Email",
+                "phone":              "Phone",
+                "whatsapp":           "WhatsApp",
+                "country":            "Country",
+                "source":             "Source",
+                "course_interested":  "Course",
+                "qualification":      "Qualification",
+                "company":            "Company",
+                "assigned_to":        "Assigned To",
+                "follow_up_date":     "Follow-up Date",
+                "expected_revenue":   "Expected Revenue",
+                "actual_revenue":     "Actual Revenue",
+                "notes":              "Notes",
+                "utm_source":         "UTM Source",
+                "utm_medium":         "UTM Medium",
+                "utm_campaign":       "UTM Campaign",
+            }
+
+            changed_parts = []
+            for field, label in _TRACKED_FIELDS.items():
+                if field not in update_data:
+                    continue
+                old_val = (existing_for_diff or {}).get(field)
+                new_val = update_data[field]
+                # Normalise for comparison
+                old_str = str(old_val).strip() if old_val is not None else ""
+                new_str = str(new_val).strip() if new_val is not None else ""
+                if old_str != new_str:
+                    if old_str:
+                        changed_parts.append(f"{label}: {old_str} → {new_str}")
+                    else:
+                        changed_parts.append(f"{label}: set to {new_str}")
+
+            if changed_parts and internal_id:
+                # Use "status_change" type when only status changed, else "field_update"
+                only_status = (
+                    len(changed_parts) == 1 and
+                    list(update_data.keys()) == ["status"]
+                )
+                act_type = "status_change" if only_status else "field_update"
+                description = " | ".join(changed_parts)
+                supabase_data.create_activity(
+                    lead_id=int(internal_id),
+                    activity_type=act_type,
+                    description=description,
+                    created_by=actor,
+                )
+        except Exception as act_err:
+            logger.warning(f"Activity log failed for {lead_id}: {act_err}")
+
         # Invalidate caches to ensure UI shows updated data
         invalidate_cache(LEAD_CACHE)
         invalidate_cache(STATS_CACHE)
@@ -2815,108 +2891,123 @@ async def get_lead_update_activity(
         notes_resp = nq.limit(5000).execute()
         notes = notes_resp.data if notes_resp.data else []
 
-        # ── Collect all unique lead_ids so we can resolve names ───────────────
-        all_lead_ids = list({
-            a["lead_id"] for a in activities if a.get("lead_id")
+        # ── Collect all unique INTEGER lead db-ids so we can resolve names ──────
+        # activities.lead_id and notes.lead_id both store the INTEGER `id`
+        # column of the leads table, NOT the string "LEAD00123" lead_id.
+        all_db_ids = list({
+            int(a["lead_id"]) for a in activities if a.get("lead_id") is not None
         } | {
-            n["lead_id"] for n in notes if n.get("lead_id")
+            int(n["lead_id"]) for n in notes if n.get("lead_id") is not None
         })
 
-        # Fetch lead info in batches of 100
+        # lead_info keyed by INTEGER id → lead dict (includes string lead_id)
         lead_info: dict = {}
         BATCH = 100
-        for i in range(0, len(all_lead_ids), BATCH):
-            batch = all_lead_ids[i:i + BATCH]
+        for i in range(0, len(all_db_ids), BATCH):
+            batch = all_db_ids[i:i + BATCH]
             try:
                 lr = (
                     supabase_data.client.table("leads")
                     .select("id,lead_id,full_name,status,phone,country,course_interested,assigned_to")
-                    .in_("lead_id", batch)
+                    .in_("id", batch)
                     .execute()
                 )
                 for lead in (lr.data or []):
-                    lead_info[lead["lead_id"]] = lead
-            except Exception:
-                pass
+                    lead_info[int(lead["id"])] = lead
+            except Exception as ex:
+                logger.warning(f"Lead info batch fetch failed: {ex}")
 
         def day_key(ts: str) -> str:
             """Return YYYY-MM-DD from an ISO timestamp."""
             return ts[:10] if ts else "unknown"
 
+        def lead_str_id(db_id) -> str:
+            """Return the string lead_id (e.g. 'LEAD00123') for navigation."""
+            info = lead_info.get(int(db_id) if db_id is not None else -1, {})
+            return info.get("lead_id") or str(db_id)
+
         # ── Aggregate by (user, day) ──────────────────────────────────────────
-        # Structure: buckets[user][day] = { lead_ids: set, events: list }
+        # Structure: buckets[user][day] = { db_ids: set, events: list }
         from collections import defaultdict
-        buckets: dict = defaultdict(lambda: defaultdict(lambda: {"lead_ids": set(), "events": []}))
+        buckets: dict = defaultdict(lambda: defaultdict(lambda: {"db_ids": set(), "events": []}))
 
         for a in activities:
-            u  = a.get("created_by") or "Unknown"
-            d  = day_key(a.get("created_at", ""))
-            lid = a.get("lead_id")
+            u   = a.get("created_by") or "Unknown"
+            d   = day_key(a.get("created_at", ""))
+            lid = a.get("lead_id")   # integer
             buckets[u][d]["events"].append({
                 "type":        a.get("activity_type", "update"),
                 "description": a.get("description", ""),
-                "lead_id":     lid,
+                "db_id":       lid,
+                "lead_id":     lead_str_id(lid) if lid is not None else None,
                 "ts":          a.get("created_at"),
             })
-            if lid:
-                buckets[u][d]["lead_ids"].add(lid)
+            if lid is not None:
+                buckets[u][d]["db_ids"].add(int(lid))
 
         for n in notes:
             u   = n.get("created_by") or "Unknown"
             d   = day_key(n.get("created_at", ""))
-            lid = n.get("lead_id")
-            # Label note type
-            channel = n.get("channel", "note")
+            lid = n.get("lead_id")   # integer
+            channel = n.get("channel") or "manual"
             content = (n.get("content") or "")[:120]
             buckets[u][d]["events"].append({
-                "type":        f"note_{channel}" if channel else "note",
+                "type":        f"note_{channel}",
                 "description": content,
-                "lead_id":     lid,
+                "db_id":       lid,
+                "lead_id":     lead_str_id(lid) if lid is not None else None,
                 "ts":          n.get("created_at"),
             })
-            if lid:
-                buckets[u][d]["lead_ids"].add(lid)
+            if lid is not None:
+                buckets[u][d]["db_ids"].add(int(lid))
 
         # ── Build response ────────────────────────────────────────────────────
         rows = []
         for u_name, days_map in buckets.items():
             for day_str, data in days_map.items():
-                lead_ids = list(data["lead_ids"])
-                events   = data["events"]
+                db_ids = list(data["db_ids"])
+                events = data["events"]
 
                 # Count by type
                 type_counts: dict = defaultdict(int)
                 for ev in events:
                     type_counts[ev["type"]] += 1
 
-                # Unique field/action labels for display
                 action_summary = [
                     {"type": t, "count": c}
                     for t, c in sorted(type_counts.items(), key=lambda x: -x[1])
                 ]
 
-                # Leads with info
-                leads_detail = [
-                    {
-                        "lead_id":        lid,
-                        "full_name":      lead_info.get(lid, {}).get("full_name", lid),
-                        "status":         lead_info.get(lid, {}).get("status", ""),
-                        "phone":          lead_info.get(lid, {}).get("phone", ""),
-                        "country":        lead_info.get(lid, {}).get("country", ""),
-                        "course_interested": lead_info.get(lid, {}).get("course_interested", ""),
-                        "assigned_to":    lead_info.get(lid, {}).get("assigned_to", ""),
-                        "events":         [ev for ev in events if ev.get("lead_id") == lid],
-                    }
-                    for lid in lead_ids
-                ]
+                # Per-lead detail — keyed by STRING lead_id for frontend navigation
+                seen_str_ids: set = set()
+                leads_detail = []
+                for db_id in db_ids:
+                    info       = lead_info.get(db_id, {})
+                    str_lid    = info.get("lead_id") or str(db_id)
+                    if str_lid in seen_str_ids:
+                        continue
+                    seen_str_ids.add(str_lid)
+                    lead_evs   = [ev for ev in events if ev.get("db_id") == db_id]
+                    leads_detail.append({
+                        "lead_id":           str_lid,
+                        "db_id":             db_id,
+                        "full_name":         info.get("full_name") or str_lid,
+                        "status":            info.get("status", ""),
+                        "phone":             info.get("phone", ""),
+                        "country":           info.get("country", ""),
+                        "course_interested": info.get("course_interested", ""),
+                        "assigned_to":       info.get("assigned_to", ""),
+                        "events":            lead_evs,
+                    })
+                leads_detail.sort(key=lambda x: x["full_name"] or "")
 
                 rows.append({
                     "user":           u_name,
                     "date":           day_str,
-                    "leads_updated":  len(lead_ids),
+                    "leads_updated":  len(leads_detail),
                     "total_events":   len(events),
                     "action_summary": action_summary,
-                    "leads":          sorted(leads_detail, key=lambda x: x["full_name"] or ""),
+                    "leads":          leads_detail,
                 })
 
         # Sort by date desc, then user

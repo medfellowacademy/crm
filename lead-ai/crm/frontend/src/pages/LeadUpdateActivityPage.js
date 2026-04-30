@@ -18,30 +18,38 @@ const { Title, Text } = Typography;
 
 // ── Colour palette for activity types ────────────────────────────────────────
 const TYPE_COLOR = {
-  status_change:   '#6366f1',
-  lead_created:    '#10b981',
-  note:            '#f59e0b',
-  note_call:       '#ef4444',
-  note_whatsapp:   '#25d366',
-  note_email:      '#3b82f6',
-  note_note:       '#f59e0b',
-  whatsapp:        '#25d366',
-  call:            '#ef4444',
-  reassignment:    '#8b5cf6',
-  update:          '#06b6d4',
+  status_change:    '#6366f1',
+  field_update:     '#06b6d4',
+  lead_created:     '#10b981',
+  note:             '#f59e0b',
+  note_call:        '#ef4444',
+  note_whatsapp:    '#25d366',
+  note_email:       '#3b82f6',
+  note_note:        '#f59e0b',
+  note_manual:      '#f59e0b',
+  note_1st_call:    '#ef4444',
+  note_2nd_call:    '#f97316',
+  whatsapp:         '#25d366',
+  call:             '#ef4444',
+  reassignment:     '#8b5cf6',
+  update:           '#06b6d4',
 };
 const TYPE_LABEL = {
-  status_change:   'Status Change',
-  lead_created:    'Lead Created',
-  note:            'Note Added',
-  note_call:       'Call Note',
-  note_whatsapp:   'WhatsApp Note',
-  note_email:      'Email Note',
-  note_note:       'Note',
-  whatsapp:        'WhatsApp',
-  call:            'Call',
-  reassignment:    'Reassigned',
-  update:          'Field Update',
+  status_change:    'Status Change',
+  field_update:     'Fields Updated',
+  lead_created:     'Lead Created',
+  note:             'Note',
+  note_call:        'Call Note',
+  note_whatsapp:    'WhatsApp Note',
+  note_email:       'Email Note',
+  note_note:        'Note',
+  note_manual:      'Manual Note',
+  note_1st_call:    '1st Call Note',
+  note_2nd_call:    '2nd Call Note',
+  whatsapp:         'WhatsApp',
+  call:             'Call',
+  reassignment:     'Reassigned',
+  update:           'Field Update',
 };
 
 function typeTag(type) {
@@ -204,13 +212,15 @@ export default function LeadUpdateActivityPage() {
   // ── Drawer: lead events timeline ──────────────────────────────────────────
   const leadColumns = [
     {
-      title: '#',
+      title: 'Lead ID',
       dataIndex: 'lead_id',
       key: 'lid',
       width: 110,
       render: id => (
         <Text code style={{ fontSize: 11, cursor: 'pointer', color: '#6366f1' }}
-          onClick={() => navigate(`/leads/${id}`)}>{id}</Text>
+          onClick={() => navigate(`/leads/${id}`)}>
+          {id}
+        </Text>
       ),
     },
     {
@@ -492,6 +502,7 @@ export default function LeadUpdateActivityPage() {
                     color: TYPE_COLOR[ev.type] || 'blue',
                     dot: ev.type?.startsWith('note') ? <FileTextOutlined /> :
                           ev.type === 'status_change' ? <EditOutlined /> :
+                          ev.type === 'field_update' ? <EditOutlined /> :
                           ev.type === 'reassignment' ? <TeamOutlined /> :
                           <PhoneOutlined />,
                     children: (
