@@ -1606,6 +1606,8 @@ const LeadsPageEnhanced = () => {
               status: v.status || 'Fresh',
               follow_up_date: v.follow_up_date ? v.follow_up_date.toISOString() : null,
               notes: v.notes || null,
+              expected_revenue: v.expected_revenue != null ? Number(v.expected_revenue) : null,
+              actual_revenue:   v.actual_revenue   != null ? Number(v.actual_revenue)   : null,
               utm_source:   v.utm_source   || null,
               utm_medium:   v.utm_medium   || null,
               utm_campaign: v.utm_campaign || null,

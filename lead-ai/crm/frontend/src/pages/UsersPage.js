@@ -65,7 +65,8 @@ const UsersPage = () => {
     queryFn: () => usersAPI.getAll().then(res => res.data)
   });
   
-  const users = usersData?.users || [];
+  // /api/users returns a plain array (not {users:[...]})
+  const users = Array.isArray(usersData) ? usersData : (usersData?.users || []);
 
   // Fetch leads
   const { data: leadsData } = useQuery({

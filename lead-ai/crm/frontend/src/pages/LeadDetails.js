@@ -22,6 +22,7 @@ import {
   Alert,
   Badge,
   Statistic,
+  InputNumber,
 } from 'antd';
 import {
   ArrowLeftOutlined,
@@ -122,21 +123,23 @@ const LeadDetails = () => {
   React.useEffect(() => {
     if (lead) {
       leadForm.setFieldsValue({
-        full_name: lead.full_name,
-        email: lead.email || '',
-        phone: lead.phone,
-        whatsapp: lead.whatsapp || lead.phone,
-        country: lead.country,
-        source: lead.source,
+        full_name:        lead.full_name,
+        email:            lead.email || '',
+        phone:            lead.phone,
+        whatsapp:         lead.whatsapp || lead.phone,
+        country:          lead.country,
+        source:           lead.source,
         course_interested: lead.course_interested,
-        qualification: lead.qualification || null,
-        company: lead.company || null,
-        status: lead.status,
-        follow_up_date: lead.follow_up_date ? parseDate(lead.follow_up_date) : null,
-        assigned_to: lead.assigned_to,
-        utm_source:   lead.utm_source   || null,
-        utm_medium:   lead.utm_medium   || null,
-        utm_campaign: lead.utm_campaign || null,
+        qualification:    lead.qualification || null,
+        company:          lead.company || null,
+        status:           lead.status,
+        follow_up_date:   lead.follow_up_date ? parseDate(lead.follow_up_date) : null,
+        assigned_to:      lead.assigned_to,
+        expected_revenue: lead.expected_revenue ?? null,
+        actual_revenue:   lead.actual_revenue   ?? null,
+        utm_source:       lead.utm_source   || null,
+        utm_medium:       lead.utm_medium   || null,
+        utm_campaign:     lead.utm_campaign || null,
       });
     }
   }, [lead, leadForm]);
@@ -186,12 +189,14 @@ const LeadDetails = () => {
       return;
     }
     
-    // Convert DatePicker value to ISO string
+    // Convert DatePicker value to ISO string and numeric fields to numbers
     const updateData = {
       ...values,
-      qualification: values.qualification || null,
-      company: values.company || null,
-      follow_up_date: values.follow_up_date ? values.follow_up_date.toISOString() : null,
+      qualification:    values.qualification    || null,
+      company:          values.company          || null,
+      follow_up_date:   values.follow_up_date   ? values.follow_up_date.toISOString() : null,
+      expected_revenue: values.expected_revenue != null ? Number(values.expected_revenue) : null,
+      actual_revenue:   values.actual_revenue   != null ? Number(values.actual_revenue)   : null,
     };
     updateLeadMutation.mutate(updateData);
   };
@@ -396,21 +401,23 @@ const LeadDetails = () => {
                     <Button onClick={() => {
                       setIsEditing(false);
                       leadForm.setFieldsValue({
-                        full_name: lead.full_name,
-                        email: lead.email || '',
-                        phone: lead.phone,
-                        whatsapp: lead.whatsapp || lead.phone,
-                        country: lead.country,
-                        source: lead.source,
+                        full_name:        lead.full_name,
+                        email:            lead.email || '',
+                        phone:            lead.phone,
+                        whatsapp:         lead.whatsapp || lead.phone,
+                        country:          lead.country,
+                        source:           lead.source,
                         course_interested: lead.course_interested,
-                        qualification: lead.qualification || null,
-                        company: lead.company || null,
-                        status: lead.status,
-                        follow_up_date: lead.follow_up_date ? parseDate(lead.follow_up_date) : null,
-                        assigned_to: lead.assigned_to,
-                        utm_source:   lead.utm_source   || null,
-                        utm_medium:   lead.utm_medium   || null,
-                        utm_campaign: lead.utm_campaign || null,
+                        qualification:    lead.qualification || null,
+                        company:          lead.company || null,
+                        status:           lead.status,
+                        follow_up_date:   lead.follow_up_date ? parseDate(lead.follow_up_date) : null,
+                        assigned_to:      lead.assigned_to,
+                        expected_revenue: lead.expected_revenue ?? null,
+                        actual_revenue:   lead.actual_revenue   ?? null,
+                        utm_source:       lead.utm_source   || null,
+                        utm_medium:       lead.utm_medium   || null,
+                        utm_campaign:     lead.utm_campaign || null,
                       });
                     }}>
                       Cancel
@@ -980,41 +987,64 @@ const LeadDetails = () => {
 
           {/* Revenue Card */}
           <Card title={<span><DollarOutlined /> Revenue</span>} style={{ marginBottom: '24px' }}>
-            {lead?.status === 'Enrolled' ? (
-              <Statistic
-                title="Total Revenue"
-                value={lead?.actual_revenue}
-                precision={0}
-                prefix="₹"
-                suffix=""
-                valueStyle={{ color: '#52c41a', fontSize: '28px' }}
-              />
+            {isEditing ? (
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item
+                    name="expected_revenue"
+                    label="Expected Revenue (₹)"
+                    tooltip="The revenue you expect if this lead converts"
+                  >
+                    <InputNumber
+                      style={{ width: '100%' }}
+                      min={0}
+                      step={1000}
+                      formatter={v => `₹ ${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+                      parser={v => v.replace(/₹\s?|(,*)/g, '')}
+                      placeholder="e.g. 150000"
+                    />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item
+                    name="actual_revenue"
+                    label="Actual Revenue (₹)"
+                    tooltip="Fill this once the lead is enrolled and payment is received"
+                  >
+                    <InputNumber
+                      style={{ width: '100%' }}
+                      min={0}
+                      step={1000}
+                      formatter={v => `₹ ${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+                      parser={v => v.replace(/₹\s?|(,*)/g, '')}
+                      placeholder="e.g. 150000"
+                    />
+                  </Form.Item>
+                </Col>
+              </Row>
             ) : (
-              <Statistic
-                title="Expected Revenue"
-                value={lead?.expected_revenue}
-                precision={0}
-                prefix="₹"
-                suffix=""
-                valueStyle={{ color: '#faad14', fontSize: '28px' }}
-              />
-            )}
-
-            {lead?.status === 'Enrolled' && (
-              <div style={{ marginTop: '16px' }}>
-                <Form.Item label="Actual Revenue (₹)">
-                  <Input
-                    type="number"
-                    defaultValue={lead?.actual_revenue}
-                    onBlur={(e) => {
-                      const val = parseFloat(e.target.value);
-                      if (!isNaN(val)) {
-                        updateLeadMutation.mutate({ actual_revenue: val });
-                      }
-                    }}
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Statistic
+                    title="Expected Revenue"
+                    value={lead?.expected_revenue || 0}
+                    precision={0}
+                    prefix="₹"
+                    valueStyle={{ color: '#faad14', fontSize: '24px' }}
                   />
-                </Form.Item>
-              </div>
+                </Col>
+                {lead?.status === 'Enrolled' && (
+                  <Col span={12}>
+                    <Statistic
+                      title="Actual Revenue"
+                      value={lead?.actual_revenue || 0}
+                      precision={0}
+                      prefix="₹"
+                      valueStyle={{ color: '#52c41a', fontSize: '24px' }}
+                    />
+                  </Col>
+                )}
+              </Row>
             )}
           </Card>
 

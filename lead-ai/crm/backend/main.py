@@ -2385,19 +2385,21 @@ async def rescore_lead_supabase(lead_id: str) -> None:
 
         score_result = ai_scorer.score_lead(temp, [])
 
-        # Persist only the scoring columns back to Supabase
+        # Persist only the AI scoring columns — NEVER touch expected_revenue
+        # (that is a user-managed field; the AI's revenue estimate is just for
+        # internal reference but must not override what the counsellor entered)
         score_payload = {
-            'ai_score': score_result.get('ai_score', lead_data.get('ai_score', 0)),
-            'ai_segment': (score_result.get('ai_segment').value
-                           if hasattr(score_result.get('ai_segment'), 'value')
-                           else score_result.get('ai_segment', lead_data.get('ai_segment'))),
+            'ai_score':              score_result.get('ai_score', lead_data.get('ai_score', 0)),
+            'ai_segment':            (score_result.get('ai_segment').value
+                                      if hasattr(score_result.get('ai_segment'), 'value')
+                                      else score_result.get('ai_segment', lead_data.get('ai_segment'))),
             'conversion_probability': score_result.get('conversion_probability', 0),
             'buying_signal_strength': score_result.get('buying_signal_strength', 0),
-            'churn_risk': score_result.get('churn_risk', 0),
-            'next_action': score_result.get('next_action'),
-            'priority_level': score_result.get('priority_level'),
-            'recommended_script': score_result.get('recommended_script'),
-            'expected_revenue': score_result.get('expected_revenue', lead_data.get('expected_revenue', 0)),
+            'churn_risk':             score_result.get('churn_risk', 0),
+            'next_action':            score_result.get('next_action'),
+            'priority_level':         score_result.get('priority_level'),
+            'recommended_script':     score_result.get('recommended_script'),
+            # 'expected_revenue' intentionally excluded — user value is preserved
         }
         # Strip Nones so we never overwrite good data with null
         score_payload = {k: v for k, v in score_payload.items() if v is not None}
