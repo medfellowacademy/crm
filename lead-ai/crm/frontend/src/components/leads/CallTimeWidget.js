@@ -82,7 +82,26 @@ const CallTimeWidget = ({ country }) => {
   if (isError || !data) {
     return (
       <div style={{ padding: '12px 0', color: '#9ca3af', fontSize: 13 }}>
-        No call data available yet.
+        No call data available yet. Add call notes to see patterns here.
+      </div>
+    );
+  }
+
+  // Not enough data yet
+  if (!data.best_windows?.length && data.data_quality === 'insufficient') {
+    return (
+      <div style={{
+        padding: '16px', background: '#fafafa', borderRadius: 8,
+        border: '1px dashed #e5e7eb', textAlign: 'center',
+      }}>
+        <div style={{ fontSize: 28, marginBottom: 8 }}>📞</div>
+        <div style={{ fontWeight: 600, color: '#374151', marginBottom: 4 }}>
+          No call data yet
+        </div>
+        <div style={{ fontSize: 12, color: '#9ca3af' }}>
+          Once your team logs call notes, this will show the best
+          times to reach leads from <strong>{data.country || 'this country'}</strong>.
+        </div>
       </div>
     );
   }
@@ -104,7 +123,7 @@ const CallTimeWidget = ({ country }) => {
   return (
     <div>
       {/* ── "good now?" badge ─────────────────────────────── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
         <div
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -117,9 +136,12 @@ const CallTimeWidget = ({ country }) => {
         >
           {isGoodNow ? '✅ Good time to call now' : '⏰ Not optimal right now'}
         </div>
+        <span style={{ fontSize: 11, color: '#9ca3af' }}>
+          {fmtHour(nowHour)} IST · {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][nowDow]}
+        </span>
         {data.data_quality === 'low' && (
-          <span style={{ fontSize: 11, color: '#9ca3af', fontStyle: 'italic' }}>
-            limited data
+          <span style={{ fontSize: 11, color: '#f59e0b', fontStyle: 'italic' }}>
+            ⚠ limited data ({data.overall?.total_calls || 0} calls logged)
           </span>
         )}
       </div>
@@ -185,7 +207,7 @@ const CallTimeWidget = ({ country }) => {
           fontSize: 11, fontWeight: 700, color: '#6b7280',
           textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8,
         }}>
-          Connection Rate · {country || 'All Countries'}
+          Connection Rate · {country || 'All Countries'} · times in IST
         </div>
 
         {/* hour labels */}

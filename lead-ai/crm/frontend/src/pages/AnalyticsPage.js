@@ -7,7 +7,7 @@ import {
   ResponsiveContainer, RadarChart, Radar, PolarGrid,
   PolarAngleAxis, PolarRadiusAxis,
 } from 'recharts';
-import { analyticsAPI, leadsAPI, counselorsAPI, sourceAnalyticsAPI } from '../api/api';
+import { analyticsAPI, leadsAPI, counselorsAPI, sourceAnalyticsAPI, callTimingAPI } from '../api/api';
 
 /* ── palette ─────────────────────────────────────────── */
 const PALETTE = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#3b82f6', '#8b5cf6', '#ec4899', '#14b8a6'];

@@ -5251,24 +5251,173 @@ def _is_connected(content: str) -> bool:
 
 @app.get("/api/analytics/call-timing")
 async def get_call_timing(country: Optional[str] = None):
-    """Analyse call notes by local hour and day-of-week - SUPABASE ONLY (Simplified)"""
-    
+    """
+    Analyse call notes by IST hour and day-of-week.
+    Mines the notes table (channel='call') for structured call outcomes,
+    classifies each as connected / not-connected, and builds a heatmap.
+    """
+    from datetime import timezone as _tz
+    from collections import defaultdict
+
+    # IST = UTC + 5:30
+    IST = _tz(timedelta(hours=5, minutes=30))
+
+    # Keywords that indicate NOT connected
+    _NOT_CONNECTED = [
+        "not connected", "no answer", "switched off",
+        "not reachable", "busy", "not answering",
+    ]
+
+    def _is_connected(content: str) -> bool:
+        first = (content or "").split("\n")[0].lower()
+        return not any(kw in first for kw in _NOT_CONNECTED)
+
     try:
-        # Simplified version - return basic call stats
-        # Full implementation would require timezone conversion and detailed parsing
+        # ── Fetch call notes ──────────────────────────────────────────────
+        q = (
+            supabase_data.client.table("notes")
+            .select("id,lead_id,content,channel,created_at")
+            .eq("channel", "call")
+            .order("created_at", desc=False)
+            .limit(10000)
+        )
+        resp = q.execute()
+        notes = resp.data or []
+
+        # Also pick up activities with type 'status_change' or 'call' that
+        # contain disposition info
+        try:
+            aq = (
+                supabase_data.client.table("activities")
+                .select("id,lead_id,activity_type,description,created_at")
+                .eq("activity_type", "call")
+                .order("created_at", desc=False)
+                .limit(5000)
+            )
+            ar = aq.execute()
+            for a in (ar.data or []):
+                notes.append({
+                    "lead_id":    a.get("lead_id"),
+                    "content":    a.get("description", ""),
+                    "channel":    "call",
+                    "created_at": a.get("created_at"),
+                })
+        except Exception:
+            pass
+
+        # ── Optional country filter ───────────────────────────────────────
+        if country and notes:
+            try:
+                lr = (
+                    supabase_data.client.table("leads")
+                    .select("id")
+                    .ilike("country", country.strip())
+                    .execute()
+                )
+                cids = {row["id"] for row in (lr.data or [])}
+                notes = [n for n in notes if n.get("lead_id") in cids]
+            except Exception:
+                pass
+
+        if not notes:
+            return {
+                "by_hour": [], "by_dow": [], "heatmap": {},
+                "best_windows": [], "worst_windows": [],
+                "overall": {
+                    "total_calls": 0, "connected": 0,
+                    "avg_connection_rate": 0, "best_hour": 10,
+                },
+                "data_quality": "insufficient",
+                "country": country or "All",
+            }
+
+        # ── Build heatmap ─────────────────────────────────────────────────
+        # heatmap[dow_js][hour] = {total, connected}
+        # dow_js: Sun=0 … Sat=6  (matches JS getDay())
+        heatmap: dict = defaultdict(lambda: defaultdict(lambda: {"total": 0, "connected": 0}))
+        hour_agg: dict = defaultdict(lambda: {"total": 0, "connected": 0})
+
+        for note in notes:
+            ts = note.get("created_at")
+            if not ts:
+                continue
+            try:
+                safe = ts if (ts.endswith("Z") or "+" in ts) else ts + "Z"
+                dt_utc = datetime.fromisoformat(safe.replace("Z", "+00:00"))
+                dt_ist = dt_utc.astimezone(IST)
+                hour   = dt_ist.hour
+                # Python weekday(): Mon=0..Sun=6 → JS getDay(): Sun=0..Sat=6
+                dow_js = (dt_ist.weekday() + 1) % 7
+            except Exception:
+                continue
+
+            connected = 1 if _is_connected(note.get("content", "")) else 0
+            heatmap[dow_js][hour]["total"]     += 1
+            heatmap[dow_js][hour]["connected"] += connected
+            hour_agg[hour]["total"]            += 1
+            hour_agg[hour]["connected"]        += connected
+
+        # ── Serialise heatmap ─────────────────────────────────────────────
+        resp_heatmap: dict = {}
+        windows: list = []
+        for dow_js, hours in heatmap.items():
+            resp_heatmap[str(dow_js)] = {}
+            for hour, s in hours.items():
+                rate = s["connected"] / s["total"] if s["total"] else 0
+                resp_heatmap[str(dow_js)][str(hour)] = {
+                    "rate":      round(rate, 3),
+                    "calls":     s["total"],
+                    "connected": s["connected"],
+                }
+                if s["total"] >= 2:   # only windows with ≥2 data points
+                    windows.append({
+                        "dow":   dow_js,
+                        "hour":  hour,
+                        "rate":  round(rate, 3),
+                        "calls": s["total"],
+                    })
+
+        windows.sort(key=lambda w: (-w["rate"], -w["calls"]))
+        best_windows  = windows[:5]
+        worst_windows = sorted(windows, key=lambda w: (w["rate"], -w["calls"]))[:3]
+
+        # ── Overall stats ────────────────────────────────────────────────
+        total_calls = sum(s["total"]     for s in hour_agg.values())
+        total_conn  = sum(s["connected"] for s in hour_agg.values())
+        avg_rate    = total_conn / total_calls if total_calls else 0
+        best_hour   = max(
+            hour_agg.keys(),
+            key=lambda h: hour_agg[h]["connected"] / hour_agg[h]["total"]
+                          if hour_agg[h]["total"] > 0 else 0,
+            default=10,
+        )
+        data_quality = "high" if total_calls >= 50 else "medium" if total_calls >= 15 else "low"
+
         return {
-            "by_hour": [],
-            "by_dow": [],
-            "heatmap": {},
-            "best_windows": [],
-            "worst_windows": [],
-            "overall": {"total_calls": 0, "connected": 0, "rate": 0},
-            "data_quality": "insufficient",
-            "message": "Call timing analytics require advanced implementation"
+            "by_hour": [
+                {
+                    "hour":  h,
+                    "rate":  round(s["connected"] / s["total"], 3) if s["total"] else 0,
+                    "calls": s["total"],
+                }
+                for h, s in sorted(hour_agg.items())
+            ],
+            "heatmap":       resp_heatmap,
+            "best_windows":  best_windows,
+            "worst_windows": worst_windows,
+            "overall": {
+                "total_calls":         total_calls,
+                "connected":           total_conn,
+                "avg_connection_rate": round(avg_rate, 3),
+                "best_hour":           best_hour,
+            },
+            "data_quality": data_quality,
+            "country":      country or "All",
         }
+
     except Exception as e:
-        logger.error(f"Call timing error: {e}")
-        return {"by_hour": [], "by_dow": [], "heatmap": {}, "overall": {}}
+        logger.error(f"Call timing error: {e}", exc_info=True)
+        return {"by_hour": [], "by_dow": [], "heatmap": {}, "best_windows": [], "overall": {}}
 
 
 # ============================================================
