@@ -333,6 +333,16 @@ const LeadsPageEnhanced = () => {
       // Invalidate each individual lead cache
       leadIds.forEach(leadId => queryClient.invalidateQueries({ queryKey: ['lead', leadId] }));
     },
+    onError: (e) => {
+      console.error('Bulk update error:', e);
+      const detail = e.response?.data?.detail;
+      if (Array.isArray(detail)) {
+        const msgs = detail.map(d => `${d.loc?.slice(-1)[0] || 'field'}: ${d.msg}`).join('; ');
+        message.error(`Bulk update failed: ${msgs}`);
+      } else {
+        message.error(`Bulk update failed: ${detail || e.message}`);
+      }
+    },
   });
 
   // ── Bulk Import with Field Mapping ────────────────────────────────────────
@@ -1295,6 +1305,13 @@ const LeadsPageEnhanced = () => {
             if (v.assigned_to) updates.assigned_to = v.assigned_to;
             if (v.follow_up_date) updates.follow_up_date = v.follow_up_date.format('YYYY-MM-DD');
             if (v.source) updates.source = v.source;
+            
+            // Check if at least one field is filled
+            if (Object.keys(updates).length === 0) {
+              message.warning('Please fill at least one field to update');
+              return;
+            }
+            
             bulkMutation.mutate({ leadIds: selectedRows, updates });
           }}>
           <Form.Item name="status" label="Status"><Select placeholder="Keep unchanged" allowClear>{STATUS_OPTIONS.map(s => <Option key={s} value={s}>{s}</Option>)}</Select></Form.Item>
