@@ -213,13 +213,13 @@ class SupabaseDataLayer:
     def update_lead(self, lead_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Update lead"""
         try:
-            # Add updated_at timestamp
-            data['updated_at'] = datetime.utcnow().isoformat()
+            # Add updated_at timestamp (always UTC with explicit Z suffix)
+            data['updated_at'] = datetime.utcnow().isoformat() + 'Z'
             
             # Convert any datetime objects to ISO strings for JSON serialization
             for key, value in data.items():
                 if isinstance(value, datetime):
-                    data[key] = value.isoformat()
+                    data[key] = value.isoformat() + 'Z'
             
             # Remove None values to avoid overwriting with null unintentionally
             # Keep empty strings and 0 values
@@ -255,15 +255,27 @@ class SupabaseDataLayer:
             return None
     
     def delete_lead(self, lead_id: str) -> bool:
-        """Delete lead"""
+        """Delete lead and all its child records to satisfy FK constraints."""
         try:
             lead = self.get_lead_by_id(lead_id)
             if lead and lead.get("id") is not None:
                 internal_id = lead.get("id")
-                # Remove dependent rows first to satisfy FK constraints.
-                self.client.table('activities').delete().eq('lead_id', internal_id).execute()
-                self.client.table('notes').delete().eq('lead_id', internal_id).execute()
+                # Delete every child table that has a FK to leads.id.
+                # Order matters: deepest children first.
+                try:
+                    self.client.table('chat_messages').delete().eq('lead_db_id', internal_id).execute()
+                except Exception as e:
+                    logger.warning(f"chat_messages cleanup failed for lead {lead_id} (id={internal_id}): {e}")
+                try:
+                    self.client.table('activities').delete().eq('lead_id', internal_id).execute()
+                except Exception as e:
+                    logger.warning(f"activities cleanup failed for lead {lead_id}: {e}")
+                try:
+                    self.client.table('notes').delete().eq('lead_id', internal_id).execute()
+                except Exception as e:
+                    logger.warning(f"notes cleanup failed for lead {lead_id}: {e}")
 
+            # Now delete the lead itself
             self.client.table('leads').delete().eq('lead_id', lead_id).execute()
             return True
         except Exception as e:
@@ -322,7 +334,7 @@ class SupabaseDataLayer:
                 'content': content,
                 'channel': channel,
                 'created_by': created_by,
-                'created_at': datetime.utcnow().isoformat()
+                'created_at': datetime.utcnow().isoformat() + 'Z',
             }
             response = self.client.table('notes').insert(note_data).execute()
             return response.data[0] if response.data else None
@@ -366,7 +378,7 @@ class SupabaseDataLayer:
                 'activity_type': activity_type,
                 'description': description,
                 'created_by': created_by,
-                'created_at': datetime.utcnow().isoformat()
+                'created_at': datetime.utcnow().isoformat() + 'Z',
             }
             response = self.client.table('activities').insert(activity_data).execute()
             return response.data[0] if response.data else None

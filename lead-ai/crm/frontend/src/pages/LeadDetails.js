@@ -211,7 +211,7 @@ const LeadDetails = () => {
               {lead?.full_name}
             </h1>
             <div style={{ color: '#8c8c8c', marginTop: '4px' }}>
-              {lead?.lead_id} • Created {dayjs(lead?.created_at).format('MMM DD, YYYY')}
+              {lead?.lead_id} • Created {parseDate(lead?.created_at)?.format('MMM DD, YYYY')}
             </div>
           </div>
         </div>
@@ -477,7 +477,7 @@ const LeadDetails = () => {
                       {note.created_by}
                     </span>
                     <span style={{ color: '#8c8c8c', marginLeft: '8px', fontSize: '12px' }}>
-                      {dayjs(note.created_at).format('MMM DD, YYYY hh:mm A')}
+                      {parseDate(note.created_at)?.format('MMM DD, YYYY hh:mm A')}
                     </span>
                   </div>
                   <div style={{ whiteSpace: 'pre-wrap' }}>{note.content}</div>

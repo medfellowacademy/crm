@@ -10,8 +10,19 @@ const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 /* ─── helpers ─────────────────────────────────────────────── */
 const getToken = () => JSON.parse(localStorage.getItem('user') || '{}')?.token;
 
+// Supabase often returns timestamps without a timezone suffix, e.g.
+// "2026-04-30T12:41:00" instead of "2026-04-30T12:41:00Z".
+// Without the Z, new Date() treats it as LOCAL time → displayed time is
+// 5h 30m behind for IST users. Appending Z forces correct UTC→local conversion.
+const safeDate = (ts) => {
+  if (!ts) return new Date();
+  const str = String(ts);
+  const hasOffset = str.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(str);
+  return new Date(hasOffset ? str : str + 'Z');
+};
+
 const formatRelative = (ts) => {
-  const diff = Date.now() - new Date(ts).getTime();
+  const diff = Date.now() - safeDate(ts).getTime();
   const m = Math.floor(diff / 60000);
   const h = Math.floor(diff / 3600000);
   const d = Math.floor(diff / 86400000);
@@ -19,18 +30,18 @@ const formatRelative = (ts) => {
   if (m < 60) return `${m}m ago`;
   if (h < 24) return `${h}h ago`;
   if (d < 7) return `${d}d ago`;
-  return new Date(ts).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+  return safeDate(ts).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 };
 
 const formatTime = (ts) =>
-  new Date(ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+  safeDate(ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
 
 const dateBucket = (ts) => {
-  const d = Math.floor((Date.now() - new Date(ts).getTime()) / 86400000);
+  const d = Math.floor((Date.now() - safeDate(ts).getTime()) / 86400000);
   if (d === 0) return 'Today';
   if (d === 1) return 'Yesterday';
   if (d < 7) return `${d} days ago`;
-  return new Date(ts).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+  return safeDate(ts).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
 };
 
 /* ─── per-type config ─────────────────────────────────────── */

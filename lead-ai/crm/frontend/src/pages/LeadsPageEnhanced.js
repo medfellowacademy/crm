@@ -395,6 +395,10 @@ const LeadsPageEnhanced = () => {
   const deleteMutation = useMutation({
     mutationFn: (id) => leadsAPI.delete(id),
     onSuccess: () => { message.success('Lead deleted!'); queryClient.invalidateQueries({ queryKey: ['leads'] }); },
+    onError: (e) => {
+      const detail = e.response?.data?.detail;
+      message.error(`Delete failed: ${detail || e.message || 'Unknown error'}`);
+    },
   });
 
   const bulkMutation = useMutation({
