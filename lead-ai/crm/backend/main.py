@@ -3007,21 +3007,18 @@ async def trigger_followup(
         logger.error(f"trigger_followup failed for lead {lead_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Communication service error: {str(e)}")
 
-    # Log results
+    # Log results as notes in Supabase
     for result in results:
-        note = DBNote(
-            lead_id=lead.id,
-            content=f"[{result['channel'].title()} - Follow-up] {request.message}",
-            channel=result["channel"],
-            created_by="System",
-        )
-        db.add(note)
-
-    try:
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        logger.error(f"trigger_followup DB commit failed: {e}")
+        note_content = f"[{result['channel'].title()} - Follow-up] {request.message}"
+        try:
+            supabase_data.create_note(
+                lead_id=lead.get('id'),  # internal DB ID
+                content=note_content,
+                channel=result["channel"],
+                created_by="System"
+            )
+        except Exception as e:
+            logger.error(f"Failed to create note for lead {lead_id}: {e}")
 
     return {
         "success": True,
@@ -4021,21 +4018,28 @@ async def send_chat_message(lead_id: int, req: ChatSendRequest):
             country_code=req.country_code,
         )
 
-    msg = DBChatMessage(
-        lead_db_id=lead_id,
-        direction="outbound",
-        msg_type=req.msg_type,
-        content=req.message,
-        media_url=req.media_url,
-        filename=req.filename,
-        sender_name=req.sender_name,
-        status="sent" if result.get("success") else "failed",
-        interakt_id=result.get("message_id"),
-    )
-    db.add(msg)
-    db.commit()
-    db.refresh(msg)
-    return msg
+    # Save message to Supabase chat_messages table
+    msg_data = {
+        "lead_db_id": lead_id,
+        "direction": "outbound",
+        "msg_type": req.msg_type,
+        "content": req.message,
+        "media_url": req.media_url,
+        "filename": req.filename,
+        "sender_name": req.sender_name,
+        "status": "sent" if result.get("success") else "failed",
+        "interakt_id": result.get("message_id"),
+        "created_at": datetime.utcnow().isoformat()
+    }
+    
+    # Remove None values
+    msg_data = {k: v for k, v in msg_data.items() if v is not None}
+    
+    response = supabase_data.client.table('chat_messages').insert(msg_data).execute()
+    if response.data:
+        return response.data[0]
+    else:
+        raise HTTPException(status_code=500, detail="Failed to save message")
 
 
 @app.post("/api/interakt/webhook")
@@ -4087,31 +4091,36 @@ async def interakt_webhook(request: FARequest):
             content = str(msg_data)
             msg_type = "text"
 
-        # Find lead by phone (try whatsapp field first, then phone)
+        # Find lead by phone using Supabase (try whatsapp field first, then phone)
         normalized = wa_id.replace("+", "").strip()
-        lead = (
-            db.query(DBLead)
-            .filter(
-                (DBLead.whatsapp.contains(normalized[-10:])) |
-                (DBLead.phone.contains(normalized[-10:]))
-            )
-            .first()
-        )
-
-        if lead:
-            chat_msg = DBChatMessage(
-                lead_db_id=lead.id,
-                direction="inbound",
-                msg_type=msg_type,
-                content=content,
-                media_url=media_url,
-                filename=filename,
-                sender_name=sender_name,
-                status="received",
-                interakt_id=interakt_id,
-            )
-            db.add(chat_msg)
-            db.commit()
+        last_10_digits = normalized[-10:]
+        
+        # Search in whatsapp field
+        lead_response = supabase_data.client.table('leads').select('id,whatsapp,phone').ilike('whatsapp', f'%{last_10_digits}%').limit(1).execute()
+        
+        # If not found, search in phone field
+        if not lead_response.data:
+            lead_response = supabase_data.client.table('leads').select('id,whatsapp,phone').ilike('phone', f'%{last_10_digits}%').limit(1).execute()
+        
+        if lead_response.data:
+            lead = lead_response.data[0]
+            
+            # Save incoming message to Supabase
+            chat_msg_data = {
+                "lead_db_id": lead['id'],
+                "direction": "inbound",
+                "msg_type": msg_type,
+                "content": content,
+                "media_url": media_url,
+                "filename": filename,
+                "sender_name": sender_name,
+                "status": "received",
+                "interakt_id": interakt_id,
+                "created_at": datetime.utcnow().isoformat()
+            }
+            # Remove None values
+            chat_msg_data = {k: v for k, v in chat_msg_data.items() if v is not None}
+            supabase_data.client.table('chat_messages').insert(chat_msg_data).execute()
 
     except Exception as e:
         logger.error(f"Interakt webhook error: {e}")
@@ -4264,22 +4273,6 @@ async def get_funnel_analysis():
     except Exception as e:
         logger.error(f"Funnel analysis error: {e}")
         return {"stages": []}
-    """Admin dashboard: funnel stage counts and drop-off."""
-    try:
-        stages = ['Fresh', 'Follow Up', 'Warm', 'Hot', 'Enrolled']
-        result = []
-        prev_count = None
-        for stage in stages:
-            count = db.query(DBLead).filter(DBLead.status == stage).count()
-            drop_off = 0
-            if prev_count is not None and prev_count > 0:
-                drop_off = round(((prev_count - count) / prev_count) * 100, 1)
-            result.append({"stage": stage, "count": count, "drop_off": drop_off})
-            prev_count = count
-        return result
-    except Exception as e:
-        logger.error(f"Funnel analysis error: {e}")
-        return []
 
 
 @app.get("/api/admin/revenue-trend")
@@ -4824,19 +4817,6 @@ async def update_sla_config(data: SLAConfigUpdate):
     except Exception as e:
         logger.error(f"Error updating SLA config: {e}")
         raise HTTPException(status_code=500, detail="Failed to update SLA config")
-    cfg = _get_sla_config(db)
-    if data.first_contact_hours    is not None: cfg.first_contact_hours    = data.first_contact_hours
-    if data.followup_response_hours is not None: cfg.followup_response_hours = data.followup_response_hours
-    if data.no_activity_days       is not None: cfg.no_activity_days       = data.no_activity_days
-    if data.updated_by             is not None: cfg.updated_by             = data.updated_by
-    cfg.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(cfg)
-    return {"message": "SLA config updated", "config": {
-        "first_contact_hours":     cfg.first_contact_hours,
-        "followup_response_hours": cfg.followup_response_hours,
-        "no_activity_days":        cfg.no_activity_days,
-    }}
 
 
 @app.get("/api/admin/sla-compliance")
