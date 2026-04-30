@@ -712,6 +712,33 @@ class NoteResponse(BaseModel):
     created_by: str
     channel: str
 
+# Normalise status strings coming from the frontend or legacy data.
+# Old imports / DB rows may have ALL-CAPS values ("FRESH", "HOT", etc.).
+# This map converts any casing variant to the canonical enum value.
+_STATUS_NORMALISE_MAP: dict[str, str] = {
+    "fresh": "Fresh",
+    "follow up": "Follow Up",
+    "followup": "Follow Up",
+    "follow_up": "Follow Up",
+    "warm": "Warm",
+    "hot": "Hot",
+    "not interested": "Not Interested",
+    "not_interested": "Not Interested",
+    "notinterested": "Not Interested",
+    "junk": "Junk",
+    "not answering": "Not Answering",
+    "not_answering": "Not Answering",
+    "notanswering": "Not Answering",
+    "enrolled": "Enrolled",
+}
+
+def _normalise_status(v):
+    if not v:
+        return v
+    key = str(v).lower().strip()
+    return _STATUS_NORMALISE_MAP.get(key, v)
+
+
 class LeadCreate(BaseModel):
     full_name: str
     email: Optional[str] = None  # Changed from EmailStr to str for lenient import
@@ -725,6 +752,11 @@ class LeadCreate(BaseModel):
     qualification: Optional[str] = None  # Educational qualification, e.g. MBBS, MD, BDS
     follow_up_date: Optional[datetime] = None
     notes: Optional[str] = None  # Initial note content for imports
+
+    @field_validator('status', mode='before')
+    @classmethod
+    def _normalise_status_create(cls, v):
+        return _normalise_status(v)
 
     @field_validator('email', mode='before')
     @classmethod
@@ -749,15 +781,22 @@ class LeadUpdate(BaseModel):
     phone: Optional[str] = None
     whatsapp: Optional[str] = None
     country: Optional[str] = None
+    source: Optional[str] = None
     course_interested: Optional[str] = None
     status: Optional[LeadStatus] = None
     follow_up_date: Optional[datetime] = None
     assigned_to: Optional[str] = None
     qualification: Optional[str] = None  # Educational qualification, e.g. MBBS, MD, BDS
     actual_revenue: Optional[float] = None
+    expected_revenue: Optional[float] = None
     next_action: Optional[str] = None
     loss_reason: Optional[str] = None
     loss_note: Optional[str] = None
+
+    @field_validator('status', mode='before')
+    @classmethod
+    def _normalise_status_update(cls, v):
+        return _normalise_status(v)
 
     @field_validator('email', mode='before')
     @classmethod
@@ -771,11 +810,11 @@ class LeadUpdate(BaseModel):
             return None
         return v
 
-    @field_validator('full_name', 'course_interested', 'assigned_to', 'next_action',
+    @field_validator('full_name', 'source', 'course_interested', 'assigned_to', 'next_action',
                      'qualification', 'loss_reason', 'loss_note', mode='before')
     @classmethod
     def _sanitize(cls, v):
-        return sanitize_text(v, max_length=5000)
+        return sanitize_text(v, max_length=5000) if v else None
 
 class LeadResponse(BaseModel):
     id: int
@@ -1959,7 +1998,9 @@ async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, b
         update_data = lead_update.dict(exclude_unset=True)
         # Convert datetime objects to ISO strings for JSON serialization
         if 'follow_up_date' in update_data and update_data['follow_up_date']:
-            update_data['follow_up_date'] = update_data['follow_up_date'].isoformat()
+            dt = update_data['follow_up_date']
+            iso = dt.isoformat() if hasattr(dt, 'isoformat') else str(dt)
+            update_data['follow_up_date'] = iso if iso.endswith('Z') or '+' in iso else iso + 'Z'
         
         updated_lead = supabase_data.update_lead(lead_id, update_data)
         if not updated_lead:
