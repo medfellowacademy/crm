@@ -753,6 +753,9 @@ class LeadCreate(BaseModel):
     company: Optional[str] = None         # Company / brand: 'MED' or 'Others'
     follow_up_date: Optional[datetime] = None
     notes: Optional[str] = None  # Initial note content for imports
+    utm_source: Optional[str] = None      # e.g. "google", "facebook"
+    utm_medium: Optional[str] = None      # e.g. "cpc", "organic"
+    utm_campaign: Optional[str] = None    # e.g. "mbbs_jan26"
 
     @field_validator('status', mode='before')
     @classmethod
@@ -794,6 +797,9 @@ class LeadUpdate(BaseModel):
     next_action: Optional[str] = None
     loss_reason: Optional[str] = None
     loss_note: Optional[str] = None
+    utm_source: Optional[str] = None
+    utm_medium: Optional[str] = None
+    utm_campaign: Optional[str] = None
 
     @field_validator('status', mode='before')
     @classmethod
@@ -854,6 +860,9 @@ class LeadResponse(BaseModel):
     company: Optional[str] = None
     loss_reason: Optional[str] = None
     loss_note: Optional[str] = None
+    utm_source: Optional[str] = None
+    utm_medium: Optional[str] = None
+    utm_campaign: Optional[str] = None
     notes: List[NoteResponse] = []
 
     model_config = ConfigDict(from_attributes=True)
@@ -1213,37 +1222,76 @@ class AILeadScorer:
             return self._calculate_rule_based_score(lead, conversation), 0.5, None
     
     def _extract_ml_features(self, lead: DBLead, notes: List[DBNote], conversation: Dict) -> list:
-        """Extract features for ML model prediction"""
-        
-        # Calculate derived features
+        """Extract features for ML model prediction (44-feature vector)."""
+        # ── Engagement / temporal ──────────────────────────────────────────────
         notes_count = len(notes)
         lead_age_days = (datetime.utcnow() - lead.created_at).days if lead.created_at else 0
         days_since_last_contact = (datetime.utcnow() - lead.last_contact_date).days if lead.last_contact_date else 999
-        
-        # Engagement metrics
         avg_note_length = sum(len(n.content) for n in notes) / max(notes_count, 1)
-        
-        # NLP features
+
         buying_signal_score = conversation['buying_strength'] / 100
         has_objection = 1 if conversation['primary_objection'] else 0
         churn_risk = conversation['churn_risk']
-        
-        # Recency score (0-1)
-        if days_since_last_contact <= 1:
-            recency_score = 1.0
-        elif days_since_last_contact <= 3:
-            recency_score = 0.8
-        elif days_since_last_contact <= 7:
-            recency_score = 0.5
-        elif days_since_last_contact <= 14:
-            recency_score = 0.3
-        else:
-            recency_score = 0.1
-        
-        # Engagement score (0-1)
+
+        if days_since_last_contact <= 1:    recency_score = 1.0
+        elif days_since_last_contact <= 3:  recency_score = 0.8
+        elif days_since_last_contact <= 7:  recency_score = 0.5
+        elif days_since_last_contact <= 14: recency_score = 0.3
+        else:                               recency_score = 0.1
+
         engagement_score = min(1.0, notes_count / 10)
-        
-        # Build feature vector (simplified - model expects 44 features)
+
+        # ── New profile-quality features (6 additional meaningful signals) ─────
+        # country_tier: 0–1 representing market quality
+        _country_tier_map = {
+            'india': 0.9, 'uae': 0.8, 'saudi arabia': 0.8, 'qatar': 0.8,
+            'kuwait': 0.8, 'bahrain': 0.8, 'oman': 0.8, 'uk': 0.7,
+            'usa': 0.7, 'canada': 0.7, 'australia': 0.7,
+        }
+        country_name = (getattr(lead, 'country', None) or '').lower().strip()
+        country_tier = _country_tier_map.get(country_name, 0.5)
+
+        # source_quality: lead channel quality signal
+        _source_quality_map = {
+            'referral': 1.0, 'website': 0.8, 'direct': 0.8,
+            'facebook': 0.6, 'instagram': 0.6, 'google ads': 0.6,
+            'linkedin': 0.65, 'youtube': 0.55, 'whatsapp': 0.7,
+        }
+        source_name = (getattr(lead, 'source', None) or '').lower().strip()
+        source_quality = _source_quality_map.get(source_name, 0.4)
+
+        # course_tier: estimated value from course pricing dict
+        course_name = (getattr(lead, 'course_interested', None) or '').lower()
+        course_prices = getattr(self, 'course_prices', {}) if hasattr(self, 'course_prices') else {}
+        course_price_val = 0
+        for k, v in course_prices.items():
+            if k.lower() in course_name or course_name in k.lower():
+                course_price_val = v
+                break
+        max_price = max(course_prices.values()) if course_prices else 1
+        course_tier = min(1.0, course_price_val / max(max_price, 1))
+
+        # profile_completeness: fraction of key fields filled in
+        profile_fields = [
+            getattr(lead, 'email', None),
+            getattr(lead, 'whatsapp', None),
+            getattr(lead, 'country', None),
+            getattr(lead, 'qualification', None),
+        ]
+        profile_completeness = sum(1 for f in profile_fields if f) / len(profile_fields)
+
+        # status_progression: encoded lead pipeline progress
+        _status_progression = {
+            'fresh': 0.1, 'warm': 0.5, 'hot': 0.8, 'enrolled': 1.0,
+            'follow up': 0.4, 'junk': 0.0,
+        }
+        status_val = (getattr(lead, 'status', '') or '').lower()
+        status_progression = _status_progression.get(status_val, 0.2)
+
+        # has_qualification: binary flag
+        has_qualification = 1.0 if getattr(lead, 'qualification', None) else 0.0
+
+        # ── Assemble 16-feature vector (pads to 44) ───────────────────────────
         features = [
             recency_score,
             engagement_score,
@@ -1255,12 +1303,17 @@ class AILeadScorer:
             has_objection,
             days_since_last_contact / 30,
             1 if conversation['urgency'] == 'high' else 0,
+            # New features — replace 6 padding zeros
+            country_tier,
+            source_quality,
+            course_tier,
+            profile_completeness,
+            status_progression,
+            has_qualification,
         ]
-        
-        # Pad with zeros to match model's expected 44 features
+
         features.extend([0] * (44 - len(features)))
-        
-        return features[:44]  # Ensure exactly 44 features
+        return features[:44]
     
     def _calculate_rule_based_score(self, lead: DBLead, conversation: Dict) -> float:
         """Calculate rule-based AI score (original logic)"""
@@ -1627,6 +1680,9 @@ async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, reque
             "assigned_to": db_lead.assigned_to,
             "qualification": lead.qualification,
             "company": lead.company,
+            "utm_source": lead.utm_source,
+            "utm_medium": lead.utm_medium,
+            "utm_campaign": lead.utm_campaign,
             "follow_up_date": lead.follow_up_date.isoformat() if lead.follow_up_date else None,
             "status": db_lead.status.value if hasattr(db_lead.status, 'value') else db_lead.status,
             "ai_score": db_lead.ai_score or 0.0,
@@ -1853,6 +1909,10 @@ async def get_leads(
     assigned_to_in: Optional[str] = None,
     course_interested: Optional[str] = None,
     source: Optional[str] = None,
+    company: Optional[str] = None,
+    company_in: Optional[str] = None,
+    qualification: Optional[str] = None,
+    qualification_in: Optional[str] = None,
     min_score: Optional[float] = None,
     max_score: Optional[float] = None,
     created_today: bool = False,
@@ -1896,9 +1956,16 @@ async def get_leads(
         country=country, country_in=country_in, segment=str(segment),
         segment_in=segment_in, assigned_to=assigned_to, assigned_to_in=assigned_to_in,
         course_interested=course_interested, source=source,
+        company=company, company_in=company_in,
+        qualification=qualification, qualification_in=qualification_in,
         min_score=min_score, max_score=max_score,
         follow_up_from=str(follow_up_from), follow_up_to=str(follow_up_to),
         created_today=created_today, overdue=overdue, search=search,
+        # date range params — previously missing from cache key (bug fix)
+        created_on=created_on, created_from=str(created_from), created_to=str(created_to),
+        created_after=str(created_after), created_before=str(created_before),
+        updated_on=updated_on, updated_from=str(updated_from), updated_to=str(updated_to),
+        updated_after=str(updated_after), updated_before=str(updated_before),
     )
     import hashlib, json
     _cache_key = "leads:" + hashlib.md5(
@@ -1922,6 +1989,10 @@ async def get_leads(
                 assigned_to_in=assigned_to_in,
                 course_interested=course_interested,
                 source=source,
+                company=company,
+                company_in=company_in,
+                qualification=qualification,
+                qualification_in=qualification_in,
                 min_score=min_score,
                 max_score=max_score,
                 follow_up_from=follow_up_from.isoformat() if follow_up_from else None,
@@ -5245,58 +5316,66 @@ async def get_conversion_time():
 
 @app.get("/api/admin/source-analytics")
 async def get_source_analytics():
-    """Per-source attribution metrics - SUPABASE ONLY"""
-    
-    try:
-        # Get all leads
-        response = supabase_data.client.table('leads').select('source,status,ai_segment,expected_revenue').execute()
-        all_leads = response.data if response.data else []
+    """Per-source and per-campaign attribution metrics - SUPABASE ONLY"""
 
-        # Aggregate by source
-        buckets = {}
-        for lead in all_leads:
-            src = (lead.get('source') or "Unknown").strip() or "Unknown"
-            if src not in buckets:
-                buckets[src] = {
-                    "source": src,
-                    "total": 0,
-                    "enrolled": 0,
-                    "hot": 0,
-                    "revenue": 0.0,
-                    "potential": 0.0,
-                }
-            b = buckets[src]
+    def _aggregate(leads, group_key):
+        buckets: dict = {}
+        for lead in leads:
+            key = (lead.get(group_key) or "Unknown").strip() or "Unknown"
+            if key not in buckets:
+                buckets[key] = {"label": key, "total": 0, "enrolled": 0, "hot": 0,
+                                "revenue": 0.0, "potential": 0.0, "ai_score_sum": 0.0, "scored": 0}
+            b = buckets[key]
             b["total"] += 1
-            if lead.get('status') == "Enrolled":
+            if lead.get("status") == "Enrolled":
                 b["enrolled"] += 1
-                b["revenue"] += lead.get('expected_revenue', 0) or 0
-            if lead.get('ai_segment') == 'Hot' or lead.get('status') == "Enrolled":
+                b["revenue"] += lead.get("expected_revenue", 0) or 0
+            if lead.get("ai_segment") == "Hot" or lead.get("status") == "Enrolled":
                 b["hot"] += 1
-            b["potential"] += lead.get('expected_revenue', 0) or 0
-        
+            b["potential"] += lead.get("expected_revenue", 0) or 0
+            if lead.get("ai_score") is not None:
+                b["ai_score_sum"] += lead["ai_score"]
+                b["scored"] += 1
         result = []
-        for src, b in sorted(buckets.items(), key=lambda x: -x[1]["enrolled"]):
-            conv_rate = round((b["enrolled"] / b["total"]) * 100, 1) if b["total"] > 0 else 0.0
+        for b in sorted(buckets.values(), key=lambda x: -x["enrolled"]):
+            conv = round((b["enrolled"] / b["total"]) * 100, 1) if b["total"] > 0 else 0.0
             avg_rev = round(b["revenue"] / b["enrolled"], 0) if b["enrolled"] > 0 else 0.0
+            avg_score = round(b["ai_score_sum"] / b["scored"], 1) if b["scored"] > 0 else 0.0
             result.append({
-                "source": src,
+                "label": b["label"],
                 "total_leads": b["total"],
                 "enrolled": b["enrolled"],
                 "hot_leads": b["hot"],
-                "conversion_rate": conv_rate,
+                "conversion_rate": conv,
                 "total_revenue": round(b["revenue"], 0),
                 "avg_revenue": avg_rev,
                 "total_potential": round(b["potential"], 0),
-                "roi_score": round(conv_rate * (avg_rev / 10000), 1) if avg_rev > 0 else 0.0,
+                "roi_score": round(conv * (avg_rev / 10000), 1) if avg_rev > 0 else 0.0,
+                "avg_ai_score": avg_score,
             })
+        return result
 
-        # Overall summary
-        total_leads = sum(b["total"] for b in buckets.values())
-        total_enrolled = sum(b["enrolled"] for b in buckets.values())
-        total_revenue = sum(b["revenue"] for b in buckets.values())
+    try:
+        response = supabase_data.client.table("leads").select(
+            "source,status,ai_segment,expected_revenue,ai_score,utm_source,utm_medium,utm_campaign"
+        ).execute()
+        all_leads = response.data if response.data else []
+
+        sources_raw = _aggregate(all_leads, "source")
+        # Rename "label" → "source" for backwards compatibility
+        sources = [{**r, "source": r["label"]} for r in sources_raw]
+
+        campaigns_raw = _aggregate(all_leads, "utm_campaign")
+        utm_sources_raw = _aggregate(all_leads, "utm_source")
+
+        total_leads    = sum(b["total_leads"] for b in sources)
+        total_enrolled = sum(b["enrolled"]    for b in sources)
+        total_revenue  = sum(b["total_revenue"] for b in sources)
 
         return {
-            "sources": result,
+            "sources": sources,
+            "campaigns": campaigns_raw,
+            "utm_sources": utm_sources_raw,
             "summary": {
                 "total_leads": total_leads,
                 "total_enrolled": total_enrolled,
@@ -5306,7 +5385,7 @@ async def get_source_analytics():
         }
     except Exception as e:
         logger.error(f"Source analytics error: {e}")
-        return {"sources": [], "summary": {}}
+        return {"sources": [], "campaigns": [], "utm_sources": [], "summary": {}}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

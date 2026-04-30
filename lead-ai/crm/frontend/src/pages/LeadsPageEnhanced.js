@@ -181,6 +181,7 @@ const LeadsPageEnhanced = () => {
   const [rawFileData, setRawFileData] = useState({ columns: [], rows: [] });
   const [fieldMapping, setFieldMapping] = useState({});
   const [filters, setFilters] = useState({});
+  const [columnFilters, setColumnFilters] = useState({});  // server-side column filter params
   const [searchText, setSearchText] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selectedRows, setSelectedRows] = useState([]);
@@ -231,18 +232,23 @@ const LeadsPageEnhanced = () => {
   // Reset to first page when filters or search changes
   React.useEffect(() => {
     setCurrentPage(1);
-  }, [filters, debouncedSearch, quickFilter, advFilters]);
+  }, [filters, columnFilters, debouncedSearch, quickFilter, advFilters]);
 
   // ── Queries ────────────────────────────────────────────────────────────────
   const leadQueryParams = React.useMemo(() => {
     const params = {
       ...filters,
+      ...columnFilters,   // column-level filters wired to server
       skip: (currentPage - 1) * pageSize,
       limit: pageSize,
     };
 
     if (quickFilter === 'hot') params.status = 'Hot';
     if (quickFilter === 'warm') params.status = 'Warm';
+    if (quickFilter === 'followup_today') {
+      params.follow_up_from = dayjs().startOf('day').toISOString();
+      params.follow_up_to   = dayjs().endOf('day').toISOString();
+    }
     if (quickFilter === 'today') params.created_today = true;
     if (quickFilter === 'overdue') params.overdue = true;
     if (debouncedSearch) params.search = debouncedSearch;
@@ -252,7 +258,8 @@ const LeadsPageEnhanced = () => {
     if (advFilters.country?.length) params.country_in = advFilters.country.join(',');
     if (advFilters.assigned?.length) params.assigned_to_in = advFilters.assigned.join(',');
     if (advFilters.course?.length > 0) params.course_interested = advFilters.course.join(',');
-    if (advFilters.source?.length > 0) params.source = advFilters.source.join(',');
+    if (advFilters.source?.length > 0)   params.source   = advFilters.source.join(',');
+    if (advFilters.company?.length > 0)  params.company  = advFilters.company.join(',');
     if (advFilters.minScore != null) params.min_score = advFilters.minScore;
     if (advFilters.maxScore != null) params.max_score = advFilters.maxScore;
 
@@ -412,6 +419,45 @@ const LeadsPageEnhanced = () => {
     return () => Object.values(timers).forEach(clearTimeout);
   }, []);
 
+  // Handle Table onChange — extracts Ant Design column filter values and maps
+  // them to server-side query params. This makes ALL column filters accurate
+  // across pages, not just the current page.
+  const handleTableChange = useCallback((_pagination, tableFilters) => {
+    const cf = {};
+    if (tableFilters.country?.length)     cf.country_in        = tableFilters.country.join(',');
+    if (tableFilters.course?.length)      cf.course_interested = tableFilters.course.join(',');
+    if (tableFilters.source?.length)      cf.source            = tableFilters.source.join(',');
+    if (tableFilters.company?.length)     cf.company           = tableFilters.company.join(',');
+    if (tableFilters.status?.length)      cf.status_in         = tableFilters.status.join(',');
+    if (tableFilters.assigned_to?.length) cf.assigned_to_in    = tableFilters.assigned_to.join(',');
+    // Date column filters emit a JSON-serialised object as selectedKeys[0]
+    const parseColDate = (val, fromKey, toKey, altKey) => {
+      if (!val?.[0]) return;
+      const v = typeof val[0] === 'string' ? JSON.parse(val[0]) : val[0];
+      const { mode, date, range } = v;
+      if (mode === 'today') {
+        cf[fromKey] = dayjs().startOf('day').toISOString();
+        cf[toKey]   = dayjs().endOf('day').toISOString();
+      } else if (mode === 'week') {
+        cf[fromKey] = dayjs().subtract(7, 'day').startOf('day').toISOString();
+        cf[toKey]   = dayjs().endOf('day').toISOString();
+      } else if (mode === 'month') {
+        cf[fromKey] = dayjs().subtract(1, 'month').startOf('day').toISOString();
+        cf[toKey]   = dayjs().endOf('day').toISOString();
+      } else if (mode === 'exact' && date) {
+        cf[fromKey] = dayjs(date).startOf('day').toISOString();
+        cf[toKey]   = dayjs(date).endOf('day').toISOString();
+      } else if (mode === 'range' && range?.length === 2) {
+        cf[fromKey] = dayjs(range[0]).startOf('day').toISOString();
+        cf[toKey]   = dayjs(range[1]).endOf('day').toISOString();
+      }
+    };
+    parseColDate(tableFilters.follow_up,   'follow_up_from',  'follow_up_to');
+    parseColDate(tableFilters.created_at,  'created_from',    'created_to');
+    parseColDate(tableFilters.updated_at,  'updated_from',    'updated_to');
+    setColumnFilters(cf);
+  }, []);
+
   const deleteMutation = useMutation({
     mutationFn: (id) => leadsAPI.delete(id),
     onSuccess: () => { message.success('Lead deleted!'); queryClient.invalidateQueries({ queryKey: ['leads'] }); },
@@ -544,6 +590,9 @@ const LeadsPageEnhanced = () => {
           ? (authUser?.full_name || undefined)
           : (mappedLead.assigned_to || undefined),
         notes: mappedLead.notes || undefined,
+        utm_source:   mappedLead.utm_source   || undefined,
+        utm_medium:   mappedLead.utm_medium   || undefined,
+        utm_campaign: mappedLead.utm_campaign || undefined,
       };
       
       // Remove undefined/empty keys
@@ -720,7 +769,7 @@ const LeadsPageEnhanced = () => {
   const getActionMenu = useCallback((record) => ({
     items: [
       { key: 'view', icon: <EyeOutlined />, label: 'View Details', onClick: () => navigate(`/leads/${record.lead_id}`) },
-      { key: 'edit', icon: <EditOutlined />, label: 'Edit', onClick: () => { form.setFieldsValue({ lead_id: record.lead_id, ...record, qualification: record.qualification || null, company: record.company || null, follow_up_date: record.follow_up_date ? parseDate(record.follow_up_date) : null }); setDrawerVisible(true); } },
+      { key: 'edit', icon: <EditOutlined />, label: 'Edit', onClick: () => { form.setFieldsValue({ lead_id: record.lead_id, ...record, qualification: record.qualification || null, company: record.company || null, utm_source: record.utm_source || null, utm_medium: record.utm_medium || null, utm_campaign: record.utm_campaign || null, follow_up_date: record.follow_up_date ? parseDate(record.follow_up_date) : null }); setDrawerVisible(true); } },
       { key: 'whatsapp', icon: <WhatsAppOutlined />, label: 'WhatsApp', onClick: () => window.open(`https://wa.me/${record.phone?.replace(/[^0-9]/g, '')}`) },
       { key: 'wa-template', icon: <span>📋</span>, label: 'Send Template', onClick: () => setTemplateLead(record) },
       { key: 'email', icon: <MailOutlined />, label: 'Email', onClick: () => { window.location.href = `mailto:${record.email}`; } },
@@ -824,7 +873,6 @@ const LeadsPageEnhanced = () => {
       key: 'country',
       width: 150,
       filters: uniqueCountries.map(c => ({ text: c, value: c })),
-      onFilter: (v, r) => r.country === v,
       render: (c, r) => (
         <Select
           variant="borderless"
@@ -846,7 +894,6 @@ const LeadsPageEnhanced = () => {
       key: 'course',
       width: 200,
       filters: uniqueCourses.map(c => ({ text: c, value: c })),
-      onFilter: (v, r) => r.course_interested === v,
       render: (c, r) => (
         <Select
           variant="borderless"
@@ -868,7 +915,6 @@ const LeadsPageEnhanced = () => {
       key: 'source',
       width: 140,
       filters: uniqueSources.map(s => ({ text: s, value: s })),
-      onFilter: (v, r) => r.source === v,
       render: (s, r) => (
         <Select
           variant="borderless"
@@ -888,7 +934,6 @@ const LeadsPageEnhanced = () => {
       key: 'company',
       width: 120,
       filters: COMPANY_OPTIONS.map(c => ({ text: c, value: c })),
-      onFilter: (v, r) => r.company === v,
       render: (c, r) => (
         <Select
           variant="borderless"
@@ -908,7 +953,6 @@ const LeadsPageEnhanced = () => {
       key: 'status',
       width: 160,
       filters: uniqueStatuses.map(s => ({ text: s, value: s })),
-      onFilter: (v, r) => r.status === v,
       render: (s, r) => (
         <Select
           variant="borderless"
@@ -943,7 +987,6 @@ const LeadsPageEnhanced = () => {
       key: 'assigned_to',
       width: 160,
       filters: [{ text: 'Unassigned', value: '__none__' }, ...uniqueAssigned.map(u => ({ text: u, value: u }))],
-      onFilter: (v, r) => v === '__none__' ? !r.assigned_to : r.assigned_to === v,
       render: (val, r) => (
         <Select value={val || undefined} placeholder="Assign..." size="small" style={{ width: '100%' }} allowClear
           disabled={isCounselor}
@@ -1086,7 +1129,7 @@ const LeadsPageEnhanced = () => {
         </Space>
       ),
     },
-  ], [uniqueCountries, uniqueCourses, uniqueSources, uniqueStatuses, uniqueAssigned, isCounselor, authUser, users, navigate, decayConfig, updateMutation, inlineUpdate, getActionMenu, editingCell, setEditingCell, commitEdit, setEditingValue]);
+  ], [uniqueCountries, uniqueCourses, uniqueSources, uniqueStatuses, uniqueAssigned, isCounselor, authUser, users, navigate, decayConfig, updateMutation, inlineUpdate, handleTableChange, getActionMenu, editingCell, setEditingCell, commitEdit, setEditingValue]);
 
   const activeAdvFilters = Object.values(advFilters).filter(v => v && (Array.isArray(v) ? v.length > 0 : true)).length;
 
@@ -1149,7 +1192,8 @@ const LeadsPageEnhanced = () => {
                 { label: 'All', value: 'all' },
                 { label: '🔥 Hot', value: 'hot' },
                 { label: '⚡ Warm', value: 'warm' },
-                { label: '📅 Today', value: 'today' },
+                { label: '📅 Created Today', value: 'today' },
+                { label: '📞 Follow-up Today', value: 'followup_today' },
                 { label: '⚠️ Overdue', value: 'overdue' },
               ]} />
             <Input.Search 
@@ -1253,6 +1297,7 @@ const LeadsPageEnhanced = () => {
           rowKey="lead_id"
           scroll={{ x: 1800 }}
           size="middle"
+          onChange={handleTableChange}
           rowSelection={{
             selectedRowKeys: selectedRows,
             onChange: (keys) => setSelectedRows(keys),
@@ -1504,6 +1549,9 @@ const LeadsPageEnhanced = () => {
               status: v.status || 'Fresh',
               follow_up_date: v.follow_up_date ? v.follow_up_date.toISOString() : null,
               notes: v.notes || null,
+              utm_source:   v.utm_source   || null,
+              utm_medium:   v.utm_medium   || null,
+              utm_campaign: v.utm_campaign || null,
             };
 
             if (isNew) {
@@ -1643,6 +1691,23 @@ const LeadsPageEnhanced = () => {
           <Form.Item name="notes" label="Notes">
             <Input.TextArea rows={3} placeholder="Initial notes..." showCount maxLength={500} />
           </Form.Item>
+          <Row gutter={16}>
+            <Col span={8}>
+              <Form.Item name="utm_source" label="UTM Source">
+                <Input placeholder="google, facebook…" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="utm_medium" label="UTM Medium">
+                <Input placeholder="cpc, organic…" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="utm_campaign" label="UTM Campaign">
+                <Input placeholder="mbbs_jan26…" />
+              </Form.Item>
+            </Col>
+          </Row>
         </Form>
       </Drawer>
 
@@ -1748,6 +1813,14 @@ const LeadsPageEnhanced = () => {
             <Select mode="multiple" style={{ width: '100%', marginTop: 6 }} placeholder="Any source"
               value={advFilters.source || []} onChange={v => setAdvFilters(f => ({ ...f, source: v }))}>
               {uniqueSources.map(s => <Option key={s} value={s}>{s}</Option>)}
+            </Select>
+          </div>
+
+          <div>
+            <Text strong>Company</Text>
+            <Select mode="multiple" style={{ width: '100%', marginTop: 6 }} placeholder="Any company"
+              value={advFilters.company || []} onChange={v => setAdvFilters(f => ({ ...f, company: v }))}>
+              {COMPANY_OPTIONS.map(c => <Option key={c} value={c}>{c}</Option>)}
             </Select>
           </div>
 

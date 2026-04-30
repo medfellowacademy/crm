@@ -122,8 +122,9 @@ const AnalyticsPage = () => {
   }));
 
   /* ── source analytics derived ───────────────────────── */
-  const sources = srcData?.sources || [];
-  const summary = srcData?.summary || {};
+  const sources   = srcData?.sources    || [];
+  const campaigns = srcData?.campaigns  || [];
+  const summary   = srcData?.summary    || {};
 
   const sortedSources = [...sources].sort((a, b) => b[sourceSort] - a[sourceSort]);
 
@@ -401,6 +402,68 @@ const AnalyticsPage = () => {
           rowClassName={(_, i) => i === 0 ? 'ant-table-row-selected' : ''}
         />
       </Card>
+
+      {/* ── CAMPAIGN / UTM ATTRIBUTION ─────────────────────── */}
+      {campaigns.length > 1 && (
+        <>
+          <div style={{ marginBottom: 12 }}>
+            <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ width: 4, height: 20, background: '#8b5cf6', borderRadius: 2, display: 'inline-block' }} />
+              Campaign Performance
+            </h2>
+          </div>
+          <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+            <Col xs={24} lg={14}>
+              <Card title="Campaign Conversion Rate" bordered={false} style={{ borderRadius: 12 }} loading={srcLoading}>
+                <ResponsiveContainer width="100%" height={260}>
+                  <BarChart data={campaigns.slice(0, 10).map(c => ({ name: c.label, 'Conv %': c.conversion_rate, Leads: c.total_leads }))}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="name" tick={{ fontSize: 10 }} />
+                    <YAxis yAxisId="left" tick={{ fontSize: 10 }} />
+                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} />
+                    <Tooltip content={<PctTooltip />} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Bar yAxisId="left" dataKey="Conv %" fill="#8b5cf6" radius={[4,4,0,0]} />
+                    <Bar yAxisId="right" dataKey="Leads" fill="#d8b4fe" radius={[4,4,0,0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </Card>
+            </Col>
+            <Col xs={24} lg={10}>
+              <Card title="Campaign Revenue" bordered={false} style={{ borderRadius: 12 }} loading={srcLoading}>
+                <ResponsiveContainer width="100%" height={260}>
+                  <BarChart data={campaigns.slice(0, 8).map(c => ({ name: c.label, Revenue: c.total_revenue }))}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="name" tick={{ fontSize: 10 }} />
+                    <YAxis tick={{ fontSize: 10 }} />
+                    <Tooltip content={<MoneyTooltip />} />
+                    <Bar dataKey="Revenue" fill="#6366f1" radius={[4,4,0,0]}>
+                      {campaigns.slice(0, 8).map((_, i) => <Cell key={i} fill={PALETTE[i % PALETTE.length]} />)}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </Card>
+            </Col>
+          </Row>
+          <Card title="Campaign Attribution — Full Breakdown" bordered={false} style={{ borderRadius: 12, marginBottom: 32 }} loading={srcLoading}>
+            <Table
+              dataSource={campaigns.map((c, i) => ({ ...c, key: c.label, _rank: i + 1 }))}
+              columns={[
+                { title: '#', key: 'rank', width: 48, render: (_, __, i) => <Rank n={i + 1} /> },
+                { title: 'Campaign', dataIndex: 'label', key: 'label', render: t => <strong>{t}</strong> },
+                { title: 'Leads', dataIndex: 'total_leads', key: 'total_leads', sorter: (a, b) => a.total_leads - b.total_leads },
+                { title: 'Enrolled', dataIndex: 'enrolled', key: 'enrolled', sorter: (a, b) => a.enrolled - b.enrolled },
+                { title: 'Conv %', dataIndex: 'conversion_rate', key: 'conversion_rate', render: v => <Tag color={v >= 20 ? 'green' : v >= 10 ? 'orange' : 'default'}>{v}%</Tag>, sorter: (a, b) => a.conversion_rate - b.conversion_rate },
+                { title: 'Revenue (₹)', dataIndex: 'total_revenue', key: 'total_revenue', render: v => `₹${Number(v).toLocaleString('en-IN')}`, sorter: (a, b) => a.total_revenue - b.total_revenue },
+                { title: 'Avg AI Score', dataIndex: 'avg_ai_score', key: 'avg_ai_score', sorter: (a, b) => a.avg_ai_score - b.avg_ai_score },
+              ]}
+              pagination={false}
+              size="small"
+              scroll={{ x: 700 }}
+            />
+          </Card>
+        </>
+      )}
 
       {/* ── EXISTING ANALYTICS SECTION ────────────────────── */}
       <div style={{ marginBottom: 12 }}>

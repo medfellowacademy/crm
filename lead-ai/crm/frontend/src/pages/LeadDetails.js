@@ -134,6 +134,9 @@ const LeadDetails = () => {
         status: lead.status,
         follow_up_date: lead.follow_up_date ? parseDate(lead.follow_up_date) : null,
         assigned_to: lead.assigned_to,
+        utm_source:   lead.utm_source   || null,
+        utm_medium:   lead.utm_medium   || null,
+        utm_campaign: lead.utm_campaign || null,
       });
     }
   }, [lead, leadForm]);
@@ -405,6 +408,9 @@ const LeadDetails = () => {
                         status: lead.status,
                         follow_up_date: lead.follow_up_date ? parseDate(lead.follow_up_date) : null,
                         assigned_to: lead.assigned_to,
+                        utm_source:   lead.utm_source   || null,
+                        utm_medium:   lead.utm_medium   || null,
+                        utm_campaign: lead.utm_campaign || null,
                       });
                     }}>
                       Cancel
@@ -521,6 +527,35 @@ const LeadDetails = () => {
                     </Form.Item>
                   )}
                 </Descriptions.Item>
+                {/* Campaign Attribution — UTM fields */}
+                <Descriptions.Item label="UTM Source">
+                  {!isEditing ? (
+                    lead?.utm_source ? <Tag color="geekblue">{lead.utm_source}</Tag> : <span style={{ color: '#8c8c8c' }}>—</span>
+                  ) : (
+                    <Form.Item name="utm_source" noStyle>
+                      <Input placeholder="e.g. google, facebook" style={{ width: '100%' }} />
+                    </Form.Item>
+                  )}
+                </Descriptions.Item>
+                <Descriptions.Item label="UTM Medium">
+                  {!isEditing ? (
+                    lead?.utm_medium ? <Tag>{lead.utm_medium}</Tag> : <span style={{ color: '#8c8c8c' }}>—</span>
+                  ) : (
+                    <Form.Item name="utm_medium" noStyle>
+                      <Input placeholder="e.g. cpc, organic" style={{ width: '100%' }} />
+                    </Form.Item>
+                  )}
+                </Descriptions.Item>
+                <Descriptions.Item label="UTM Campaign" span={2}>
+                  {!isEditing ? (
+                    lead?.utm_campaign ? <Tag color="purple">{lead.utm_campaign}</Tag> : <span style={{ color: '#8c8c8c' }}>—</span>
+                  ) : (
+                    <Form.Item name="utm_campaign" noStyle>
+                      <Input placeholder="e.g. mbbs_jan26" style={{ width: '100%' }} />
+                    </Form.Item>
+                  )}
+                </Descriptions.Item>
+
                 <Descriptions.Item label="Course Interested" span={2}>
                   {!isEditing ? (
                     <span>{lead?.course_interested}</span>
@@ -768,7 +803,8 @@ const LeadDetails = () => {
             title={<span><ThunderboltOutlined /> AI Lead Score</span>}
             style={{ marginBottom: '24px' }}
           >
-            <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+            {/* Score circle + method badge */}
+            <div style={{ textAlign: 'center', marginBottom: 16 }}>
               <Progress
                 type="circle"
                 percent={lead?.ai_score}
@@ -779,14 +815,68 @@ const LeadDetails = () => {
                 }
                 format={(percent) => (
                   <div>
-                    <div style={{ fontSize: '32px', fontWeight: 600 }}>{percent.toFixed(0)}</div>
+                    <div style={{ fontSize: '32px', fontWeight: 600 }}>{percent?.toFixed(0)}</div>
                     <div style={{ fontSize: '12px', color: '#8c8c8c' }}>AI Score</div>
                   </div>
                 )}
               />
+              {lead?.scoring_method && (
+                <div style={{ marginTop: 8 }}>
+                  <Tag color={lead.scoring_method === 'hybrid_ml' ? 'blue' : 'default'}>
+                    {lead.scoring_method === 'hybrid_ml' ? '🤖 ML + Rules' : '📐 Rules Only'}
+                  </Tag>
+                  {lead?.confidence != null && (
+                    <Tag color={lead.confidence >= 0.7 ? 'green' : lead.confidence >= 0.4 ? 'orange' : 'red'}>
+                      {lead.confidence >= 0.7 ? 'High' : lead.confidence >= 0.4 ? 'Medium' : 'Low'} Confidence
+                    </Tag>
+                  )}
+                </div>
+              )}
             </div>
 
-            <Divider />
+            {/* ML vs Rule score breakdown */}
+            {(lead?.ml_score != null || lead?.rule_score != null) && (
+              <div style={{ background: '#f5f5f5', borderRadius: 8, padding: '10px 12px', marginBottom: 16 }}>
+                <div style={{ fontSize: 11, color: '#8c8c8c', fontWeight: 600, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>Score Breakdown</div>
+                {lead?.ml_score != null && (
+                  <div style={{ marginBottom: 6 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 2 }}>
+                      <span>ML Score (70%)</span><span style={{ fontWeight: 600 }}>{lead.ml_score?.toFixed(1)}</span>
+                    </div>
+                    <Progress percent={lead.ml_score} strokeColor="#1890ff" showInfo={false} size="small" />
+                  </div>
+                )}
+                {lead?.rule_score != null && (
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 2 }}>
+                      <span>Rule Score (30%)</span><span style={{ fontWeight: 600 }}>{lead.rule_score?.toFixed(1)}</span>
+                    </div>
+                    <Progress percent={lead.rule_score} strokeColor="#722ed1" showInfo={false} size="small" />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Feature importance drivers */}
+            {lead?.feature_importance && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 11, color: '#8c8c8c', fontWeight: 600, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>Score Drivers</div>
+                {Object.entries(lead.feature_importance)
+                  .sort(([, a], [, b]) => b - a)
+                  .map(([key, val]) => (
+                    <div key={key} style={{ marginBottom: 4 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 1 }}>
+                        <span style={{ textTransform: 'capitalize' }}>{key.replace(/_/g, ' ')}</span>
+                        <span style={{ fontWeight: 600 }}>{(val * 100).toFixed(0)}%</span>
+                      </div>
+                      <Progress percent={val * 100} strokeColor="#52c41a" showInfo={false} size="small" />
+                    </div>
+                  ))
+                }
+              </div>
+            )}
+
+            <Divider style={{ margin: '12px 0' }} />
 
             <div style={{ marginBottom: '16px' }}>
               <div style={{ fontSize: '12px', color: '#8c8c8c', marginBottom: '4px' }}>Segment</div>
@@ -812,7 +902,7 @@ const LeadDetails = () => {
               <Progress
                 percent={lead?.buying_signal_strength}
                 strokeColor="#52c41a"
-                format={(percent) => `${percent.toFixed(0)}`}
+                format={(percent) => `${percent?.toFixed(0)}`}
               />
             </div>
 
@@ -834,12 +924,59 @@ const LeadDetails = () => {
             <div style={{ marginBottom: '16px' }}>
               <div style={{ fontSize: '12px', color: '#8c8c8c', marginBottom: '4px' }}>Churn Risk</div>
               <Progress
-                percent={lead?.churn_risk * 100}
+                percent={(lead?.churn_risk || 0) * 100}
                 strokeColor="#ff4d4f"
-                format={(percent) => `${percent.toFixed(0)}%`}
+                format={(percent) => `${percent?.toFixed(0)}%`}
               />
             </div>
           </Card>
+
+          {/* Call Disposition Summary */}
+          {(() => {
+            const callNotes = (lead?.notes || []).filter(n =>
+              /^\[(1st Call|2nd Call)\]/.test(n.content || '')
+            );
+            if (!callNotes.length) return null;
+            const parseCallNote = (content) => {
+              const m = content.match(/^\[(1st Call|2nd Call)\]\s*\|?\s*(.*)/);
+              if (!m) return null;
+              const parts = m[2].split('→').map(s => s.replace(/^\s*\|\s*/, '').trim());
+              return { label: m[1], mainStatus: parts[0] || '', subStatus: parts[1] || '' };
+            };
+            const first  = callNotes.filter(n => n.content.startsWith('[1st Call]'));
+            const second = callNotes.filter(n => n.content.startsWith('[2nd Call]'));
+            const lastFirst  = first[first.length - 1];
+            const lastSecond = second[second.length - 1];
+            return (
+              <Card title={<span>📞 Call Summary</span>} size="small" style={{ marginBottom: 24 }}>
+                {lastFirst && (() => {
+                  const p = parseCallNote(lastFirst.content);
+                  return p ? (
+                    <div style={{ marginBottom: 10 }}>
+                      <Tag color="orange" style={{ marginBottom: 4 }}>1st Call</Tag>
+                      <div style={{ fontSize: 12, fontWeight: 600 }}>{p.mainStatus}</div>
+                      {p.subStatus && <div style={{ fontSize: 11, color: '#595959' }}>→ {p.subStatus}</div>}
+                      <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 2 }}>{parseDate(lastFirst.created_at)?.format('MMM DD, hh:mm A')}</div>
+                    </div>
+                  ) : null;
+                })()}
+                {lastSecond && (() => {
+                  const p = parseCallNote(lastSecond.content);
+                  return p ? (
+                    <div>
+                      <Tag color="green" style={{ marginBottom: 4 }}>2nd Call</Tag>
+                      <div style={{ fontSize: 12, fontWeight: 600 }}>{p.mainStatus}</div>
+                      {p.subStatus && <div style={{ fontSize: 11, color: '#595959' }}>→ {p.subStatus}</div>}
+                      <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 2 }}>{parseDate(lastSecond.created_at)?.format('MMM DD, hh:mm A')}</div>
+                    </div>
+                  ) : null;
+                })()}
+                <div style={{ marginTop: 8, fontSize: 11, color: '#8c8c8c', borderTop: '1px solid #f0f0f0', paddingTop: 6 }}>
+                  {first.length} first call{first.length !== 1 ? 's' : ''} · {second.length} second call{second.length !== 1 ? 's' : ''} recorded
+                </div>
+              </Card>
+            );
+          })()}
 
           {/* Revenue Card */}
           <Card title={<span><DollarOutlined /> Revenue</span>} style={{ marginBottom: '24px' }}>
@@ -880,6 +1017,52 @@ const LeadDetails = () => {
               </div>
             )}
           </Card>
+
+          {/* Lead Profile Quality */}
+          {(() => {
+            const fields = [
+              { key: 'email',            label: 'Email',          val: lead?.email },
+              { key: 'phone',            label: 'Phone',          val: lead?.phone },
+              { key: 'whatsapp',         label: 'WhatsApp',       val: lead?.whatsapp },
+              { key: 'country',          label: 'Country',        val: lead?.country },
+              { key: 'source',           label: 'Source',         val: lead?.source },
+              { key: 'course_interested',label: 'Course',         val: lead?.course_interested },
+              { key: 'qualification',    label: 'Qualification',  val: lead?.qualification },
+              { key: 'company',          label: 'Company',        val: lead?.company },
+              { key: 'notes',            label: 'Notes',          val: lead?.notes?.length },
+            ];
+            const filled   = fields.filter(f => f.val);
+            const missing  = fields.filter(f => !f.val);
+            const pct      = Math.round((filled.length / fields.length) * 100);
+            const color    = pct >= 80 ? '#52c41a' : pct >= 50 ? '#faad14' : '#ff4d4f';
+            return (
+              <Card title="📋 Profile Quality" size="small" style={{ marginBottom: 24 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 12 }}>
+                  <Progress type="circle" percent={pct} strokeColor={color} width={64}
+                    format={p => <span style={{ fontSize: 14, fontWeight: 700, color }}>{p}%</span>} />
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{filled.length}/{fields.length} fields filled</div>
+                    <div style={{ fontSize: 11, color: '#8c8c8c' }}>
+                      {pct >= 80 ? 'Complete — high quality lead' : pct >= 50 ? 'Good — a few fields missing' : 'Incomplete — fill in more details'}
+                    </div>
+                  </div>
+                </div>
+                {missing.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Missing:</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                      {missing.map(f => (
+                        <Tag key={f.key} color="warning" style={{ cursor: 'pointer', fontSize: 11 }}
+                          onClick={() => { setIsEditing(true); }}>
+                          + {f.label}
+                        </Tag>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </Card>
+            );
+          })()}
 
           {/* Best Time to Call */}
           <Card

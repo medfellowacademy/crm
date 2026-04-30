@@ -20,6 +20,9 @@ const CRM_FIELDS = [
   { key: 'assigned_to', label: 'Assigned To', required: false, type: 'text', icon: '👥', desc: 'Counselor name' },
   { key: 'expected_revenue', label: 'Expected Revenue', required: false, type: 'number', icon: '💰', desc: 'Expected deal value' },
   { key: 'notes', label: 'Notes', required: false, type: 'text', icon: '📝', desc: 'Additional notes' },
+  { key: 'utm_source',   label: 'UTM Source',   required: false, type: 'text', icon: '📡', desc: 'Ad channel: google, facebook, etc.' },
+  { key: 'utm_medium',   label: 'UTM Medium',   required: false, type: 'text', icon: '📡', desc: 'Ad type: cpc, organic, email, etc.' },
+  { key: 'utm_campaign', label: 'UTM Campaign', required: false, type: 'text', icon: '📡', desc: 'Campaign name: mbbs_jan26, etc.' },
 ];
 
 // Auto-mapping intelligence: common variations
@@ -37,6 +40,9 @@ const AUTO_MAP_PATTERNS = {
   assigned_to: ['assigned_to', 'counselor', 'agent', 'owner', 'assigned', 'handler'],
   expected_revenue: ['revenue', 'value', 'deal_value', 'expected_revenue', 'amount', 'fees', 'price'],
   notes: ['notes', 'comments', 'remarks', 'description', 'details', 'memo'],
+  utm_source:   ['utm_source', 'utm source', 'utmsource', 'ad_source', 'ad source'],
+  utm_medium:   ['utm_medium', 'utm medium', 'utmmedium', 'ad_medium', 'ad medium'],
+  utm_campaign: ['utm_campaign', 'utm campaign', 'utmcampaign', 'campaign', 'ad_campaign'],
 };
 
 const FieldMappingModal = ({ visible, onCancel, fileColumns, previewData, onConfirm }) => {

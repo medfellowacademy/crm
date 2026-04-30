@@ -30,6 +30,10 @@ class SupabaseDataLayer:
         assigned_to_in: Optional[str] = None,
         course_interested: Optional[str] = None,
         source: Optional[str] = None,
+        company: Optional[str] = None,
+        company_in: Optional[str] = None,
+        qualification: Optional[str] = None,
+        qualification_in: Optional[str] = None,
         min_score: Optional[float] = None,
         max_score: Optional[float] = None,
         follow_up_from: Optional[str] = None,
@@ -61,9 +65,15 @@ class SupabaseDataLayer:
             "follow_up_date,assigned_to,created_at,updated_at,"
             "last_contact_date,buying_signal_strength,churn_risk,"
             "primary_objection,next_action,priority_level,"
-            "qualification,company,loss_reason,loss_note"
+            "qualification,company,loss_reason,loss_note,"
+            "utm_source,utm_medium,utm_campaign"
         )
-        LIST_COLUMNS_COMPAT = LIST_COLUMNS.replace(",qualification", "").replace(",company", "")
+        LIST_COLUMNS_COMPAT = (
+            LIST_COLUMNS
+            .replace(",qualification", "")
+            .replace(",company", "")
+            .replace(",utm_source,utm_medium,utm_campaign", "")
+        )
 
         def _build_query(columns):
             """Build the leads query with all filters applied."""
@@ -109,6 +119,20 @@ class SupabaseDataLayer:
                     q = q.or_(','.join([f"source.ilike.{s}" for s in sources]))
                 else:
                     q = q.ilike('source', source.strip())
+            _company = company_in if (company_in and not company) else company
+            if _company:
+                if ',' in _company:
+                    companies = [c.strip() for c in _company.split(',') if c.strip()]
+                    q = q.or_(','.join([f"company.ilike.{c}" for c in companies]))
+                else:
+                    q = q.ilike('company', _company.strip())
+            _qualif = qualification_in if (qualification_in and not qualification) else qualification
+            if _qualif:
+                if ',' in _qualif:
+                    qualifs = [qv.strip() for qv in _qualif.split(',') if qv.strip()]
+                    q = q.or_(','.join([f"qualification.ilike.{qv}" for qv in qualifs]))
+                else:
+                    q = q.ilike('qualification', _qualif.strip())
             if min_score is not None:
                 q = q.gte('ai_score', min_score)
             if max_score is not None:
@@ -232,7 +256,7 @@ class SupabaseDataLayer:
         # New columns (e.g. 'company', 'qualification') may not exist in Supabase
         # until the migration is run.  If Supabase complains about an unknown column,
         # drop that column and retry so the other fields are still saved.
-        NEW_COLUMNS = {'company', 'qualification'}
+        NEW_COLUMNS = {'company', 'qualification', 'utm_source', 'utm_medium', 'utm_campaign'}
         try:
             response = self.client.table('leads').update(cleaned_data).eq('lead_id', lead_id).execute()
             return response.data[0] if response.data else None
