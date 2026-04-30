@@ -337,10 +337,10 @@ const LeadsPageEnhanced = () => {
         throw err; // Re-throw to trigger error state
       }
     },
-    staleTime: 60 * 1000,
+    staleTime: 0,              // always fetch fresh after invalidation
     gcTime: 5 * 60 * 1000,
     refetchInterval: false,
-    refetchOnWindowFocus: false,
+    refetchOnWindowFocus: true,  // re-check when user comes back to the tab
     retry: 3,
     retryDelay: (attemptIndex) => Math.min(2000 * 2 ** attemptIndex, 30000),
   });
@@ -390,10 +390,9 @@ const LeadsPageEnhanced = () => {
       : [...new Set(leads.map(l => l.assigned_to))].filter(Boolean).sort(),
     [leads, isCounselor, authUser]
   );
-  const uniqueSources    = useMemo(() => 
-    [...new Set(leads.map(l => l.source))].filter(Boolean).sort(),
-    [leads]
-  );
+  // Always show exactly the 5 canonical source options in filters —
+  // don't derive from lead data (which may have legacy raw values).
+  const uniqueSources = SOURCE_OPTIONS;
   const uniqueSegments   = ['Hot', 'Warm', 'Cold', 'Junk'];
 
   // Server-side filtering: table data is already filtered by API.
@@ -432,9 +431,27 @@ const LeadsPageEnhanced = () => {
 
   const updateMutation = useMutation({
     mutationFn: ({ leadId, data }) => leadsAPI.update(leadId, data),
-    onSuccess: (_, { leadId }) => { 
-      message.success('Lead updated!'); 
-      queryClient.invalidateQueries({ queryKey: ['leads'] }); 
+    onSuccess: (updatedLead, { leadId, data: changedFields }) => {
+      message.success('Lead updated!');
+      // Immediately patch the cached row so "Last Updated" shows the correct
+      // time right away — no waiting for the background refetch to complete.
+      const now = new Date().toISOString();
+      queryClient.setQueriesData(
+        { queryKey: ['leads'], exact: false },
+        (old) => {
+          if (!old?.leads) return old;
+          return {
+            ...old,
+            leads: old.leads.map(l =>
+              l.lead_id === leadId
+                ? { ...l, ...changedFields, updated_at: now }
+                : l
+            ),
+          };
+        }
+      );
+      // Then trigger a full background refetch for accuracy
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
       queryClient.invalidateQueries({ queryKey: ['lead', leadId] });
     },
     onError: (e) => message.error(`Failed: ${e.message}`),

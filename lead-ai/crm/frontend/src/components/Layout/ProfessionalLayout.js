@@ -24,6 +24,7 @@ import {
   Users2,
   ShieldCheck,
   TrendingDown,
+  ClipboardList,
 } from 'lucide-react';
 import SmartNotifications from '../../features/notifications/SmartNotifications';
 import { isFeatureEnabled } from '../../config/featureFlags';
@@ -182,7 +183,7 @@ const ProfessionalLayout = ({ children }) => {
         staleTime: stale,
       });
     }
-    if (route === '/users' || route === '/user-activity' || route === '/lead-analysis') {
+    if (route === '/users' || route === '/user-activity' || route === '/lead-analysis' || route === '/lead-update-activity') {
       queryClient.prefetchQuery({
         queryKey: ['prefetch', 'users'],
         queryFn: () => usersAPI.getAll().then(r => r.data),
@@ -208,6 +209,7 @@ const ProfessionalLayout = ({ children }) => {
     { key: '/courses', icon: BookOpen, label: 'Courses' },
     { key: '/users', icon: UserPlus, label: 'Team' },
     { key: '/user-activity', icon: Activity, label: 'User Activity' },
+    { key: '/lead-update-activity', icon: ClipboardList, label: 'Lead Updates' },
     { key: '/analytics', icon: BarChart3, label: 'Analytics' },
     { key: '/conversion-time', icon: Timer, label: 'Conversion Time' },
     { key: '/cohort-analysis', icon: Users2, label: 'Cohort Analysis' },
@@ -223,7 +225,7 @@ const ProfessionalLayout = ({ children }) => {
   const roleMenuItems = menuItems.filter(item => {
     const visibleToAllRoles = ['/dashboard', '/followups', '/leads', '/pipeline', '/settings'];
     const adminManagerFinance = ['/lead-analysis', '/analytics', '/payments', '/conversion-time', '/cohort-analysis', '/sla', '/score-decay'];
-    const adminManager = ['/hospitals', '/courses', '/user-activity'];
+    const adminManager = ['/hospitals', '/courses', '/user-activity', '/lead-update-activity'];
     const adminOnly = ['/users', '/audit-logs'];
 
     if (visibleToAllRoles.includes(item.key)) return true;

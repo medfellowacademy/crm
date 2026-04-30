@@ -2765,6 +2765,170 @@ async def get_audit_logs(page: int = 1, limit: int = 50):
         return {"logs": [], "total": 0, "page": page, "limit": limit, "pages": 0}
 
 
+@app.get("/api/admin/lead-update-activity")
+async def get_lead_update_activity(
+    date: Optional[str] = None,        # YYYY-MM-DD — filter to specific day
+    user: Optional[str] = None,        # filter to specific user
+    days: int = 7,                     # how many past days to include (ignored when date is set)
+):
+    """
+    Per-user lead-update activity summary.
+    Returns counts of leads touched per day per user, with activity-type
+    breakdown and the list of leads so the caller can drill down.
+    """
+    try:
+        from datetime import timezone
+
+        # ── Date window ──────────────────────────────────────────────────────
+        if date:
+            date_from = f"{date}T00:00:00"
+            date_to   = f"{date}T23:59:59.999"
+        else:
+            today_utc  = datetime.utcnow().date()
+            start_date = today_utc - timedelta(days=max(1, days) - 1)
+            date_from  = f"{start_date}T00:00:00"
+            date_to    = f"{today_utc}T23:59:59.999"
+
+        # ── Pull activities in the window ─────────────────────────────────────
+        q = (
+            supabase_data.client.table("activities")
+            .select("id,lead_id,activity_type,description,created_by,created_at")
+            .gte("created_at", date_from)
+            .lte("created_at", date_to)
+            .order("created_at", desc=True)
+        )
+        if user:
+            q = q.ilike("created_by", user.strip())
+        acts_resp = q.limit(5000).execute()
+        activities = acts_resp.data if acts_resp.data else []
+
+        # ── Pull notes in the window (notes = counselor updates too) ─────────
+        nq = (
+            supabase_data.client.table("notes")
+            .select("id,lead_id,content,created_by,created_at,channel")
+            .gte("created_at", date_from)
+            .lte("created_at", date_to)
+            .order("created_at", desc=True)
+        )
+        if user:
+            nq = nq.ilike("created_by", user.strip())
+        notes_resp = nq.limit(5000).execute()
+        notes = notes_resp.data if notes_resp.data else []
+
+        # ── Collect all unique lead_ids so we can resolve names ───────────────
+        all_lead_ids = list({
+            a["lead_id"] for a in activities if a.get("lead_id")
+        } | {
+            n["lead_id"] for n in notes if n.get("lead_id")
+        })
+
+        # Fetch lead info in batches of 100
+        lead_info: dict = {}
+        BATCH = 100
+        for i in range(0, len(all_lead_ids), BATCH):
+            batch = all_lead_ids[i:i + BATCH]
+            try:
+                lr = (
+                    supabase_data.client.table("leads")
+                    .select("id,lead_id,full_name,status,phone,country,course_interested,assigned_to")
+                    .in_("lead_id", batch)
+                    .execute()
+                )
+                for lead in (lr.data or []):
+                    lead_info[lead["lead_id"]] = lead
+            except Exception:
+                pass
+
+        def day_key(ts: str) -> str:
+            """Return YYYY-MM-DD from an ISO timestamp."""
+            return ts[:10] if ts else "unknown"
+
+        # ── Aggregate by (user, day) ──────────────────────────────────────────
+        # Structure: buckets[user][day] = { lead_ids: set, events: list }
+        from collections import defaultdict
+        buckets: dict = defaultdict(lambda: defaultdict(lambda: {"lead_ids": set(), "events": []}))
+
+        for a in activities:
+            u  = a.get("created_by") or "Unknown"
+            d  = day_key(a.get("created_at", ""))
+            lid = a.get("lead_id")
+            buckets[u][d]["events"].append({
+                "type":        a.get("activity_type", "update"),
+                "description": a.get("description", ""),
+                "lead_id":     lid,
+                "ts":          a.get("created_at"),
+            })
+            if lid:
+                buckets[u][d]["lead_ids"].add(lid)
+
+        for n in notes:
+            u   = n.get("created_by") or "Unknown"
+            d   = day_key(n.get("created_at", ""))
+            lid = n.get("lead_id")
+            # Label note type
+            channel = n.get("channel", "note")
+            content = (n.get("content") or "")[:120]
+            buckets[u][d]["events"].append({
+                "type":        f"note_{channel}" if channel else "note",
+                "description": content,
+                "lead_id":     lid,
+                "ts":          n.get("created_at"),
+            })
+            if lid:
+                buckets[u][d]["lead_ids"].add(lid)
+
+        # ── Build response ────────────────────────────────────────────────────
+        rows = []
+        for u_name, days_map in buckets.items():
+            for day_str, data in days_map.items():
+                lead_ids = list(data["lead_ids"])
+                events   = data["events"]
+
+                # Count by type
+                type_counts: dict = defaultdict(int)
+                for ev in events:
+                    type_counts[ev["type"]] += 1
+
+                # Unique field/action labels for display
+                action_summary = [
+                    {"type": t, "count": c}
+                    for t, c in sorted(type_counts.items(), key=lambda x: -x[1])
+                ]
+
+                # Leads with info
+                leads_detail = [
+                    {
+                        "lead_id":        lid,
+                        "full_name":      lead_info.get(lid, {}).get("full_name", lid),
+                        "status":         lead_info.get(lid, {}).get("status", ""),
+                        "phone":          lead_info.get(lid, {}).get("phone", ""),
+                        "country":        lead_info.get(lid, {}).get("country", ""),
+                        "course_interested": lead_info.get(lid, {}).get("course_interested", ""),
+                        "assigned_to":    lead_info.get(lid, {}).get("assigned_to", ""),
+                        "events":         [ev for ev in events if ev.get("lead_id") == lid],
+                    }
+                    for lid in lead_ids
+                ]
+
+                rows.append({
+                    "user":           u_name,
+                    "date":           day_str,
+                    "leads_updated":  len(lead_ids),
+                    "total_events":   len(events),
+                    "action_summary": action_summary,
+                    "leads":          sorted(leads_detail, key=lambda x: x["full_name"] or ""),
+                })
+
+        # Sort by date desc, then user
+        rows.sort(key=lambda r: (r["date"], r["user"]), reverse=True)
+
+        return {"rows": rows, "total_users": len(buckets), "date_from": date_from[:10], "date_to": date_to[:10]}
+
+    except Exception as e:
+        logger.error(f"Lead update activity error: {e}", exc_info=True)
+        return {"rows": [], "total_users": 0, "date_from": "", "date_to": ""}
+
+
 @app.get("/api/leads/followups/today")
 async def get_followups_today(request: Request, assigned_to: Optional[str] = None):
     """All leads with follow_up_date = today + overdue, for the daily work view"""

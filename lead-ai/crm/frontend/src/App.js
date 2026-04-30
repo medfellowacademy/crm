@@ -22,7 +22,8 @@ const SettingsPage        = lazy(() => import('./pages/SettingsPage'));
 const ConversionTimePage  = lazy(() => import('./pages/ConversionTimePage'));
 const CohortAnalysisPage  = lazy(() => import('./pages/CohortAnalysisPage'));
 const SLAPage             = lazy(() => import('./pages/SLAPage'));
-const ScoreDecayPage      = lazy(() => import('./pages/ScoreDecayPage'));
+const ScoreDecayPage            = lazy(() => import('./pages/ScoreDecayPage'));
+const LeadUpdateActivityPage    = lazy(() => import('./pages/LeadUpdateActivityPage'));
 import { isFeatureEnabled } from './config/featureFlags';
 import ErrorBoundary from './components/ErrorBoundary';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -91,6 +92,7 @@ function AppRoutes() {
                     <Route path="/courses" element={<CoursesPageEnhanced />} />
                     <Route path="/users" element={<UsersPage />} />
                     <Route path="/user-activity" element={<UserActivityPage />} />
+                    <Route path="/lead-update-activity" element={<LeadUpdateActivityPage />} />
                     {isFeatureEnabled('AUDIT_LOGS') && (
                       <Route path="/audit-logs" element={<AuditLogs />} />
                     )}

@@ -9,6 +9,60 @@ import re
 from supabase_client import supabase_manager
 from logger_config import logger
 
+# ── Source normalisation ───────────────────────────────────────────────────────
+# Maps raw/legacy source aliases stored in the DB → canonical value.
+_SOURCE_ALIAS_MAP = {
+    # Website / Google
+    'website': 'Website', 'web': 'Website', 'site': 'Website', 'online': 'Website',
+    'google': 'Website', 'google ads': 'Website', 'google ad': 'Website',
+    'seo': 'Website', 'organic': 'Website', 'search': 'Website',
+    # Instagram
+    'instagram': 'Instagram', 'ig': 'Instagram', 'insta': 'Instagram',
+    # Facebook
+    'facebook': 'Facebook', 'fb': 'Facebook', 'fb ads': 'Facebook',
+    'facebook ads': 'Facebook', 'meta': 'Facebook', 'meta ads': 'Facebook',
+    # Referral
+    'referral': 'Referral', 'refer': 'Referral', 'reference': 'Referral',
+    'ref': 'Referral', 'word of mouth': 'Referral', 'wom': 'Referral',
+    'agent': 'Referral', 'friend': 'Referral', 'recommendation': 'Referral',
+    # WhatsApp
+    'whatsapp': 'WhatsApp', 'whats app': 'WhatsApp', 'wa': 'WhatsApp',
+    'wp': 'WhatsApp', 'wapp': 'WhatsApp',
+    # Import / unknown aliases → Website (closest generic)
+    'import': 'Website', 'direct': 'Website', 'linkedin': 'Website',
+    'youtube': 'Website', 'twitter': 'Website', 'x': 'Website',
+    'email': 'Website', 'sms': 'WhatsApp', 'call': 'WhatsApp',
+}
+_CANONICAL_SOURCES = {'Website', 'Instagram', 'Facebook', 'Referral', 'WhatsApp'}
+
+
+def _normalise_source_str(raw: str) -> str:
+    """Return canonical source for a raw string; returns raw unchanged if already canonical."""
+    if not raw:
+        return raw
+    if raw in _CANONICAL_SOURCES:
+        return raw
+    lower = raw.lower().strip()
+    # Exact match
+    if lower in _SOURCE_ALIAS_MAP:
+        return _SOURCE_ALIAS_MAP[lower]
+    # Partial/contains match
+    for alias, canonical in _SOURCE_ALIAS_MAP.items():
+        if lower == alias or lower.startswith(alias) or alias.startswith(lower):
+            return canonical
+    # MA, unknown short codes → Website
+    return 'Website'
+
+
+def _normalise_lead_source(lead: dict) -> dict:
+    """Return a copy of the lead dict with the source field normalised."""
+    src = lead.get('source')
+    if src:
+        normalised = _normalise_source_str(src)
+        if normalised != src:
+            lead = {**lead, 'source': normalised}
+    return lead
+
 
 class SupabaseDataLayer:
     """Data access layer using Supabase REST API"""
@@ -200,6 +254,9 @@ class SupabaseDataLayer:
                 else:
                     raise
             leads = response.data if response.data else []
+            # Normalise source values for any legacy rows still storing
+            # raw aliases (e.g. "fb" → "Facebook", "ig" → "Instagram").
+            leads = [_normalise_lead_source(lead) for lead in leads]
             total = response.count if hasattr(response, 'count') and response.count is not None else len(leads)
             return {
                 "leads": leads,
@@ -216,7 +273,8 @@ class SupabaseDataLayer:
         """Get single lead by ID"""
         try:
             response = self.client.table('leads').select("*").eq('lead_id', lead_id).execute()
-            return response.data[0] if response.data else None
+            lead = response.data[0] if response.data else None
+            return _normalise_lead_source(lead) if lead else None
         except Exception as e:
             logger.error(f"Error fetching lead {lead_id}: {e}")
             return None
