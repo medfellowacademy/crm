@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -157,7 +157,9 @@ const LeadsPageEnhanced = () => {
   const [fieldMapping, setFieldMapping] = useState({});
   const [filters, setFilters] = useState({});
   const [searchText, setSearchText] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selectedRows, setSelectedRows] = useState([]);
+  const searchTimeoutRef = useRef(null);
   const [quickFilter, setQuickFilter] = useState('all');
   const [advFilters, setAdvFilters] = useState({});
   const [pageSize, setPageSize] = useState(50);
@@ -174,10 +176,25 @@ const LeadsPageEnhanced = () => {
   // WhatsApp template drawer (for quick-send from table row)
   const [templateLead,    setTemplateLead]    = useState(null);
 
+  // Debounce search text (500ms delay)
+  React.useEffect(() => {
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+    searchTimeoutRef.current = setTimeout(() => {
+      setDebouncedSearch(searchText);
+    }, 500);
+    return () => {
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+      }
+    };
+  }, [searchText]);
+
   // Reset to first page when filters or search changes
   React.useEffect(() => {
     setCurrentPage(1);
-  }, [filters, searchText, quickFilter, advFilters]);
+  }, [filters, debouncedSearch, quickFilter, advFilters]);
 
   // ── Queries ────────────────────────────────────────────────────────────────
   const leadQueryParams = React.useMemo(() => {
@@ -191,7 +208,7 @@ const LeadsPageEnhanced = () => {
     if (quickFilter === 'warm') params.status = 'Warm';
     if (quickFilter === 'today') params.created_today = true;
     if (quickFilter === 'overdue') params.overdue = true;
-    if (searchText) params.search = searchText;
+    if (debouncedSearch) params.search = debouncedSearch;
 
     if (advFilters.status?.length) params.status_in = advFilters.status.join(',');
     if (advFilters.segment?.length) params.segment_in = advFilters.segment.join(',');
@@ -223,22 +240,25 @@ const LeadsPageEnhanced = () => {
     }
 
     return params;
-  }, [filters, quickFilter, searchText, advFilters, currentPage, pageSize]);
+  }, [filters, quickFilter, debouncedSearch, advFilters, currentPage, pageSize]);
 
-  const { data: leadsResponse = { leads: [], total: 0 }, isLoading, isFetching, refetch } = useQuery({
+  const { data: leadsResponse = { leads: [], total: 0 }, isLoading, isFetching, refetch, error, isError } = useQuery({
     queryKey: ['leads', leadQueryParams],
     queryFn: async () => {
       try {
-        return (await leadsAPI.getAll(leadQueryParams)).data || { leads: [], total: 0 };
-      } catch {
-        return { leads: [], total: 0 };
+        const response = await leadsAPI.getAll(leadQueryParams);
+        return response.data || { leads: [], total: 0 };
+      } catch (err) {
+        console.error('Failed to fetch leads:', err);
+        throw err; // Re-throw to trigger error state
       }
     },
-    staleTime: 30 * 1000,   // 30 seconds - fetch fresh data more frequently
-    placeholderData: (prev) => prev,  // show previous data instantly while loading next page
+    staleTime: 60 * 1000,   // 60 seconds cache
+    gcTime: 5 * 60 * 1000,  // Keep in cache for 5 minutes
     refetchInterval: false,
-    refetchOnWindowFocus: true,  // Refetch when user returns to tab
-    retry: 1,
+    refetchOnWindowFocus: false,  // Prevent unnecessary refetches
+    retry: 2,
+    retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
   });
 
   const leads = leadsResponse?.leads || [];
@@ -247,11 +267,15 @@ const LeadsPageEnhanced = () => {
   const { data: courses = [] } = useQuery({
     queryKey: ['courses'],
     queryFn: async () => { try { return (await coursesAPI.getAll()).data || []; } catch { return []; } },
+    staleTime: 10 * 60 * 1000, // 10 minutes - courses don't change often
+    gcTime: 30 * 60 * 1000,
   });
 
   const { data: usersData } = useQuery({
     queryKey: ['users'],
     queryFn: async () => { try { return (await usersAPI.getAll()).data; } catch (err) { console.error('Users fetch error:', err); return { users: [] }; } },
+    staleTime: 5 * 60 * 1000, // 5 minutes - users don't change often
+    gcTime: 15 * 60 * 1000,
   });
 
   const users = Array.isArray(usersData) ? usersData : (usersData?.users || []);
@@ -263,33 +287,48 @@ const LeadsPageEnhanced = () => {
     staleTime: 10 * 60 * 1000,
   });
 
-  // ── Computed filter options ────────────────────────────────────────────────
+  // ── Computed filter options (memoized for performance) ────────────────────
   const uniqueStatuses   = STATUS_OPTIONS;
-  const uniqueCountries  = [...new Set(leads.map(l => l.country))].filter(Boolean).sort();
-  const uniqueCourses    = [...new Set([
-    ...courses.map(c => c.course_name),
-    ...leads.map(l => l.course_interested),
-  ])].filter(Boolean).sort();
-  const uniqueAssigned   = isCounselor
-    ? (authUser?.full_name ? [authUser.full_name] : [])
-    : [...new Set(leads.map(l => l.assigned_to))].filter(Boolean).sort();
-  const uniqueSources    = [...new Set(leads.map(l => l.source))].filter(Boolean).sort();
+  const uniqueCountries  = useMemo(() => 
+    [...new Set(leads.map(l => l.country))].filter(Boolean).sort(),
+    [leads]
+  );
+  const uniqueCourses    = useMemo(() => 
+    [...new Set([
+      ...courses.map(c => c.course_name),
+      ...leads.map(l => l.course_interested),
+    ])].filter(Boolean).sort(),
+    [courses, leads]
+  );
+  const uniqueAssigned   = useMemo(() => 
+    isCounselor
+      ? (authUser?.full_name ? [authUser.full_name] : [])
+      : [...new Set(leads.map(l => l.assigned_to))].filter(Boolean).sort(),
+    [leads, isCounselor, authUser]
+  );
+  const uniqueSources    = useMemo(() => 
+    [...new Set(leads.map(l => l.source))].filter(Boolean).sort(),
+    [leads]
+  );
   const uniqueSegments   = ['Hot', 'Warm', 'Cold', 'Junk'];
 
   // Server-side filtering: table data is already filtered by API.
   const filteredLeads = leads;
 
-  // ── Stats ──────────────────────────────────────────────────────────────────
-  const stats = {
-    total: totalLeads,
-    hot: leads.filter(l => l.status === 'Hot').length,
-    warm: leads.filter(l => l.status === 'Warm').length,
-    enrolled: leads.filter(l => l.status === 'Enrolled').length,
-    followUpToday: leads.filter(l => l.follow_up_date && dayjs(l.follow_up_date).isSame(dayjs(), 'day')).length,
-    overdue: leads.filter(l => l.follow_up_date && dayjs(l.follow_up_date).isBefore(dayjs(), 'day')).length,
-    avgScore: leads.length ? (leads.reduce((s, l) => s + (l.ai_score || 0), 0) / leads.length).toFixed(1) : 0,
-    revenue: leads.filter(l => l.status === 'Enrolled').reduce((s, l) => s + (l.actual_revenue || 0), 0),
-  };
+  // ── Stats (memoized for performance) ──────────────────────────────────────
+  const stats = useMemo(() => {
+    const today = dayjs();
+    return {
+      total: totalLeads,
+      hot: leads.filter(l => l.status === 'Hot').length,
+      warm: leads.filter(l => l.status === 'Warm').length,
+      enrolled: leads.filter(l => l.status === 'Enrolled').length,
+      followUpToday: leads.filter(l => l.follow_up_date && dayjs(l.follow_up_date).isSame(today, 'day')).length,
+      overdue: leads.filter(l => l.follow_up_date && dayjs(l.follow_up_date).isBefore(today, 'day')).length,
+      avgScore: leads.length ? (leads.reduce((s, l) => s + (l.ai_score || 0), 0) / leads.length).toFixed(1) : 0,
+      revenue: leads.filter(l => l.status === 'Enrolled').reduce((s, l) => s + (l.actual_revenue || 0), 0),
+    };
+  }, [leads, totalLeads]);
 
   // ── Mutations ──────────────────────────────────────────────────────────────
   const createMutation = useMutation({
@@ -558,8 +597,8 @@ const LeadsPageEnhanced = () => {
     a.click();
   };
 
-  // ── Action menu ────────────────────────────────────────────────────────────
-  const getActionMenu = (record) => ({
+  // ── Action menu (memoized with useCallback) ───────────────────────────────────────────────────────────
+  const getActionMenu = useCallback((record) => ({
     items: [
       { key: 'view', icon: <EyeOutlined />, label: 'View Details', onClick: () => navigate(`/leads/${record.lead_id}`) },
       { key: 'edit', icon: <EditOutlined />, label: 'Edit', onClick: () => { form.setFieldsValue({ lead_id: record.lead_id, ...record, follow_up_date: record.follow_up_date ? dayjs(record.follow_up_date) : null }); setDrawerVisible(true); } },
@@ -569,10 +608,10 @@ const LeadsPageEnhanced = () => {
       { type: 'divider' },
       { key: 'delete', icon: <DeleteOutlined />, label: 'Delete', danger: true, onClick: () => deleteMutation.mutate(record.lead_id) },
     ],
-  });
+  }), [navigate, form, deleteMutation]);
 
-  // ── Table columns ──────────────────────────────────────────────────────────
-  const columns = [
+  // ── Table columns (memoized to prevent recreation) ────────────────────────────────────────────────────
+  const columns = useMemo(() => [
     {
       title: 'Lead',
       key: 'lead_info',
@@ -797,7 +836,7 @@ const LeadsPageEnhanced = () => {
         </Space>
       ),
     },
-  ];
+  ], [uniqueCountries, uniqueCourses, uniqueSources, uniqueStatuses, uniqueAssigned, isCounselor, authUser, users, navigate, decayConfig, updateMutation, getActionMenu]);
 
   const activeAdvFilters = Object.values(advFilters).filter(v => v && (Array.isArray(v) ? v.length > 0 : true)).length;
 
@@ -863,8 +902,15 @@ const LeadsPageEnhanced = () => {
                 { label: '📅 Today', value: 'today' },
                 { label: '⚠️ Overdue', value: 'overdue' },
               ]} />
-            <Input.Search placeholder="Search name / email / phone..." allowClear style={{ width: 240 }}
-              onChange={e => setSearchText(e.target.value)} prefix={<SearchOutlined />} />
+            <Input.Search 
+              placeholder="Search name / email / phone..." 
+              allowClear 
+              style={{ width: 240 }}
+              value={searchText}
+              onChange={e => setSearchText(e.target.value)} 
+              prefix={<SearchOutlined />}
+              suffix={searchText !== debouncedSearch && <SyncOutlined spin style={{ color: '#1890ff' }} />}
+            />
             <Tooltip title={activeAdvFilters ? `${activeAdvFilters} filters active` : 'Advanced Filters'}>
               <Badge count={activeAdvFilters} size="small">
                 <Button icon={<FunnelPlotOutlined />} type={activeAdvFilters ? 'primary' : 'default'}
@@ -880,6 +926,23 @@ const LeadsPageEnhanced = () => {
           </Space>
         }
       >
+        {/* Error Alert */}
+        {isError && (
+          <Alert
+            style={{ marginBottom: 16 }}
+            message="Failed to load leads"
+            description={error?.message || 'An error occurred while fetching leads. Please try again.'}
+            type="error"
+            showIcon
+            action={
+              <Button size="small" onClick={() => refetch()}>
+                Retry
+              </Button>
+            }
+            closable
+          />
+        )}
+
         {/* Bulk bar */}
         {selectedRows.length > 0 && (
           <Alert style={{ marginBottom: 12 }}
@@ -921,7 +984,10 @@ const LeadsPageEnhanced = () => {
         <Table
           columns={columns}
           dataSource={filteredLeads}
-          loading={isLoading && !isFetching}
+          loading={{
+            spinning: isLoading || isFetching,
+            tip: isLoading ? 'Loading leads...' : 'Refreshing...',
+          }}
           rowKey="lead_id"
           scroll={{ x: 1800 }}
           size="middle"
@@ -936,7 +1002,7 @@ const LeadsPageEnhanced = () => {
             current: currentPage,
             showSizeChanger: true,
             pageSizeOptions: ['25','50','100','250','500'],
-            showTotal: t => `${t} leads`,
+            showTotal: (t, range) => `${range[0]}-${range[1]} of ${t} leads`,
             position: ['bottomCenter'],
             onChange: (page, size) => {
               setCurrentPage(page);
@@ -944,7 +1010,8 @@ const LeadsPageEnhanced = () => {
                 setPageSize(size);
                 setCurrentPage(1);
               }
-            }
+            },
+            showQuickJumper: true,
           }}
           locale={{ emptyText: <Empty description="No leads found"><Button type="primary" icon={<PlusOutlined />} onClick={() => setDrawerVisible(true)}>Add First Lead</Button></Empty> }}
           rowClassName={r => r.follow_up_date && dayjs(r.follow_up_date).isBefore(dayjs(), 'day') ? 'overdue-row' : ''}
