@@ -1,84 +1,65 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Modal, Input, Button, List, Avatar, Tag, Spin, message, Upload, Tooltip } from 'antd';
+import { Modal, Input, Button, Avatar, Tag, Spin, message as antMessage } from 'antd';
 import {
   SendOutlined,
   WhatsAppOutlined,
   UserOutlined,
-  PaperClipOutlined,
-  SmileOutlined,
-  CloseOutlined
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import axios from 'axios';
+import api from '../api/api';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 
 dayjs.extend(relativeTime);
 
 const { TextArea } = Input;
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
 const ChatInterface = ({ visible, onClose, lead, type = 'whatsapp' }) => {
-  const [message, setMessage] = useState('');
-  const [sending, setSending] = useState(false);
+  // Renamed from `message` to `inputText` to avoid shadowing antd `message` import
+  const [inputText, setInputText] = useState('');
   const messagesEndRef = useRef(null);
   const queryClient = useQueryClient();
 
-  // Fetch chat history
+  // Fetch chat history via centralized axios instance (handles 401 redirect automatically)
   const { data: chatHistory, isLoading } = useQuery({
     queryKey: ['chat-history', lead?.lead_id, type],
     queryFn: async () => {
-      const response = await axios.get(
-        `${API_BASE_URL}/api/communications/${lead.lead_id}/history?type=${type}`,
-        {
-          headers: {
-            'Authorization': `Bearer ${JSON.parse(localStorage.getItem('user') || '{}')?.token}`
-          }
-        }
-      );
-      return response.data;
+      const res = await api.get(`/api/communications/${lead.lead_id}/history?type=${type}`);
+      return res.data;
     },
     enabled: !!lead && visible,
-    refetchInterval: 5000 // Auto-refresh every 5 seconds
+    refetchInterval: 5000, // Auto-refresh every 5 seconds
   });
 
-  // Send message mutation
+  // Send message mutation — uses isPending (TanStack Query v5)
   const sendMessageMutation = useMutation({
     mutationFn: async (messageData) => {
-      const response = await axios.post(
-        `${API_BASE_URL}/api/communications/${type}/send`,
-        messageData,
-        {
-          headers: {
-            'Authorization': `Bearer ${JSON.parse(localStorage.getItem('user') || '{}')?.token}`
-          }
-        }
-      );
-      return response.data;
+      const res = await api.post(`/api/communications/${type}/send`, messageData);
+      return res.data;
     },
     onSuccess: () => {
-      setMessage('');
+      setInputText('');
       queryClient.invalidateQueries({ queryKey: ['chat-history', lead?.lead_id, type] });
-      message.success('Message sent successfully!');
+      antMessage.success('Message sent successfully!');
     },
     onError: (error) => {
-      message.error(`Failed to send message: ${error.message}`);
-    }
+      antMessage.error(`Failed to send message: ${error.response?.data?.detail || error.message}`);
+    },
   });
 
   const handleSendMessage = () => {
-    if (!message.trim()) {
-      message.warning('Please enter a message');
+    if (!inputText.trim()) {
+      antMessage.warning('Please enter a message');
       return;
     }
 
     const user = JSON.parse(localStorage.getItem('user') || '{}');
-    
+
     sendMessageMutation.mutate({
       lead_id: lead.lead_id,
       to: type === 'whatsapp' ? lead.whatsapp : lead.email,
-      message: message.trim(),
-      sender: user.full_name || user.email
+      message: inputText.trim(),
+      sender: user.full_name || user.email,
     });
   };
 
@@ -92,14 +73,14 @@ const ChatInterface = ({ visible, onClose, lead, type = 'whatsapp' }) => {
 
   const renderMessage = (msg) => {
     const isOutbound = msg.direction === 'outbound';
-    
+
     return (
       <div
         key={msg.id}
         style={{
           display: 'flex',
           justifyContent: isOutbound ? 'flex-end' : 'flex-start',
-          marginBottom: 16
+          marginBottom: 16,
         }}
       >
         <div
@@ -107,20 +88,20 @@ const ChatInterface = ({ visible, onClose, lead, type = 'whatsapp' }) => {
             maxWidth: '70%',
             display: 'flex',
             flexDirection: isOutbound ? 'row-reverse' : 'row',
-            gap: 8
+            gap: 8,
           }}
         >
           <Avatar
             size={32}
             style={{
               backgroundColor: isOutbound ? '#1890ff' : '#52c41a',
-              flexShrink: 0
+              flexShrink: 0,
             }}
             icon={<UserOutlined />}
           >
             {isOutbound ? 'You' : lead?.full_name?.[0] || 'L'}
           </Avatar>
-          
+
           <div>
             <div
               style={{
@@ -128,12 +109,12 @@ const ChatInterface = ({ visible, onClose, lead, type = 'whatsapp' }) => {
                 borderRadius: 12,
                 backgroundColor: isOutbound ? '#1890ff' : '#f0f0f0',
                 color: isOutbound ? 'white' : 'black',
-                wordWrap: 'break-word'
+                wordWrap: 'break-word',
               }}
             >
               {msg.content}
             </div>
-            
+
             <div
               style={{
                 fontSize: 11,
@@ -143,7 +124,7 @@ const ChatInterface = ({ visible, onClose, lead, type = 'whatsapp' }) => {
                 display: 'flex',
                 gap: 8,
                 justifyContent: isOutbound ? 'flex-end' : 'flex-start',
-                alignItems: 'center'
+                alignItems: 'center',
               }}
             >
               <span>{dayjs(msg.timestamp).fromNow()}</span>
@@ -188,14 +169,14 @@ const ChatInterface = ({ visible, onClose, lead, type = 'whatsapp' }) => {
       width={600}
       footer={null}
       style={{ top: 20 }}
-      bodyStyle={{ padding: 0, height: '70vh', display: 'flex', flexDirection: 'column' }}
+      styles={{ body: { padding: 0, height: '70vh', display: 'flex', flexDirection: 'column' } }}
     >
       {/* Lead Info Header */}
       <div
         style={{
           padding: '12px 24px',
           borderBottom: '1px solid #f0f0f0',
-          backgroundColor: '#fafafa'
+          backgroundColor: '#fafafa',
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -205,9 +186,7 @@ const ChatInterface = ({ visible, onClose, lead, type = 'whatsapp' }) => {
               {type === 'whatsapp' ? lead?.whatsapp : lead?.email}
             </div>
           </div>
-          <Tag color={lead?.status === 'Enrolled' ? 'green' : 'blue'}>
-            {lead?.status}
-          </Tag>
+          <Tag color={lead?.status === 'Enrolled' ? 'green' : 'blue'}>{lead?.status}</Tag>
         </div>
       </div>
 
@@ -217,7 +196,7 @@ const ChatInterface = ({ visible, onClose, lead, type = 'whatsapp' }) => {
           flex: 1,
           overflowY: 'auto',
           padding: '16px 24px',
-          backgroundColor: type === 'whatsapp' ? '#e5ddd5' : 'white'
+          backgroundColor: type === 'whatsapp' ? '#e5ddd5' : 'white',
         }}
       >
         {isLoading ? (
@@ -230,13 +209,7 @@ const ChatInterface = ({ visible, onClose, lead, type = 'whatsapp' }) => {
             <div ref={messagesEndRef} />
           </>
         ) : (
-          <div
-            style={{
-              textAlign: 'center',
-              padding: 40,
-              color: '#999'
-            }}
-          >
+          <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
             No messages yet. Start the conversation!
           </div>
         )}
@@ -247,13 +220,13 @@ const ChatInterface = ({ visible, onClose, lead, type = 'whatsapp' }) => {
         style={{
           padding: '12px 24px',
           borderTop: '1px solid #f0f0f0',
-          backgroundColor: 'white'
+          backgroundColor: 'white',
         }}
       >
         <div style={{ display: 'flex', gap: 8 }}>
           <TextArea
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
             placeholder={`Type a message to ${lead?.full_name}...`}
             autoSize={{ minRows: 1, maxRows: 4 }}
             onPressEnter={(e) => {
@@ -268,13 +241,13 @@ const ChatInterface = ({ visible, onClose, lead, type = 'whatsapp' }) => {
             type="primary"
             icon={<SendOutlined />}
             onClick={handleSendMessage}
-            loading={sendMessageMutation.isLoading}
-            disabled={!message.trim()}
+            loading={sendMessageMutation.isPending}
+            disabled={!inputText.trim()}
           >
             Send
           </Button>
         </div>
-        
+
         <div style={{ marginTop: 8, fontSize: 11, color: '#999' }}>
           💡 All conversations are stored for AI training and quality improvement
         </div>

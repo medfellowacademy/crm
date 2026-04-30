@@ -9,14 +9,13 @@ import {
   DownloadOutlined
 } from '@ant-design/icons';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import axios from 'axios';
+import api from '../api/api';
 import dayjs from 'dayjs';
 import duration from 'dayjs/plugin/duration';
 
 dayjs.extend(duration);
 
 const { Text, Title } = Typography;
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
 const CallInterface = ({ visible, onClose, lead }) => {
   const [callStatus, setCallStatus] = useState('idle'); // idle, calling, connected, ended
@@ -26,24 +25,16 @@ const CallInterface = ({ visible, onClose, lead }) => {
   const timerRef = useRef(null);
   const queryClient = useQueryClient();
 
-  // Initiate call mutation
+  // Initiate call mutation — uses centralized api (handles auth + 401 redirect)
   const initiateCallMutation = useMutation({
     mutationFn: async () => {
       const user = JSON.parse(localStorage.getItem('user') || '{}');
-      const response = await axios.post(
-        `${API_BASE_URL}/api/communications/call/initiate`,
-        {
-          lead_id: lead.lead_id,
-          to_number: lead.phone,
-          counselor: user.full_name || user.email
-        },
-        {
-          headers: {
-            'Authorization': `Bearer ${JSON.parse(localStorage.getItem('user') || '{}')?.token}`
-          }
-        }
-      );
-      return response.data;
+      const res = await api.post('/api/communications/call/initiate', {
+        lead_id: lead.lead_id,
+        to_number: lead.phone,
+        counselor: user.full_name || user.email,
+      });
+      return res.data;
     },
     onSuccess: (data) => {
       setCallStatus('calling');
@@ -135,7 +126,7 @@ const CallInterface = ({ visible, onClose, lead }) => {
                 size="large"
                 icon={<PhoneOutlined />}
                 onClick={handleStartCall}
-                loading={initiateCallMutation.isLoading}
+                loading={initiateCallMutation.isPending}
                 style={{
                   width: 200,
                   height: 50,

@@ -750,6 +750,7 @@ class LeadCreate(BaseModel):
     status: Optional[LeadStatus] = LeadStatus.FRESH  # Allow custom status, default to Fresh
     assigned_to: Optional[str] = None
     qualification: Optional[str] = None  # Educational qualification, e.g. MBBS, MD, BDS
+    company: Optional[str] = None         # Company / brand: 'MED' or 'Others'
     follow_up_date: Optional[datetime] = None
     notes: Optional[str] = None  # Initial note content for imports
 
@@ -787,6 +788,7 @@ class LeadUpdate(BaseModel):
     follow_up_date: Optional[datetime] = None
     assigned_to: Optional[str] = None
     qualification: Optional[str] = None  # Educational qualification, e.g. MBBS, MD, BDS
+    company: Optional[str] = None         # Company / brand: 'MED' or 'Others'
     actual_revenue: Optional[float] = None
     expected_revenue: Optional[float] = None
     next_action: Optional[str] = None
@@ -849,6 +851,7 @@ class LeadResponse(BaseModel):
     recommended_script: Optional[str]
     feature_importance: Optional[dict] = None
     qualification: Optional[str] = None
+    company: Optional[str] = None
     loss_reason: Optional[str] = None
     loss_note: Optional[str] = None
     notes: List[NoteResponse] = []
@@ -1623,6 +1626,7 @@ async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, reque
             "course_interested": db_lead.course_interested,
             "assigned_to": db_lead.assigned_to,
             "qualification": lead.qualification,
+            "company": lead.company,
             "follow_up_date": lead.follow_up_date.isoformat() if lead.follow_up_date else None,
             "status": db_lead.status.value if hasattr(db_lead.status, 'value') else db_lead.status,
             "ai_score": db_lead.ai_score or 0.0,
@@ -2299,9 +2303,27 @@ async def get_lead_activities(lead_id: str, type: Optional[str] = None, request:
                 "status": None,
             })
 
-        # ── WhatsApp / chat messages (TODO: query from Supabase chat_messages table) ───
-        # For now, skip chat messages until we implement Supabase query for them
-        # This would require: supabase_data.client.table('chat_messages').select("*").eq('lead_db_id', lead_internal_id).execute()
+        # ── WhatsApp / chat messages from Supabase chat_messages table ──────────────
+        if lead_internal_id:
+            try:
+                chat_resp = supabase_data.client.table('chat_messages').select('*').eq('lead_db_id', lead_internal_id).execute()
+                for msg in (chat_resp.data or []):
+                    direction = msg.get('direction', 'outbound')
+                    act_type = 'whatsapp_in' if direction == 'inbound' else 'whatsapp_out'
+                    activities.append({
+                        "id": f"chat-{msg.get('id')}",
+                        "type": act_type,
+                        "title": "WhatsApp " + ("Received" if direction == "inbound" else "Sent"),
+                        "content": msg.get('content') or f"[{msg.get('msg_type', 'media')}]",
+                        "timestamp": msg.get('timestamp') or msg.get('created_at'),
+                        "user": msg.get('sender_name') or ("Lead" if direction == "inbound" else "System"),
+                        "channel": "whatsapp",
+                        "duration": None,
+                        "direction": direction,
+                        "status": msg.get('status'),
+                    })
+            except Exception as _chat_err:
+                logger.warning(f"Could not load chat messages for lead {lead_id}: {_chat_err}")
 
         # ── Synthetic lead-creation event ────────────────────────────────────────
         if lead_data.get('created_at'):
@@ -3178,12 +3200,12 @@ async def trigger_followup(
     from communication_service import comm_service
     
     lead_data = {
-        "id": lead.lead_id,
-        "name": lead.full_name or "there",
-        "email": lead.email,
-        "whatsapp": lead.whatsapp,
-        "course": lead.course_interested or "our courses",
-        "counselor": lead.assigned_to or "Your counselor"
+        "id": lead.get('lead_id'),
+        "name": lead.get('full_name') or "there",
+        "email": lead.get('email'),
+        "whatsapp": lead.get('whatsapp'),
+        "course": lead.get('course_interested') or "our courses",
+        "counselor": lead.get('assigned_to') or "Your counselor"
     }
     
     try:
@@ -4145,34 +4167,40 @@ class ChatMessageResponse(BaseModel):
 
 
 @app.get("/api/leads/{lead_id}/chat", response_model=List[ChatMessageResponse])
-async def get_chat_messages(lead_id: int):
+async def get_chat_messages(lead_id: str):
     """Get all WhatsApp chat messages for a lead - SUPABASE ONLY"""
-    
+
     try:
-        response = supabase_data.client.table('chat_messages').select('*').eq('lead_db_id', lead_id).order('timestamp').execute()
+        # Resolve string lead_id (e.g. "LEAD-001") to internal numeric DB id
+        lead_row = supabase_data.client.table('leads').select('id').eq('lead_id', lead_id).execute()
+        if not lead_row.data:
+            return []
+        internal_id = lead_row.data[0]['id']
+        response = supabase_data.client.table('chat_messages').select('*').eq('lead_db_id', internal_id).order('timestamp').execute()
         return response.data if response.data else []
     except Exception as e:
-        logger.error(f"Error getting chat messages: {e}")
+        logger.error(f"Error getting chat messages for {lead_id}: {e}")
         return []
 
 
 @app.post("/api/leads/{lead_id}/chat", response_model=ChatMessageResponse)
-async def send_chat_message(lead_id: int, req: ChatSendRequest):
+async def send_chat_message(lead_id: str, req: ChatSendRequest):
     """Send a WhatsApp message (text or media) to a lead via Interakt - SUPABASE ONLY"""
-    
-    # Get lead by internal ID
-    response = supabase_data.client.table('leads').select('*').eq('id', lead_id).execute()
-    if not response.data or len(response.data) == 0:
+
+    # Resolve string lead_id (e.g. "LEAD-001") to internal row
+    lead_row = supabase_data.client.table('leads').select('*').eq('lead_id', lead_id).execute()
+    if not lead_row.data:
         raise HTTPException(status_code=404, detail="Lead not found")
-    
-    lead = response.data[0]
+
+    lead = lead_row.data[0]
+    internal_id = lead['id']
     phone = lead.get('whatsapp') or lead.get('phone')
     if not phone:
         raise HTTPException(status_code=400, detail="Lead has no WhatsApp/phone number")
-    
+
     from communication_service import InteraktWhatsAppService
     wa = InteraktWhatsAppService()
-    
+
     if req.msg_type == "text":
         result = await wa.send_message(phone, req.message or "", req.country_code)
     else:
@@ -4187,7 +4215,7 @@ async def send_chat_message(lead_id: int, req: ChatSendRequest):
 
     # Save message to Supabase chat_messages table
     msg_data = {
-        "lead_db_id": lead_id,
+        "lead_db_id": internal_id,
         "direction": "outbound",
         "msg_type": req.msg_type,
         "content": req.message,
@@ -4198,13 +4226,13 @@ async def send_chat_message(lead_id: int, req: ChatSendRequest):
         "interakt_id": result.get("message_id"),
         "created_at": datetime.utcnow().isoformat()
     }
-    
+
     # Remove None values
     msg_data = {k: v for k, v in msg_data.items() if v is not None}
-    
-    response = supabase_data.client.table('chat_messages').insert(msg_data).execute()
-    if response.data:
-        return response.data[0]
+
+    insert_resp = supabase_data.client.table('chat_messages').insert(msg_data).execute()
+    if insert_resp.data:
+        return insert_resp.data[0]
     else:
         raise HTTPException(status_code=500, detail="Failed to save message")
 
@@ -4329,15 +4357,15 @@ async def get_admin_stats():
     
     try:
         # Get all leads
-        response = supabase_data.client.table('leads').select('status,segment,potential_revenue,created_at').execute()
+        response = supabase_data.client.table('leads').select('status,ai_segment,expected_revenue,created_at').execute()
         leads = response.data if response.data else []
-        
+
         total_leads = len(leads)
         enrolled = sum(1 for l in leads if l.get('status') == 'Enrolled')
-        hot_leads = sum(1 for l in leads if l.get('segment') == 'Hot')
-        
+        hot_leads = sum(1 for l in leads if l.get('ai_segment') == 'Hot')
+
         # Revenue from enrolled leads
-        total_revenue = sum(l.get('potential_revenue', 0) or 0 for l in leads if l.get('status') == 'Enrolled')
+        total_revenue = sum(l.get('expected_revenue', 0) or 0 for l in leads if l.get('status') == 'Enrolled')
         
         # This month vs last month
         from datetime import datetime, timedelta
@@ -4380,17 +4408,17 @@ async def get_team_performance():
         counselors = [u for u in users if u.get('role') == 'Counselor']
         
         # Get all leads
-        response = supabase_data.client.table('leads').select('assigned_to,status,segment,potential_revenue').execute()
+        response = supabase_data.client.table('leads').select('assigned_to,status,ai_segment,expected_revenue').execute()
         all_leads = response.data if response.data else []
-        
+
         result = []
         for u in counselors:
             counselor_name = u['full_name']
             assigned = [l for l in all_leads if l.get('assigned_to') == counselor_name]
             total = len(assigned)
             conversions = sum(1 for l in assigned if l.get('status') == 'Enrolled')
-            hot = sum(1 for l in assigned if l.get('segment') == 'Hot')
-            revenue = sum(l.get('potential_revenue', 0) or 0 for l in assigned if l.get('status') == 'Enrolled')
+            hot = sum(1 for l in assigned if l.get('ai_segment') == 'Hot')
+            revenue = sum(l.get('expected_revenue', 0) or 0 for l in assigned if l.get('status') == 'Enrolled')
             
             result.append({
                 "id": u['id'],
@@ -4445,12 +4473,12 @@ async def get_revenue_trend(days: int = 30):
         cutoff = datetime.utcnow() - timedelta(days=days)
         
         # Get enrolled leads from Supabase
-        response = supabase_data.client.table('leads').select('status,potential_revenue,updated_at,created_at').eq('status', 'Enrolled').execute()
+        response = supabase_data.client.table('leads').select('status,expected_revenue,updated_at,created_at').eq('status', 'Enrolled').execute()
         enrolled = response.data if response.data else []
-        
+
         # Filter by cutoff date
         enrolled = [l for l in enrolled if l.get('updated_at') and datetime.fromisoformat(l['updated_at'].replace('Z', '+00:00')) >= cutoff]
-        
+
         daily = defaultdict(float)
         for lead in enrolled:
             updated_at = lead.get('updated_at') or lead.get('created_at')
@@ -4458,7 +4486,7 @@ async def get_revenue_trend(days: int = 30):
                 try:
                     dt = datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
                     day_key = dt.strftime('%Y-%m-%d')
-                    daily[day_key] += lead.get('potential_revenue', 0) or 0
+                    daily[day_key] += lead.get('expected_revenue', 0) or 0
                 except:
                     pass
         
@@ -4476,26 +4504,40 @@ async def get_revenue_trend(days: int = 30):
 @app.get("/api/users/{user_id}/stats")
 async def get_user_stats(user_id: int):
     """Per-user stats for counselor dashboard - SUPABASE ONLY"""
-    
+
     try:
         user = supabase_data.get_user_by_id(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
-        
-        # Get all leads assigned to this user
-        response = supabase_data.client.table('leads').select('status,segment,potential_revenue,created_at').eq('assigned_to', user['full_name']).execute()
+
+        # Get all leads assigned to this user (include follow_up_date for today count)
+        response = supabase_data.client.table('leads').select(
+            'status,ai_segment,expected_revenue,created_at,follow_up_date'
+        ).eq('assigned_to', user['full_name']).execute()
         assigned = response.data if response.data else []
-        
+
         total = len(assigned)
         enrolled = sum(1 for l in assigned if l.get('status') == 'Enrolled')
-        hot = sum(1 for l in assigned if l.get('segment') == 'Hot')
-        warm = sum(1 for l in assigned if l.get('segment') == 'Warm')
-        
-        # Today's leads
-        from datetime import datetime
+        hot = sum(1 for l in assigned if l.get('ai_segment') == 'Hot')
+        warm = sum(1 for l in assigned if l.get('ai_segment') == 'Warm')
+        revenue = sum(l.get('expected_revenue', 0) or 0 for l in assigned if l.get('status') == 'Enrolled')
+
         today = datetime.utcnow().date()
-        today_leads = [l for l in assigned if l.get('created_at') and datetime.fromisoformat(l['created_at'].replace('Z', '+00:00')).date() == today]
-        
+
+        # Leads created today
+        today_leads = sum(
+            1 for l in assigned
+            if l.get('created_at') and datetime.fromisoformat(
+                l['created_at'].replace('Z', '+00:00')
+            ).date() == today
+        )
+
+        # Follow-ups due today
+        followups_today = sum(
+            1 for l in assigned
+            if l.get('follow_up_date') and l['follow_up_date'][:10] == today.isoformat()
+        )
+
         return {
             "user_id": user_id,
             "name": user['full_name'],
@@ -4503,25 +4545,9 @@ async def get_user_stats(user_id: int):
             "enrolled": enrolled,
             "hot_leads": hot,
             "warm_leads": warm,
-            "today_leads": len(today_leads),
-            "conversion_rate": round((enrolled / max(total, 1)) * 100, 2),
-        }
-    except Exception as e:
-        logger.error(f"User stats error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get user stats")
-        followups_today = sum(
-            1 for l in assigned
-            if l.follow_up_date and l.follow_up_date.date() == today
-        )
-        revenue = sum(getattr(l, 'potential_revenue', 0) or 0 for l in assigned if l.status == 'Enrolled')
-
-        return {
-            "total_leads": total,
-            "enrolled": enrolled,
-            "hot_leads": hot,
-            "warm_leads": warm,
+            "today_leads": today_leads,
             "followups_today": followups_today,
-            "revenue": revenue,
+            "revenue": round(revenue, 2),
             "conversion_rate": round((enrolled / max(total, 1)) * 100, 2),
         }
     except HTTPException:
@@ -4529,7 +4555,7 @@ async def get_user_stats(user_id: int):
     except Exception as e:
         logger.error(f"User stats error: {e}")
         return {"total_leads": 0, "enrolled": 0, "hot_leads": 0, "warm_leads": 0,
-                "followups_today": 0, "revenue": 0, "conversion_rate": 0}
+                "today_leads": 0, "followups_today": 0, "revenue": 0, "conversion_rate": 0}
 
 
 @app.get("/api/users/{user_id}/performance")
@@ -5223,9 +5249,9 @@ async def get_source_analytics():
     
     try:
         # Get all leads
-        response = supabase_data.client.table('leads').select('source,status,segment,potential_revenue').execute()
+        response = supabase_data.client.table('leads').select('source,status,ai_segment,expected_revenue').execute()
         all_leads = response.data if response.data else []
-        
+
         # Aggregate by source
         buckets = {}
         for lead in all_leads:
@@ -5243,10 +5269,10 @@ async def get_source_analytics():
             b["total"] += 1
             if lead.get('status') == "Enrolled":
                 b["enrolled"] += 1
-                b["revenue"] += lead.get('potential_revenue', 0) or 0
-            if lead.get('status') in ("Hot", "Enrolled"):
+                b["revenue"] += lead.get('expected_revenue', 0) or 0
+            if lead.get('ai_segment') == 'Hot' or lead.get('status') == "Enrolled":
                 b["hot"] += 1
-            b["potential"] += lead.get('potential_revenue', 0) or 0
+            b["potential"] += lead.get('expected_revenue', 0) or 0
         
         result = []
         for src, b in sorted(buckets.items(), key=lambda x: -x[1]["enrolled"]):

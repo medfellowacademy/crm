@@ -581,7 +581,7 @@ const LeadsPage = () => {
 
           <Form.Item>
             <Space>
-              <Button type="primary" htmlType="submit" loading={createLeadMutation.isLoading}>
+              <Button type="primary" htmlType="submit" loading={createLeadMutation.isPending}>
                 Create Lead
               </Button>
               <Button onClick={() => setDrawerVisible(false)}>

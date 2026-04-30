@@ -61,9 +61,9 @@ class SupabaseDataLayer:
             "follow_up_date,assigned_to,created_at,updated_at,"
             "last_contact_date,buying_signal_strength,churn_risk,"
             "primary_objection,next_action,priority_level,"
-            "qualification,loss_reason,loss_note"
+            "qualification,company,loss_reason,loss_note"
         )
-        LIST_COLUMNS_COMPAT = LIST_COLUMNS.replace(",qualification", "")
+        LIST_COLUMNS_COMPAT = LIST_COLUMNS.replace(",qualification", "").replace(",company", "")
 
         def _build_query(columns):
             """Build the leads query with all filters applied."""
@@ -160,10 +160,15 @@ class SupabaseDataLayer:
             try:
                 response = query.execute()
             except Exception as col_err:
-                # 'qualification' column may not exist yet — retry without it
-                if 'qualification' in str(col_err):
-                    logger.warning("'qualification' column missing in Supabase — run: "
-                                   "ALTER TABLE leads ADD COLUMN IF NOT EXISTS qualification text;")
+                err_str = str(col_err)
+                # New columns (qualification, company) may not exist yet in Supabase
+                if 'qualification' in err_str or 'company' in err_str:
+                    missing = [c for c in ('qualification', 'company') if c in err_str]
+                    for col in missing:
+                        logger.warning(
+                            f"'{col}' column missing in Supabase — run: "
+                            f"ALTER TABLE leads ADD COLUMN IF NOT EXISTS {col} text;"
+                        )
                     query, effective_limit = _build_query(LIST_COLUMNS_COMPAT)
                     response = query.execute()
                 else:

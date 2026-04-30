@@ -39,6 +39,36 @@ import { leadsAPI, coursesAPI, counselorsAPI, usersAPI } from '../api/api';
 import { COUNTRIES } from '../config/countries';
 
 const SOURCE_OPTIONS = ['Website','Facebook','Google Ads','Instagram','WhatsApp','Referral','Direct','LinkedIn','YouTube'];
+
+// Call disposition map.  Keys are the "main" call status; values are arrays of
+// sub-statuses for that main status, split by call number (1st vs 2nd call).
+const CALL_DISPOSITIONS = {
+  'Not Connected (No answer / Switched off / Not Reachable / Busy)': {
+    first:  ['Need second call'],
+    second: ['Ask me to call evening'],
+  },
+  'Call Back Requested': {
+    first:  ['Time option', 'Need Details', 'Fee Discussion Pending', 'Demo Requested', 'Comparing Price', 'Family approval pending'],
+    second: ['Ask me to call tomorrow', 'Spoke to student, details sent, need follow up', 'Fee is High will think and get back', 'Negotiation in progress', 'Comparing with competitors', 'Will discuss with family and get back'],
+  },
+  'Interested': {
+    first:  ['Will Enroll Soon', 'Not Decided', 'After Exams', 'Just Inquiry', 'Financial Issue', 'Discuss with family', 'After Relocation'],
+    second: ['Will enroll soon', 'Not yet decided', 'Will plan next year', 'Preparing for PG Neet', 'Busy in exams, will plan later', 'Interested will enroll shortly', 'Looking for different course, we do not have'],
+  },
+  'Future Prospect': {
+    first:  ['After Job Switch', 'Not Relevant / Course Not Suitable', 'Wrong Expectation from Course', 'Other Academy'],
+    second: ['Not Interested', 'Do not disturb', 'Looking for only clinical training', 'Looking for only online course'],
+  },
+  'Not Interested': {
+    first:  ['Price Issue'],
+    second: ['Waiting for funds'],
+  },
+  'Spam': {
+    first:  ['Other Field / No Health Care / Invalid Number'],
+    second: ['Dropped the plan'],
+  },
+};
+
 import dayjs from 'dayjs';
 
 // Safely parse a server date string as UTC.
@@ -73,6 +103,11 @@ const LeadDetails = () => {
   const [pendingStatus, setPendingStatus] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
 
+  // Call-note state
+  const [noteType, setNoteType]         = useState('manual');   // 'manual' | '1st_call' | '2nd_call'
+  const [callMainStatus, setCallMainStatus] = useState(null);
+  const [callSubStatus, setCallSubStatus]   = useState(null);
+
   // Fetch lead details
   const { data: lead, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['lead', leadId],
@@ -95,6 +130,7 @@ const LeadDetails = () => {
         source: lead.source,
         course_interested: lead.course_interested,
         qualification: lead.qualification || null,
+        company: lead.company || null,
         status: lead.status,
         follow_up_date: lead.follow_up_date ? parseDate(lead.follow_up_date) : null,
         assigned_to: lead.assigned_to,
@@ -151,6 +187,7 @@ const LeadDetails = () => {
     const updateData = {
       ...values,
       qualification: values.qualification || null,
+      company: values.company || null,
       follow_up_date: values.follow_up_date ? values.follow_up_date.toISOString() : null,
     };
     updateLeadMutation.mutate(updateData);
@@ -162,7 +199,9 @@ const LeadDetails = () => {
     onSuccess: () => {
       message.success('Note added successfully!');
       noteForm.resetFields();
-      // Invalidate and refetch to ensure notes update
+      setNoteType('manual');
+      setCallMainStatus(null);
+      setCallSubStatus(null);
       queryClient.invalidateQueries({ queryKey: ['lead', leadId] });
       refetch();
     },
@@ -196,11 +235,25 @@ const LeadDetails = () => {
   };
 
   const handleAddNote = (values) => {
-    addNoteMutation.mutate({
-      content: values.content,
-      channel: values.channel || 'manual',
-      // created_by is resolved server-side from the JWT token
-    });
+    let content = values.content || '';
+    let channel = values.channel || 'manual';
+
+    if (noteType === '1st_call' || noteType === '2nd_call') {
+      channel = 'call';
+      const label = noteType === '1st_call' ? '1st Call' : '2nd Call';
+      const parts = [`[${label}]`];
+      if (callMainStatus) parts.push(callMainStatus);
+      if (callSubStatus)  parts.push(`→ ${callSubStatus}`);
+      const header = parts.join(' | ');
+      content = content ? `${header}\n${content}` : header;
+    }
+
+    if (!content.trim()) {
+      message.warning('Please fill in the call details or enter a note.');
+      return;
+    }
+
+    addNoteMutation.mutate({ content, channel });
   };
 
   const handleLossSubmit = () => {
@@ -348,6 +401,7 @@ const LeadDetails = () => {
                         source: lead.source,
                         course_interested: lead.course_interested,
                         qualification: lead.qualification || null,
+                        company: lead.company || null,
                         status: lead.status,
                         follow_up_date: lead.follow_up_date ? parseDate(lead.follow_up_date) : null,
                         assigned_to: lead.assigned_to,
@@ -453,6 +507,20 @@ const LeadDetails = () => {
                     </Form.Item>
                   )}
                 </Descriptions.Item>
+                <Descriptions.Item label="Company">
+                  {!isEditing ? (
+                    lead?.company
+                      ? <Tag color={lead.company === 'MED' ? 'blue' : 'default'}>{lead.company}</Tag>
+                      : <span style={{ color: '#8c8c8c' }}>—</span>
+                  ) : (
+                    <Form.Item name="company" noStyle>
+                      <Select style={{ width: '100%' }} allowClear placeholder="Select company">
+                        <Option value="MED">MED</Option>
+                        <Option value="Others">Others</Option>
+                      </Select>
+                    </Form.Item>
+                  )}
+                </Descriptions.Item>
                 <Descriptions.Item label="Course Interested" span={2}>
                   {!isEditing ? (
                     <span>{lead?.course_interested}</span>
@@ -529,60 +597,166 @@ const LeadDetails = () => {
           {/* Notes Section */}
           <Card title="Notes & Communication History">
             <Form form={noteForm} onFinish={handleAddNote} layout="vertical">
-              <Form.Item name="content" rules={[{ required: true, message: 'Please enter note' }]}>
+
+              {/* Note type selector */}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+                {[
+                  { key: 'manual',   label: '📝 Manual Note', color: '#1890ff' },
+                  { key: '1st_call', label: '📞 1st Call',    color: '#fa8c16' },
+                  { key: '2nd_call', label: '📞 2nd Call',    color: '#52c41a' },
+                ].map(({ key, label, color }) => (
+                  <Button
+                    key={key}
+                    type={noteType === key ? 'primary' : 'default'}
+                    style={noteType === key ? { background: color, borderColor: color } : {}}
+                    onClick={() => {
+                      setNoteType(key);
+                      setCallMainStatus(null);
+                      setCallSubStatus(null);
+                    }}
+                  >
+                    {label}
+                  </Button>
+                ))}
+              </div>
+
+              {/* Call disposition dropdowns */}
+              {(noteType === '1st_call' || noteType === '2nd_call') && (
+                <div style={{ background: '#fafafa', border: '1px solid #f0f0f0', borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: '#595959', marginBottom: 4 }}>Call Status *</div>
+                    <Select
+                      style={{ width: '100%' }}
+                      placeholder="Select call outcome…"
+                      value={callMainStatus}
+                      onChange={(v) => { setCallMainStatus(v); setCallSubStatus(null); }}
+                    >
+                      {Object.keys(CALL_DISPOSITIONS).map(s => (
+                        <Option key={s} value={s}>{s}</Option>
+                      ))}
+                    </Select>
+                  </div>
+
+                  {callMainStatus && (
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: '#595959', marginBottom: 4 }}>Sub Status *</div>
+                      <Select
+                        style={{ width: '100%' }}
+                        placeholder="Select sub-status…"
+                        value={callSubStatus}
+                        onChange={setCallSubStatus}
+                      >
+                        {(CALL_DISPOSITIONS[callMainStatus]?.[noteType === '1st_call' ? 'first' : 'second'] || []).map(s => (
+                          <Option key={s} value={s}>{s}</Option>
+                        ))}
+                      </Select>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Free-text note (always shown; optional for call notes) */}
+              <Form.Item
+                name="content"
+                rules={noteType === 'manual' ? [{ required: true, message: 'Please enter a note' }] : []}
+              >
                 <TextArea
-                  rows={4}
-                  placeholder="Add note about conversation, objections, requirements..."
+                  rows={3}
+                  placeholder={
+                    noteType === 'manual'
+                      ? 'Add note about conversation, objections, requirements…'
+                      : 'Additional remarks (optional)…'
+                  }
                 />
               </Form.Item>
-              <Form.Item name="channel">
-                <Select placeholder="Channel" defaultValue="manual" style={{ width: '50%' }}>
-                  <Option value="manual">Manual Note</Option>
-                  <Option value="call">Phone Call</Option>
-                  <Option value="whatsapp">WhatsApp</Option>
-                  <Option value="email">Email</Option>
-                </Select>
-              </Form.Item>
+
+              {/* Channel selector (only for manual notes) */}
+              {noteType === 'manual' && (
+                <Form.Item name="channel" style={{ marginBottom: 12 }}>
+                  <Select placeholder="Channel" defaultValue="manual" style={{ width: '50%' }}>
+                    <Option value="manual">Manual Note</Option>
+                    <Option value="call">Phone Call</Option>
+                    <Option value="whatsapp">WhatsApp</Option>
+                    <Option value="email">Email</Option>
+                  </Select>
+                </Form.Item>
+              )}
+
               <Button
                 type="primary"
                 htmlType="submit"
                 icon={<SaveOutlined />}
                 loading={addNoteMutation.isPending}
+                disabled={
+                  (noteType === '1st_call' || noteType === '2nd_call')
+                    ? !callMainStatus || !callSubStatus
+                    : false
+                }
               >
-                Add Note
+                {noteType === 'manual' ? 'Add Note' : `Save ${noteType === '1st_call' ? '1st' : '2nd'} Call Note`}
               </Button>
             </Form>
 
             <Divider />
 
             <Timeline style={{ marginTop: '24px' }}>
-              {lead?.notes?.map((note, index) => (
-                <Timeline.Item
-                  key={note.id}
-                  color={
-                    note.channel === 'whatsapp' ? 'green' :
-                    note.channel === 'email' ? 'blue' :
-                    note.channel === 'call' ? 'orange' : 'gray'
-                  }
-                >
-                  <div style={{ marginBottom: '8px' }}>
-                    <Tag color={
+              {lead?.notes?.map((note) => {
+                // Detect structured call notes: first line starts with [1st Call] or [2nd Call]
+                const lines = (note.content || '').split('\n');
+                const callMatch = lines[0]?.match(/^\[(1st Call|2nd Call)\]\s*\|?\s*(.*)/);
+                const isCallNote = !!callMatch;
+                const callLabel   = callMatch?.[1];
+                const callDetails = callMatch?.[2] || '';
+                const extraText   = isCallNote ? lines.slice(1).join('\n').trim() : note.content;
+
+                return (
+                  <Timeline.Item
+                    key={note.id}
+                    color={
                       note.channel === 'whatsapp' ? 'green' :
-                      note.channel === 'email' ? 'blue' :
-                      note.channel === 'call' ? 'orange' : 'default'
-                    }>
-                      {note.channel}
-                    </Tag>
-                    <span style={{ fontWeight: 600, marginLeft: '8px' }}>
-                      {note.created_by}
-                    </span>
-                    <span style={{ color: '#8c8c8c', marginLeft: '8px', fontSize: '12px' }}>
-                      {parseDate(note.created_at)?.format('MMM DD, YYYY hh:mm A')}
-                    </span>
-                  </div>
-                  <div style={{ whiteSpace: 'pre-wrap' }}>{note.content}</div>
-                </Timeline.Item>
-              ))}
+                      note.channel === 'email'    ? 'blue'  :
+                      note.channel === 'call'     ? 'orange': 'gray'
+                    }
+                  >
+                    <div style={{ marginBottom: 6 }}>
+                      {isCallNote ? (
+                        <Tag color={callLabel === '1st Call' ? 'orange' : 'green'} style={{ fontWeight: 600 }}>
+                          📞 {callLabel}
+                        </Tag>
+                      ) : (
+                        <Tag color={
+                          note.channel === 'whatsapp' ? 'green' :
+                          note.channel === 'email'    ? 'blue'  :
+                          note.channel === 'call'     ? 'orange': 'default'
+                        }>
+                          {note.channel}
+                        </Tag>
+                      )}
+                      <span style={{ fontWeight: 600, marginLeft: 8 }}>{note.created_by}</span>
+                      <span style={{ color: '#8c8c8c', marginLeft: 8, fontSize: 12 }}>
+                        {parseDate(note.created_at)?.format('MMM DD, YYYY hh:mm A')}
+                      </span>
+                    </div>
+
+                    {isCallNote && callDetails && (
+                      <div style={{
+                        background: callLabel === '1st Call' ? '#fff7e6' : '#f6ffed',
+                        border: `1px solid ${callLabel === '1st Call' ? '#ffd591' : '#b7eb8f'}`,
+                        borderRadius: 6,
+                        padding: '6px 10px',
+                        marginBottom: extraText ? 6 : 0,
+                        fontSize: 13,
+                        color: '#434343',
+                      }}>
+                        {callDetails}
+                      </div>
+                    )}
+                    {extraText && (
+                      <div style={{ whiteSpace: 'pre-wrap', color: '#595959' }}>{extraText}</div>
+                    )}
+                  </Timeline.Item>
+                );
+              })}
             </Timeline>
           </Card>
         </Col>

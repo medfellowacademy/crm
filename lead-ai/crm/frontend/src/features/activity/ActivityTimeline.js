@@ -4,11 +4,9 @@ import { Sparkles, ChevronDown, Clock, User } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { isFeatureEnabled } from '../../config/featureFlags';
 import { CardSkeleton } from '../../components/ui/Skeletons';
-
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+import api from '../../api/api';
 
 /* ─── helpers ─────────────────────────────────────────────── */
-const getToken = () => JSON.parse(localStorage.getItem('user') || '{}')?.token;
 
 // Supabase often returns timestamps without a timezone suffix, e.g.
 // "2026-04-30T12:41:00" instead of "2026-04-30T12:41:00Z".
@@ -421,11 +419,8 @@ const ActivityTimeline = ({ leadId }) => {
   const { data: allActivities = [], isLoading } = useQuery({
     queryKey: ['activities', leadId],
     queryFn: async () => {
-      const res = await fetch(`${API_BASE_URL}/api/leads/${leadId}/activities`, {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
-      if (!res.ok) throw new Error('Failed to fetch activities');
-      return res.json();
+      const res = await api.get(`/api/leads/${leadId}/activities`);
+      return res.data;
     },
     staleTime: 2 * 60 * 1000,
   });
@@ -433,11 +428,8 @@ const ActivityTimeline = ({ leadId }) => {
   const { data: aiSummary } = useQuery({
     queryKey: ['ai-summary', leadId],
     queryFn: async () => {
-      const res = await fetch(`${API_BASE_URL}/api/leads/${leadId}/ai-summary`, {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
-      if (!res.ok) throw new Error('Failed to fetch AI summary');
-      return res.json();
+      const res = await api.get(`/api/leads/${leadId}/ai-summary`);
+      return res.data;
     },
     enabled: isFeatureEnabled('AI_ACTIVITY_SUMMARY'),
     staleTime: 5 * 60 * 1000,

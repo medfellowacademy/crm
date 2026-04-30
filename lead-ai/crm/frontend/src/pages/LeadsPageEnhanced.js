@@ -157,6 +157,7 @@ const STATUS_COLOR_MAP = {
   Fresh: 'blue', 'Follow Up': 'purple',
   'Not Interested': 'default', 'Not Answering': 'gray', Junk: 'volcano',
 };
+const COMPANY_OPTIONS = ['MED', 'Others'];
 
 // ════════════════════════════════════════════════════════════════════════════
 const LeadsPageEnhanced = () => {
@@ -514,6 +515,7 @@ const LeadsPageEnhanced = () => {
         source:           mappedLead.source           || 'Import',
         course_interested: mappedLead.course_interested || 'Not Specified',
         qualification:    mappedLead.qualification    || undefined,
+        company:          mappedLead.company          || undefined,
         // Use the value from the file; fall back to 'Fresh' only if not provided
         status:           mappedLead.status           || 'Fresh',
         expected_revenue: mappedLead.expected_revenue
@@ -699,7 +701,7 @@ const LeadsPageEnhanced = () => {
   const getActionMenu = useCallback((record) => ({
     items: [
       { key: 'view', icon: <EyeOutlined />, label: 'View Details', onClick: () => navigate(`/leads/${record.lead_id}`) },
-      { key: 'edit', icon: <EditOutlined />, label: 'Edit', onClick: () => { form.setFieldsValue({ lead_id: record.lead_id, ...record, qualification: record.qualification || null, follow_up_date: record.follow_up_date ? parseDate(record.follow_up_date) : null }); setDrawerVisible(true); } },
+      { key: 'edit', icon: <EditOutlined />, label: 'Edit', onClick: () => { form.setFieldsValue({ lead_id: record.lead_id, ...record, qualification: record.qualification || null, company: record.company || null, follow_up_date: record.follow_up_date ? parseDate(record.follow_up_date) : null }); setDrawerVisible(true); } },
       { key: 'whatsapp', icon: <WhatsAppOutlined />, label: 'WhatsApp', onClick: () => window.open(`https://wa.me/${record.phone?.replace(/[^0-9]/g, '')}`) },
       { key: 'wa-template', icon: <span>📋</span>, label: 'Send Template', onClick: () => setTemplateLead(record) },
       { key: 'email', icon: <MailOutlined />, label: 'Email', onClick: () => { window.location.href = `mailto:${record.email}`; } },
@@ -858,6 +860,26 @@ const LeadsPageEnhanced = () => {
           allowClear
           options={SOURCE_OPTIONS.map(o => ({ value: o, label: o }))}
           onChange={v => updateMutation.mutate({ leadId: r.lead_id, data: { source: v || null } })}
+        />
+      ),
+    },
+    {
+      title: 'Company',
+      dataIndex: 'company',
+      key: 'company',
+      width: 120,
+      filters: COMPANY_OPTIONS.map(c => ({ text: c, value: c })),
+      onFilter: (v, r) => r.company === v,
+      render: (c, r) => (
+        <Select
+          variant="borderless"
+          value={c || undefined}
+          placeholder={<Text type="secondary">Company</Text>}
+          size="small"
+          style={{ width: '100%', minWidth: 90 }}
+          allowClear
+          options={COMPANY_OPTIONS.map(o => ({ value: o, label: o }))}
+          onChange={v => updateMutation.mutate({ leadId: r.lead_id, data: { company: v || null } })}
         />
       ),
     },
@@ -1459,6 +1481,7 @@ const LeadsPageEnhanced = () => {
               course_interested: v.course_interested,
               assigned_to: v.assigned_to || null,
               qualification: v.qualification || null,
+              company: v.company || null,
               status: v.status || 'Fresh',
               follow_up_date: v.follow_up_date ? v.follow_up_date.toISOString() : null,
               notes: v.notes || null,
@@ -1554,10 +1577,19 @@ const LeadsPageEnhanced = () => {
           </Row>
           <Row gutter={16}>
             <Col span={12}>
+              <Form.Item name="company" label="Company">
+                <Select placeholder="Select company" allowClear>
+                  {COMPANY_OPTIONS.map(c => <Option key={c} value={c}>{c}</Option>)}
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={12}>
               <Form.Item name="status" label="Status" initialValue="Fresh">
                 <Select>{STATUS_OPTIONS.map(s => <Option key={s} value={s}>{s}</Option>)}</Select>
               </Form.Item>
             </Col>
+          </Row>
+          <Row gutter={16}>
             <Col span={12}>
               <Form.Item name="follow_up_date" label="Follow-up Date & Time">
                 <DatePicker

@@ -15,8 +15,7 @@ import {
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { TableSkeleton } from '../../components/ui/Skeletons';
-
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+import api from '../../api/api';
 
 const AuditLogs = () => {
   const [filters, setFilters] = useState({
@@ -31,27 +30,21 @@ const AuditLogs = () => {
   const [page, setPage] = useState(1);
   const limit = 50;
 
-  // Fetch audit logs
+  // Fetch audit logs via centralized axios (handles 401 redirect automatically)
   const { data, isLoading } = useQuery({
     queryKey: ['audit-logs', filters, page],
     queryFn: async () => {
-      const params = new URLSearchParams();
-      if (filters.user) params.append('user', filters.user);
-      if (filters.action) params.append('action', filters.action);
-      if (filters.entityType) params.append('entityType', filters.entityType);
-      if (filters.dateFrom) params.append('from', filters.dateFrom);
-      if (filters.dateTo) params.append('to', filters.dateTo);
-      if (filters.search) params.append('search', filters.search);
-      params.append('page', page);
-      params.append('limit', limit);
-      
-      const response = await fetch(`${API_BASE_URL}/api/audit-logs?${params}`, {
-        headers: {
-          'Authorization': `Bearer ${JSON.parse(localStorage.getItem('user') || '{}')?.token}`,
-        },
-      });
-      if (!response.ok) throw new Error('Failed to fetch audit logs');
-      return response.json();
+      const params = {};
+      if (filters.user) params.user = filters.user;
+      if (filters.action) params.action = filters.action;
+      if (filters.entityType) params.entityType = filters.entityType;
+      if (filters.dateFrom) params.from = filters.dateFrom;
+      if (filters.dateTo) params.to = filters.dateTo;
+      if (filters.search) params.search = filters.search;
+      params.page = page;
+      params.limit = limit;
+      const res = await api.get('/api/audit-logs', { params });
+      return res.data;
     },
     staleTime: 60 * 1000, // 1 minute
   });

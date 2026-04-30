@@ -60,16 +60,33 @@ export const leadsAPI = {
   update: (leadId, data) => api.put(`/api/leads/${leadId}`, data),
   delete: (leadId) => api.delete(`/api/leads/${leadId}`),
   bulkUpdate: (leadIds, updates) => api.post('/api/leads/bulk-update', { lead_ids: leadIds, updates }),
-  
+
   // Notes
   getNotes: (leadId) => api.get(`/api/leads/${leadId}/notes`),
   addNote: (leadId, data) => api.post(`/api/leads/${leadId}/notes`, data),
-  
+
+  // Activities timeline
+  getActivities: (leadId, type) =>
+    api.get(`/api/leads/${leadId}/activities`, type ? { params: { type } } : {}),
+
+  // AI summary
+  getAiSummary: (leadId) => api.get(`/api/leads/${leadId}/ai-summary`),
+
   // Communication
   sendWhatsApp: (leadId, message) => api.post(`/api/leads/${leadId}/send-whatsapp`, { message }),
   sendEmail: (leadId, subject, body) => api.post(`/api/leads/${leadId}/send-email`, { subject, body }),
 
-  // Live Chat
+  // Automation sequences
+  triggerWelcome: (leadId) => api.post(`/api/leads/${leadId}/trigger-welcome`),
+  triggerFollowup: (leadId, data) => api.post(`/api/leads/${leadId}/trigger-followup`, data),
+
+  // Assignment
+  assign: (leadId, counselorName) => api.post(`/api/leads/${leadId}/assign`, { counselor_name: counselorName }),
+  reassign: (leadId, counselorName, reason) =>
+    api.post(`/api/leads/${leadId}/reassign`, { counselor_name: counselorName, reason }),
+  assignAll: () => api.post('/api/leads/assign-all'),
+
+  // Live Chat (WhatsApp)
   getChatMessages: (leadId) => api.get(`/api/leads/${leadId}/chat`),
   sendChatMessage: (leadId, data) => api.post(`/api/leads/${leadId}/chat`, data),
 };
@@ -117,6 +134,7 @@ export const coursesAPI = {
 export const counselorsAPI = {
   getAll: () => api.get('/api/counselors'),
   getPerformance: () => api.get('/api/counselors/performance'),
+  getWorkload: () => api.get('/api/counselors/workload'),
 };
 
 // Users API
@@ -155,6 +173,23 @@ export const notificationActionsAPI = {
 // AI Search API
 export const aiSearchAPI = {
   search: (query) => api.post('/api/ai/search', { query }),
+};
+
+// Full AI Features API
+export const aiAPI = {
+  search: (query) => api.post('/api/ai/search', { query }),
+  status: () => api.get('/api/ai/status'),
+  smartReply: (leadId, context) => api.post(`/api/ai/smart-reply/${leadId}`, { context }),
+  summarizeNotes: (leadId) => api.get(`/api/ai/summarize-notes/${leadId}`),
+  nextAction: (leadId) => api.get(`/api/ai/next-action/${leadId}`),
+  conversionBarriers: (leadId) => api.get(`/api/ai/conversion-barriers/${leadId}`),
+  recommendCourse: (leadId, budget) =>
+    api.post(`/api/ai/recommend-course/${leadId}`, budget ? { budget } : {}),
+};
+
+// ML Model API
+export const mlAPI = {
+  getModelInfo: () => api.get('/api/ml/model-info'),
 };
 
 // Source Attribution API
@@ -207,6 +242,39 @@ export const waTemplatesAPI = {
   update:      (id, data) => api.put(`/api/wa-templates/${id}`, data),
   delete:      (id)       => api.delete(`/api/wa-templates/${id}`),
   send:        (leadId, payload) => api.post(`/api/leads/${leadId}/send-wa-template`, payload),
+};
+
+// Communication History API
+export const communicationAPI = {
+  getHistory:   (leadId)  => api.get(`/api/communications/${leadId}/history`),
+  sendWhatsApp: (data)    => api.post('/api/communications/whatsapp/send', data),
+  sendEmail:    (data)    => api.post('/api/communications/email/send', data),
+  getTrainingData: ()     => api.get('/api/communications/training-data'),
+  markTraining: (id, data) => api.post(`/api/communications/mark-training`, { id, ...data }),
+};
+
+// Audit Logs API
+export const auditLogsAPI = {
+  getLogs: (params) => api.get('/api/audit-logs', { params }),
+};
+
+// Workflows API
+export const workflowsAPI = {
+  trigger: (data) => api.post('/api/workflows/trigger', data),
+};
+
+// Cache Management API (admin use)
+export const cacheAPI = {
+  getStats: () => api.get('/api/cache/stats'),
+  clear:    () => api.post('/api/cache/clear'),
+};
+
+// Health / System API
+export const systemAPI = {
+  health:     () => api.get('/health'),
+  ready:      () => api.get('/ready'),
+  aiStatus:   () => api.get('/api/ai/status'),
+  mlModelInfo:() => api.get('/api/ml/model-info'),
 };
 
 

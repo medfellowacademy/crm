@@ -14,36 +14,26 @@ import {
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+import api from '../../api/api';
 
 const CounsellorDashboard = ({ user }) => {
-  // Fetch counsellor's personal stats
+  // Fetch counsellor's personal stats via centralized axios
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['counsellor-stats', user.id],
     queryFn: async () => {
-      const response = await fetch(`${API_BASE_URL}/api/users/${user.id}/stats`, {
-        headers: {
-          'Authorization': `Bearer ${JSON.parse(localStorage.getItem('user') || '{}')?.token}`,
-        },
-      });
-      if (!response.ok) throw new Error('Failed to fetch stats');
-      return response.json();
+      const res = await api.get(`/api/users/${user.id}/stats`);
+      return res.data;
     },
   });
 
-  // Fetch today's follow-ups
+  // Fetch today's follow-ups — backend filters by assigned_to (counselor name)
   const { data: followUps = [], isLoading: followUpsLoading } = useQuery({
     queryKey: ['today-followups', user.id],
     queryFn: async () => {
-      const response = await fetch(`${API_BASE_URL}/api/leads/followups/today?userId=${user.id}`, {
-        headers: {
-          'Authorization': `Bearer ${JSON.parse(localStorage.getItem('user') || '{}')?.token}`,
-        },
-      });
-      if (!response.ok) throw new Error('Failed to fetch follow-ups');
-      const data = await response.json();
-      return Array.isArray(data) ? data : [];
+      const name = user.full_name || user.name || '';
+      const res = await api.get('/api/leads/followups/today', name ? { params: { assigned_to: name } } : {});
+      const data = res.data;
+      return Array.isArray(data) ? data : (Array.isArray(data?.leads) ? data.leads : []);
     },
   });
 
@@ -51,14 +41,8 @@ const CounsellorDashboard = ({ user }) => {
   const { data: performanceTrend = [] } = useQuery({
     queryKey: ['performance-trend', user.id],
     queryFn: async () => {
-      const response = await fetch(`${API_BASE_URL}/api/users/${user.id}/performance?days=7`, {
-        headers: {
-          'Authorization': `Bearer ${JSON.parse(localStorage.getItem('user') || '{}')?.token}`,
-        },
-      });
-      if (!response.ok) throw new Error('Failed to fetch performance');
-      const data = await response.json();
-      return Array.isArray(data) ? data : [];
+      const res = await api.get(`/api/users/${user.id}/performance`, { params: { days: 7 } });
+      return Array.isArray(res.data) ? res.data : [];
     },
   });
 

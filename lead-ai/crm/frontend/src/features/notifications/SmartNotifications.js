@@ -15,47 +15,41 @@ import {
 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { isFeatureEnabled } from '../../config/featureFlags';
-
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+import api from '../../api/api';
 
 const SmartNotifications = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [filter, setFilter] = useState('all'); // all, unread, priority
   const queryClient = useQueryClient();
 
-  // Fetch notifications
+  // Fetch notifications via centralized axios (handles 401 redirect automatically)
   const { data: notifications = [], isLoading } = useQuery({
     queryKey: ['notifications', filter],
     queryFn: async () => {
-      const params = new URLSearchParams();
-      if (filter === 'unread') params.append('read', 'false');
-      if (filter === 'priority') params.append('priority', 'high');
-      
-      const response = await fetch(`${API_BASE_URL}/api/notifications?${params}`, {
-        headers: {
-          'Authorization': `Bearer ${JSON.parse(localStorage.getItem('user') || '{}')?.token}`,
-        },
-      });
-      if (!response.ok) throw new Error('Failed to fetch notifications');
-      return response.json();
+      const params = {};
+      if (filter === 'unread') params.read = 'false';
+      if (filter === 'priority') params.priority = 'high';
+      const res = await api.get('/api/notifications', { params });
+      return res.data;
     },
-    staleTime: 30 * 1000, // 30 seconds
-    refetchInterval: isFeatureEnabled('WEBSOCKET_NOTIFICATIONS') ? false : 60 * 1000, // Poll every minute if WebSocket disabled
+    staleTime: 30 * 1000,
+    refetchInterval: isFeatureEnabled('WEBSOCKET_NOTIFICATIONS') ? false : 60 * 1000,
   });
 
-  // WebSocket connection (if enabled)
+  // WebSocket connection (if enabled) — reads token from localStorage directly for WS handshake
   useEffect(() => {
     if (!isFeatureEnabled('WEBSOCKET_NOTIFICATIONS')) return;
 
-    const wsUrl = API_BASE_URL.replace('https://', 'wss://').replace('http://', 'ws://');
-    const ws = new WebSocket(`${wsUrl}/ws/notifications?token=${JSON.parse(localStorage.getItem('user') || '{}')?.token}`);
-    
+    const base = (process.env.REACT_APP_API_URL || 'https://medfellow-crm-api.onrender.com')
+      .replace('https://', 'wss://')
+      .replace('http://', 'ws://');
+    const token = JSON.parse(localStorage.getItem('user') || '{}')?.token;
+    const ws = new WebSocket(`${base}/ws/notifications?token=${token}`);
+
     ws.onmessage = (event) => {
-      const notification = JSON.parse(event.data);
       queryClient.invalidateQueries({ queryKey: ['notifications'] });
-      
-      // Show browser notification
       if ('Notification' in window && Notification.permission === 'granted') {
+        const notification = JSON.parse(event.data);
         new Notification(notification.title, {
           body: notification.description,
           icon: '/logo192.png',
@@ -69,14 +63,8 @@ const SmartNotifications = () => {
   // Mark as read mutation
   const markAsReadMutation = useMutation({
     mutationFn: async (notificationId) => {
-      const response = await fetch(`${API_BASE_URL}/api/notifications/${notificationId}/read`, {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${JSON.parse(localStorage.getItem('user') || '{}')?.token}`,
-        },
-      });
-      if (!response.ok) throw new Error('Failed to mark as read');
-      return response.json();
+      const res = await api.patch(`/api/notifications/${notificationId}/read`);
+      return res.data;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['notifications'] });
@@ -86,16 +74,8 @@ const SmartNotifications = () => {
   // Snooze mutation
   const snoozeMutation = useMutation({
     mutationFn: async ({ notificationId, hours }) => {
-      const response = await fetch(`${API_BASE_URL}/api/notifications/${notificationId}/snooze`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${JSON.parse(localStorage.getItem('user') || '{}')?.token}`,
-        },
-        body: JSON.stringify({ hours }),
-      });
-      if (!response.ok) throw new Error('Failed to snooze');
-      return response.json();
+      const res = await api.patch(`/api/notifications/${notificationId}/snooze`, { hours });
+      return res.data;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['notifications'] });
@@ -105,14 +85,8 @@ const SmartNotifications = () => {
   // Mark all as read
   const markAllAsReadMutation = useMutation({
     mutationFn: async () => {
-      const response = await fetch(`${API_BASE_URL}/api/notifications/read-all`, {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${JSON.parse(localStorage.getItem('user') || '{}')?.token}`,
-        },
-      });
-      if (!response.ok) throw new Error('Failed to mark all as read');
-      return response.json();
+      const res = await api.post('/api/notifications/read-all');
+      return res.data;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['notifications'] });
