@@ -710,6 +710,7 @@ class LeadCreate(BaseModel):
     country: str
     source: str
     course_interested: str
+    status: Optional[LeadStatus] = LeadStatus.FRESH  # Allow custom status, default to Fresh
     assigned_to: Optional[str] = None
     notes: Optional[str] = None  # Initial note content for imports
 
@@ -1397,7 +1398,7 @@ async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks):
         source=lead.source,
         course_interested=lead.course_interested,
         assigned_to=lead.assigned_to,
-        status=LeadStatus.FRESH
+        status=lead.status or LeadStatus.FRESH  # Use user's selection or default to Fresh
     )
 
     # AI scoring (load prices from Supabase)
