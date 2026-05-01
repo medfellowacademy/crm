@@ -440,14 +440,16 @@ const LeadsPageEnhanced = () => {
         { queryKey: ['leads'], exact: false },
         (old) => {
           if (!old?.leads) return old;
-          return {
-            ...old,
-            leads: old.leads.map(l =>
-              l.lead_id === leadId
-                ? { ...l, ...changedFields, updated_at: now }
-                : l
-            ),
-          };
+          const patched = old.leads.map(l =>
+            l.lead_id === leadId
+              ? { ...l, ...changedFields, updated_at: now }
+              : l
+          );
+          // Re-sort: most recently updated lead floats to the top
+          patched.sort((a, b) =>
+            new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at)
+          );
+          return { ...old, leads: patched };
         }
       );
       // Then trigger a full background refetch for accuracy
@@ -1142,11 +1144,14 @@ const LeadsPageEnhanced = () => {
       width: 140,
       sorter: (a, b) => new Date(a.created_at) - new Date(b.created_at),
       ...makeDateFilter('created_at'),
-      render: (d) => (
-        <Tooltip title={dayjs(d).format('YYYY-MM-DD HH:mm')}>
-          <Text type="secondary">{dayjs(d).fromNow()}</Text>
-        </Tooltip>
-      ),
+      render: (d) => {
+        const parsed = parseDate(d);
+        return (
+          <Tooltip title={parsed ? parsed.format('DD MMM YYYY, hh:mm A') : '—'}>
+            <Text type="secondary">{parsed ? parsed.fromNow() : '—'}</Text>
+          </Tooltip>
+        );
+      },
     },
     {
       title: 'Last Updated',
@@ -1157,9 +1162,10 @@ const LeadsPageEnhanced = () => {
       ...makeDateFilter('updated_at'),
       render: (d, r) => {
         const date = d || r.created_at;
+        const parsed = parseDate(date);
         return (
-          <Tooltip title={dayjs(date).format('YYYY-MM-DD HH:mm')}>
-            <Text type="secondary">{dayjs(date).fromNow()}</Text>
+          <Tooltip title={parsed ? parsed.format('DD MMM YYYY, hh:mm A') : '—'}>
+            <Text type="secondary">{parsed ? parsed.fromNow() : '—'}</Text>
           </Tooltip>
         );
       },

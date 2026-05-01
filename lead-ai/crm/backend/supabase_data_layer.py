@@ -226,7 +226,7 @@ class SupabaseDataLayer:
             elif updated_before:
                 q = q.lt('updated_at', updated_before)
             effective_limit = min(limit, 1000)
-            q = q.order('ai_score', desc=True, nullsfirst=False).order('created_at', desc=True)
+            q = q.order('updated_at', desc=True, nullsfirst=False).order('created_at', desc=True)
             if skip > 0:
                 q = q.range(skip, skip + effective_limit - 1)
             else:
