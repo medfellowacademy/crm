@@ -1299,7 +1299,7 @@ const LeadsPageEnhanced = () => {
               <Button icon={<ExportOutlined />} loading={isExporting}>Export</Button>
             </Dropdown>
             <Button icon={<ReloadOutlined />} onClick={() => refetch()} />
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => { form.resetFields(); setDrawerVisible(true); }}>Add Lead</Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => { form.resetFields(); form.setFieldsValue({ assigned_to: authUser?.full_name || null }); setDrawerVisible(true); }}>Add Lead</Button>
           </Space>
         }
       >
@@ -1399,7 +1399,7 @@ const LeadsPageEnhanced = () => {
             },
             showQuickJumper: true,
           }}
-          locale={{ emptyText: <Empty description="No leads found"><Button type="primary" icon={<PlusOutlined />} onClick={() => setDrawerVisible(true)}>Add First Lead</Button></Empty> }}
+          locale={{ emptyText: <Empty description="No leads found"><Button type="primary" icon={<PlusOutlined />} onClick={() => { form.resetFields(); form.setFieldsValue({ assigned_to: authUser?.full_name || null }); setDrawerVisible(true); }}>Add First Lead</Button></Empty> }}
           rowClassName={r => r.follow_up_date && parseDate(r.follow_up_date).isBefore(dayjs(), 'day') ? 'overdue-row' : ''}
         />
       </Card>
@@ -1622,7 +1622,8 @@ const LeadsPageEnhanced = () => {
               country: v.country,
               source: v.source || 'Direct',
               course_interested: v.course_interested,
-              assigned_to: v.assigned_to || null,
+              // Always default to the logged-in user's name if not explicitly assigned
+              assigned_to: v.assigned_to || authUser?.full_name || null,
               qualification: v.qualification || null,
               company: v.company || null,
               status: v.status || 'Fresh',
