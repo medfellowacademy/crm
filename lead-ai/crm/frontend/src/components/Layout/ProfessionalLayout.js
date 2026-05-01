@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
@@ -28,7 +28,7 @@ import {
 } from 'lucide-react';
 import SmartNotifications from '../../features/notifications/SmartNotifications';
 import { isFeatureEnabled } from '../../config/featureFlags';
-import { authAPI, aiSearchAPI, leadsAPI, usersAPI, dashboardAPI, coursesAPI } from '../../api/api';
+import { authAPI, aiSearchAPI, leadsAPI, usersAPI, dashboardAPI, coursesAPI, systemAPI } from '../../api/api';
 import { hasPermission, ROLES } from '../../config/rbac';
 
 
@@ -159,6 +159,18 @@ const ProfessionalLayout = ({ children }) => {
   const initials = currentUser.full_name
     ? currentUser.full_name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()
     : 'U';
+
+  // ── Keep the Render backend warm while any user has the app open ──────────
+  // Render free tier spins down after 15 min of inactivity.
+  // Ping /health every 4 minutes so the server never cold-starts mid-session.
+  useEffect(() => {
+    // Immediate ping on mount so the server wakes up as soon as user logs in
+    systemAPI.health().catch(() => {});
+    const id = setInterval(() => {
+      systemAPI.health().catch(() => {});
+    }, 4 * 60 * 1000); // every 4 minutes
+    return () => clearInterval(id);
+  }, []);
 
   const handleLogout = () => {
     authAPI.logout();

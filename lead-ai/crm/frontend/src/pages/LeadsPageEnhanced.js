@@ -145,6 +145,17 @@ const parseSpreadsheet = (data, isBinary) => {
 
 const REQUIRED_COLS = ['full_name', 'phone'];
 const STATUS_OPTIONS = ['Fresh', 'Follow Up', 'Warm', 'Hot', 'Not Interested', 'Not Answering', 'Enrolled', 'Junk'];
+
+// Auto-retry countdown shown when the server times out (cold-start)
+const AutoRetryCountdown = ({ onRetry, seconds = 15 }) => {
+  const [count, setCount] = React.useState(seconds);
+  React.useEffect(() => {
+    if (count <= 0) { onRetry(); return; }
+    const t = setTimeout(() => setCount(c => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [count, onRetry]);
+  return <span style={{ fontSize: 12, color: '#d97706' }}>Auto-retry in {count}s</span>;
+};
 const SOURCE_OPTIONS = ['Website', 'Instagram', 'Facebook', 'Referral', 'WhatsApp'];
 
 // Map any import alias → canonical source name.
@@ -1298,20 +1309,25 @@ const LeadsPageEnhanced = () => {
             style={{ marginBottom: 16 }}
             message={
               error?.code === 'ECONNABORTED' || error?.message?.includes('timeout')
-                ? '⏳ Server is starting up…'
+                ? '⏳ Server is waking up — please wait a moment'
                 : 'Failed to load leads'
             }
             description={
               error?.code === 'ECONNABORTED' || error?.message?.includes('timeout')
-                ? 'The API server on Render is waking up from sleep (free tier cold-start). This takes up to 60 seconds. Click Retry in a moment.'
+                ? 'The backend server on Render went to sleep due to inactivity. It takes about 30–60 seconds to restart. Click Retry or wait — it will auto-retry in 15 seconds.'
                 : error?.message || 'An error occurred while fetching leads. Please try again.'
             }
-            type={error?.code === 'ECONNABORTED' ? 'warning' : 'error'}
+            type={error?.code === 'ECONNABORTED' || error?.message?.includes('timeout') ? 'warning' : 'error'}
             showIcon
             action={
-              <Button size="small" type="primary" onClick={() => refetch()}>
-                Retry
-              </Button>
+              <Space>
+                <Button size="small" type="primary" onClick={() => refetch()}>
+                  Retry Now
+                </Button>
+                {(error?.code === 'ECONNABORTED' || error?.message?.includes('timeout')) && (
+                  <AutoRetryCountdown onRetry={refetch} seconds={15} />
+                )}
+              </Space>
             }
             closable
           />
@@ -1355,7 +1371,7 @@ const LeadsPageEnhanced = () => {
           dataSource={filteredLeads}
           loading={{
             spinning: isLoading || isFetching,
-            tip: isLoading ? 'Loading leads… (server may be waking up)' : 'Refreshing…',
+            tip: isLoading ? '⏳ Loading leads… (if slow, server is waking up — takes ~30s)' : 'Refreshing…',
           }}
           rowKey="lead_id"
           scroll={{ x: 1800 }}
