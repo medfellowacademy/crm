@@ -716,27 +716,54 @@ class NoteResponse(BaseModel):
 # Old imports / DB rows may have ALL-CAPS values ("FRESH", "HOT", etc.).
 # This map converts any casing variant to the canonical enum value.
 _STATUS_NORMALISE_MAP: dict[str, str] = {
+    # Fresh
     "fresh": "Fresh",
+    # Follow Up
     "follow up": "Follow Up",
     "followup": "Follow Up",
     "follow_up": "Follow Up",
+    "follow-up": "Follow Up",
+    # Warm
     "warm": "Warm",
+    # Hot
     "hot": "Hot",
+    # Not Interested
     "not interested": "Not Interested",
     "not_interested": "Not Interested",
     "notinterested": "Not Interested",
+    "ni": "Not Interested",
+    # Junk
     "junk": "Junk",
+    "spam": "Junk",
+    "invalid": "Junk",
+    # Not Answering
     "not answering": "Not Answering",
     "not_answering": "Not Answering",
     "notanswering": "Not Answering",
+    "na": "Not Answering",
+    "no answer": "Not Answering",
+    "not connected": "Not Answering",
+    "switched off": "Not Answering",
+    "busy": "Not Answering",
+    # Enrolled
     "enrolled": "Enrolled",
+    "admission done": "Enrolled",
+    "converted": "Enrolled",
 }
+
+# Valid enum values set for fast lookup
+_VALID_STATUSES = {"Fresh", "Follow Up", "Warm", "Hot", "Not Interested", "Junk", "Not Answering", "Enrolled"}
 
 def _normalise_status(v):
     if not v:
         return v
-    key = str(v).lower().strip()
-    return _STATUS_NORMALISE_MAP.get(key, v)
+    raw = str(v).strip()
+    # Already a valid status (handles correct casing straight from files)
+    if raw in _VALID_STATUSES:
+        return raw
+    key = raw.lower()
+    # Return mapped canonical value, or default to "Fresh" for anything unrecognised
+    return _STATUS_NORMALISE_MAP.get(key, "Fresh")
 
 
 # Canonical source values and their import aliases

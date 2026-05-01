@@ -815,7 +815,7 @@ const LeadsPageEnhanced = () => {
 
   // ── Download template ──────────────────────────────────────────────────────
   const downloadTemplate = () => {
-    const csv = 'full_name,email,phone,whatsapp,country,source,course_interested,qualification,status,assigned_to,expected_revenue\nJohn Doe,john@email.com,+919876543210,+919876543210,India,Website,MBBS MD,MBBS,Fresh,,150000';
+    const csv = 'full_name,email,phone,whatsapp,country,source,course_interested,qualification,company,status,assigned_to,expected_revenue\nJohn Doe,john@email.com,+919876543210,+919876543210,India,Website,MBBS MD,MBBS,MED,Fresh,,150000';
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
     a.download = 'leads_import_template.csv';
