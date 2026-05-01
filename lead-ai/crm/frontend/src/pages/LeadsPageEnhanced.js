@@ -324,7 +324,7 @@ const LeadsPageEnhanced = () => {
     }
 
     return params;
-  }, [filters, quickFilter, debouncedSearch, advFilters, currentPage, pageSize]);
+  }, [filters, quickFilter, debouncedSearch, advFilters, columnFilters, currentPage, pageSize]);
 
   const { data: leadsResponse = { leads: [], total: 0 }, isLoading, isFetching, refetch, error, isError } = useQuery({
     queryKey: ['leads', leadQueryParams],
