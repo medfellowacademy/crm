@@ -232,7 +232,29 @@ const LeadsPageEnhanced = () => {
   const [rawFileData, setRawFileData] = useState({ columns: [], rows: [] });
   const [fieldMapping, setFieldMapping] = useState({});
   const [filters, setFilters] = useState({});
-  const [columnFilters, setColumnFilters] = useState({});  // server-side column filter params
+  // Raw Ant Design table filter state — controlled so filters survive column recreation
+  const [tableFilterState, setTableFilterState] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem('leadsEnhanced_tableFilterState');
+      return saved ? JSON.parse(saved) : {};
+    } catch { return {}; }
+  });
+  // Derive server-side column filter params from saved tableFilterState on init
+  const [columnFilters, setColumnFilters] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem('leadsEnhanced_tableFilterState');
+      if (!saved) return {};
+      const tf = JSON.parse(saved);
+      const cf = {};
+      if (tf.country?.length)     cf.country_in        = tf.country.join(',');
+      if (tf.course?.length)      cf.course_interested = tf.course.join(',');
+      if (tf.source?.length)      cf.source            = tf.source.join(',');
+      if (tf.company?.length)     cf.company           = tf.company.join(',');
+      if (tf.status?.length)      cf.status_in         = tf.status.join(',');
+      if (tf.assigned_to?.length) cf.assigned_to_in    = tf.assigned_to.join(',');
+      return cf;
+    } catch { return {}; }
+  });
   const [searchText, setSearchText] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selectedRows, setSelectedRows] = useState([]);
@@ -385,20 +407,20 @@ const LeadsPageEnhanced = () => {
   // ── Computed filter options (memoized for performance) ────────────────────
   const uniqueStatuses   = STATUS_OPTIONS;
   const uniqueCountries  = useMemo(() => 
-    [...new Set(leads.map(l => l.country))].filter(Boolean).sort(),
+    [...new Set((leads || []).map(l => l.country))].filter(Boolean).sort(),
     [leads]
   );
   const uniqueCourses    = useMemo(() => 
     [...new Set([
-      ...courses.map(c => c.course_name),
-      ...leads.map(l => l.course_interested),
+      ...(courses || []).map(c => c.course_name),
+      ...(leads || []).map(l => l.course_interested),
     ])].filter(Boolean).sort(),
     [courses, leads]
   );
   const uniqueAssigned   = useMemo(() => 
     isCounselor
       ? (authUser?.full_name ? [authUser.full_name] : [])
-      : [...new Set(leads.map(l => l.assigned_to))].filter(Boolean).sort(),
+      : [...new Set((leads || []).map(l => l.assigned_to))].filter(Boolean).sort(),
     [leads, isCounselor, authUser]
   );
   // Always show exactly the 5 canonical source options in filters —
@@ -493,6 +515,10 @@ const LeadsPageEnhanced = () => {
   // them to server-side query params. This makes ALL column filters accurate
   // across pages, not just the current page.
   const handleTableChange = useCallback((_pagination, tableFilters) => {
+    // Persist raw Ant Design filter state so filteredValue bindings stay sticky
+    setTableFilterState(tableFilters);
+    try { sessionStorage.setItem('leadsEnhanced_tableFilterState', JSON.stringify(tableFilters)); } catch {}
+
     const cf = {};
     if (tableFilters.country?.length)     cf.country_in        = tableFilters.country.join(',');
     if (tableFilters.course?.length)      cf.course_interested = tableFilters.course.join(',');
@@ -522,9 +548,9 @@ const LeadsPageEnhanced = () => {
         cf[toKey]   = dayjs(range[1]).endOf('day').toISOString();
       }
     };
-    parseColDate(tableFilters.follow_up,   'follow_up_from',  'follow_up_to');
-    parseColDate(tableFilters.created_at,  'created_from',    'created_to');
-    parseColDate(tableFilters.updated_at,  'updated_from',    'updated_to');
+    parseColDate(tableFilters.follow_up_date, 'follow_up_from', 'follow_up_to');
+    parseColDate(tableFilters.created_at,     'created_from',   'created_to');
+    parseColDate(tableFilters.updated_at,     'updated_from',   'updated_to');
     setColumnFilters(cf);
   }, []);
 
@@ -855,6 +881,7 @@ const LeadsPageEnhanced = () => {
       key: 'lead_info',
       fixed: 'left',
       width: 240,
+      filteredValue: tableFilterState.lead_info || null,
       filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }) => (
         <div style={{ padding: 8 }}>
           <Input placeholder="Search name / phone" value={selectedKeys[0]} onChange={e => setSelectedKeys([e.target.value])}
@@ -942,6 +969,7 @@ const LeadsPageEnhanced = () => {
       dataIndex: 'country',
       key: 'country',
       width: 150,
+      filteredValue: tableFilterState.country || null,
       filters: uniqueCountries.map(c => ({ text: c, value: c })),
       render: (c, r) => (
         <Select
@@ -963,6 +991,7 @@ const LeadsPageEnhanced = () => {
       dataIndex: 'course_interested',
       key: 'course',
       width: 200,
+      filteredValue: tableFilterState.course || null,
       filters: uniqueCourses.map(c => ({ text: c, value: c })),
       render: (c, r) => (
         <Select
@@ -984,6 +1013,7 @@ const LeadsPageEnhanced = () => {
       dataIndex: 'source',
       key: 'source',
       width: 140,
+      filteredValue: tableFilterState.source || null,
       filters: uniqueSources.map(s => ({ text: s, value: s })),
       render: (s, r) => (
         <Select
@@ -1003,6 +1033,7 @@ const LeadsPageEnhanced = () => {
       dataIndex: 'company',
       key: 'company',
       width: 120,
+      filteredValue: tableFilterState.company || null,
       filters: COMPANY_OPTIONS.map(c => ({ text: c, value: c })),
       render: (c, r) => (
         <Select
@@ -1022,6 +1053,7 @@ const LeadsPageEnhanced = () => {
       dataIndex: 'status',
       key: 'status',
       width: 160,
+      filteredValue: tableFilterState.status || null,
       filters: uniqueStatuses.map(s => ({ text: s, value: s })),
       render: (s, r) => (
         <Select
@@ -1056,14 +1088,16 @@ const LeadsPageEnhanced = () => {
       dataIndex: 'assigned_to',
       key: 'assigned_to',
       width: 160,
+      filteredValue: tableFilterState.assigned_to || null,
       filters: [{ text: 'Unassigned', value: '__none__' }, ...uniqueAssigned.map(u => ({ text: u, value: u }))],
       render: (val, r) => (
         <Select value={val || undefined} placeholder="Assign..." size="small" style={{ width: '100%' }} allowClear
           disabled={isCounselor}
+          loading={!isCounselor && (!users || users.length === 0)}
           onChange={v => inlineUpdate(r.lead_id, 'assigned_to', v || null)}
           options={isCounselor
             ? (authUser?.full_name ? [{ label: authUser.full_name, value: authUser.full_name }] : [])
-            : users.map(u => ({ label: u.full_name, value: u.full_name }))} />
+            : (users || []).map(u => ({ label: u.full_name, value: u.full_name }))} />
       ),
     },
     {
@@ -1115,6 +1149,7 @@ const LeadsPageEnhanced = () => {
       dataIndex: 'follow_up_date',
       key: 'follow_up_date',
       width: 140,
+      filteredValue: tableFilterState.follow_up_date || null,
       sorter: (a, b) => new Date(a.follow_up_date || 0) - new Date(b.follow_up_date || 0),
       ...makeDateFilter('follow_up_date'),
       render: (date, r) => {
@@ -1153,6 +1188,7 @@ const LeadsPageEnhanced = () => {
       dataIndex: 'created_at',
       key: 'created_at',
       width: 140,
+      filteredValue: tableFilterState.created_at || null,
       sorter: (a, b) => new Date(a.created_at) - new Date(b.created_at),
       ...makeDateFilter('created_at'),
       render: (d) => {
@@ -1169,6 +1205,7 @@ const LeadsPageEnhanced = () => {
       dataIndex: 'updated_at',
       key: 'updated_at',
       width: 140,
+      filteredValue: tableFilterState.updated_at || null,
       sorter: (a, b) => new Date(a.updated_at || a.created_at) - new Date(b.updated_at || b.created_at),
       ...makeDateFilter('updated_at'),
       render: (d, r) => {
@@ -1203,7 +1240,7 @@ const LeadsPageEnhanced = () => {
         </Space>
       ),
     },
-  ], [uniqueCountries, uniqueCourses, uniqueSources, uniqueStatuses, uniqueAssigned, isCounselor, authUser, users, navigate, decayConfig, updateMutation, inlineUpdate, handleTableChange, getActionMenu, editingCell, setEditingCell, commitEdit, setEditingValue]);
+  ], [uniqueCountries, uniqueCourses, uniqueSources, uniqueStatuses, uniqueAssigned, isCounselor, authUser, users, navigate, decayConfig, updateMutation, inlineUpdate, handleTableChange, getActionMenu, editingCell, setEditingCell, commitEdit, setEditingValue, tableFilterState]);
 
   const activeAdvFilters = Object.values(advFilters).filter(v => v && (Array.isArray(v) ? v.length > 0 : true)).length;
 
@@ -1285,7 +1322,7 @@ const LeadsPageEnhanced = () => {
                   onClick={() => setFilterDrawerVisible(true)}>Filters</Button>
               </Badge>
             </Tooltip>
-            <Button icon={<SyncOutlined />} onClick={() => { setAdvFilters({}); setFilters({}); setSearchText(''); setQuickFilter('all'); message.success('Filters cleared'); }}>Clear</Button>
+            <Button icon={<SyncOutlined />} onClick={() => { setAdvFilters({}); setFilters({}); setSearchText(''); setQuickFilter('all'); setTableFilterState({}); setColumnFilters({}); try { sessionStorage.removeItem('leadsEnhanced_tableFilterState'); } catch {} message.success('Filters cleared'); }}>Clear</Button>
             <Button icon={<DownloadOutlined />} onClick={downloadTemplate}>Template</Button>
             <Button icon={<ImportOutlined />} onClick={() => { resetImport(); setImportVisible(true); }}>Import</Button>
             <Dropdown
@@ -1705,9 +1742,11 @@ const LeadsPageEnhanced = () => {
             <Col span={16}>
               <Form.Item name="course_interested" label="Course Interested" rules={[{ required: true }]}>
                 <Select placeholder="Select course" showSearch
-                  onChange={name => { const c = courses.find(c => c.course_name === name); if (c) { form.setFieldValue('expected_revenue', c.price); message.info(`Price ₹${(c.price/1000).toFixed(0)}K auto-filled`); } }}
+                  loading={!courses || courses.length === 0}
+                  notFoundContent={!courses || courses.length === 0 ? "Loading courses..." : "No courses found"}
+                  onChange={name => { const c = (courses || []).find(c => c.course_name === name); if (c) { form.setFieldValue('expected_revenue', c.price); message.info(`Price ₹${(c.price/1000).toFixed(0)}K auto-filled`); } }}
                   filterOption={(i, o) => o.children.toLowerCase().includes(i.toLowerCase())}>
-                  {courses.map(c => <Option key={c.id} value={c.course_name}>{c.course_name} — ₹{(c.price/1000).toFixed(0)}K</Option>)}
+                  {(courses || []).map(c => <Option key={c.id} value={c.course_name}>{c.course_name} — ₹{(c.price/1000).toFixed(0)}K</Option>)}
                 </Select>
               </Form.Item>
             </Col>
@@ -1765,10 +1804,12 @@ const LeadsPageEnhanced = () => {
           <Form.Item name="assigned_to" label="Assign To">
             <Select placeholder="Select counselor" allowClear showSearch
               disabled={isCounselor}
-              filterOption={(i, o) => o.label.toLowerCase().includes(i.toLowerCase())}
+              loading={!isCounselor && (!users || users.length === 0)}
+              notFoundContent={!users || users.length === 0 ? "Loading users..." : "No users found"}
+              filterOption={(i, o) => o?.label?.toLowerCase().includes(i.toLowerCase())}
               options={isCounselor
                 ? (authUser?.full_name ? [{ label: `${authUser.full_name} (Counselor)`, value: authUser.full_name }] : [])
-                : users.map(u => ({ label: `${u.full_name} (${u.role})`, value: u.full_name }))} />
+                : (users || []).map(u => ({ label: `${u.full_name} (${u.role})`, value: u.full_name }))} />
           </Form.Item>
           <Form.Item name="notes" label="Notes">
             <Input.TextArea rows={3} placeholder="Initial notes..." showCount maxLength={500} />
@@ -1828,7 +1869,9 @@ const LeadsPageEnhanced = () => {
           <Form.Item name="status" label="Status"><Select placeholder="Keep unchanged" allowClear>{STATUS_OPTIONS.map(s => <Option key={s} value={s}>{s}</Option>)}</Select></Form.Item>
           <Form.Item name="assigned_to" label="Assign To">
             <Select placeholder="Keep unchanged" allowClear showSearch
-              options={users.map(u => ({ label: `${u.full_name} (${u.role})`, value: u.full_name }))} />
+              loading={!users || users.length === 0}
+              notFoundContent={!users || users.length === 0 ? "Loading users..." : "No users found"}
+              options={(users || []).map(u => ({ label: `${u.full_name} (${u.role})`, value: u.full_name }))} />
           </Form.Item>
           <Form.Item name="follow_up_date" label="Follow-up Date & Time">
             <DatePicker
