@@ -255,11 +255,17 @@ const LeadsPageEnhanced = () => {
       return cf;
     } catch { return {}; }
   });
-  const [searchText, setSearchText] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [searchText, setSearchText] = useState(() => {
+    try { return sessionStorage.getItem('leadsEnhanced_searchText') || ''; } catch { return ''; }
+  });
+  const [debouncedSearch, setDebouncedSearch] = useState(() => {
+    try { return sessionStorage.getItem('leadsEnhanced_searchText') || ''; } catch { return ''; }
+  });
   const [selectedRows, setSelectedRows] = useState([]);
   const searchTimeoutRef = useRef(null);
-  const [quickFilter, setQuickFilter] = useState('all');
+  const [quickFilter, setQuickFilter] = useState(() => {
+    try { return sessionStorage.getItem('leadsEnhanced_quickFilter') || 'all'; } catch { return 'all'; }
+  });
   const [advFilters, setAdvFilters] = useState({});
   const [pageSize, setPageSize] = useState(50);
   const [currentPage, setCurrentPage] = useState(1);
@@ -316,6 +322,7 @@ const LeadsPageEnhanced = () => {
       limit: pageSize,
     };
 
+    if (quickFilter === 'fresh') params.status = 'Fresh';
     if (quickFilter === 'hot') params.status = 'Hot';
     if (quickFilter === 'warm') params.status = 'Warm';
     if (quickFilter === 'followup_today') {
@@ -1298,9 +1305,10 @@ const LeadsPageEnhanced = () => {
         }
         extra={
           <Space wrap>
-            <Segmented value={quickFilter} onChange={setQuickFilter}
+            <Segmented value={quickFilter} onChange={v => { setQuickFilter(v); try { sessionStorage.setItem('leadsEnhanced_quickFilter', v); } catch {} }}
               options={[
                 { label: 'All', value: 'all' },
+                { label: '🆕 Fresh', value: 'fresh' },
                 { label: '🔥 Hot', value: 'hot' },
                 { label: '⚡ Warm', value: 'warm' },
                 { label: '📅 Created Today', value: 'today' },
@@ -1312,7 +1320,7 @@ const LeadsPageEnhanced = () => {
               allowClear 
               style={{ width: 240 }}
               value={searchText}
-              onChange={e => setSearchText(e.target.value)} 
+              onChange={e => { setSearchText(e.target.value); try { sessionStorage.setItem('leadsEnhanced_searchText', e.target.value); } catch {} }} 
               prefix={<SearchOutlined />}
               suffix={searchText !== debouncedSearch && <SyncOutlined spin style={{ color: '#1890ff' }} />}
             />
@@ -1322,7 +1330,7 @@ const LeadsPageEnhanced = () => {
                   onClick={() => setFilterDrawerVisible(true)}>Filters</Button>
               </Badge>
             </Tooltip>
-            <Button icon={<SyncOutlined />} onClick={() => { setAdvFilters({}); setFilters({}); setSearchText(''); setQuickFilter('all'); setTableFilterState({}); setColumnFilters({}); try { sessionStorage.removeItem('leadsEnhanced_tableFilterState'); } catch {} message.success('Filters cleared'); }}>Clear</Button>
+            <Button icon={<SyncOutlined />} onClick={() => { setAdvFilters({}); setFilters({}); setSearchText(''); setQuickFilter('all'); setTableFilterState({}); setColumnFilters({}); try { sessionStorage.removeItem('leadsEnhanced_tableFilterState'); sessionStorage.removeItem('leadsEnhanced_quickFilter'); sessionStorage.removeItem('leadsEnhanced_searchText'); } catch {} message.success('Filters cleared'); }}>Clear</Button>
             <Button icon={<DownloadOutlined />} onClick={downloadTemplate}>Template</Button>
             <Button icon={<ImportOutlined />} onClick={() => { resetImport(); setImportVisible(true); }}>Import</Button>
             <Dropdown
