@@ -485,9 +485,9 @@ const LeadsPageEnhanced = () => {
               ? { ...l, ...changedFields, updated_at: now }
               : l
           );
-          // Re-sort: most recently updated lead floats to the top
+          // Keep recently updated leads at the end of the default queue.
           patched.sort((a, b) =>
-            new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at)
+            new Date(a.updated_at || a.created_at) - new Date(b.updated_at || b.created_at)
           );
           return { ...old, leads: patched };
         }
