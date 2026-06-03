@@ -422,6 +422,7 @@ class LeadStatus(str, enum.Enum):
     JUNK = "Junk"
     NOT_ANSWERING = "Not Answering"
     ENROLLED = "Enrolled"
+    WILL_ENROLL_LATER = "Will Enroll Later"
 
 class LeadSegment(str, enum.Enum):
     HOT = "Hot"
@@ -751,7 +752,7 @@ _STATUS_NORMALISE_MAP: dict[str, str] = {
 }
 
 # Valid enum values set for fast lookup
-_VALID_STATUSES = {"Fresh", "Follow Up", "Warm", "Hot", "Not Interested", "Junk", "Not Answering", "Enrolled"}
+_VALID_STATUSES = {"Fresh", "Follow Up", "Warm", "Hot", "Not Interested", "Junk", "Not Answering", "Enrolled", "Will Enroll Later"}
 
 def _normalise_status(v):
     if not v:
