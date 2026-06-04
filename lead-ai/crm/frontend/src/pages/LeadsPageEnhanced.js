@@ -341,7 +341,8 @@ const LeadsPageEnhanced = () => {
 
   // WhatsApp template drawer (for quick-send from table row)
   const [templateLead,    setTemplateLead]    = useState(null);
-  const [enrollmentLead,  setEnrollmentLead]  = useState(null); // lead being enrolled
+  const [enrollmentLead,  setEnrollmentLead]  = useState(null); // lead being enrolled (inline)
+  const [pendingFormData, setPendingFormData] = useState(null); // {leadData, isNew} waiting for enrollment
 
   // Inline cell editing — tracks which cell (leadId + field) is actively being edited
   const [editingCell,  setEditingCell]  = useState({});   // { leadId, field }
@@ -1754,6 +1755,14 @@ const LeadsPageEnhanced = () => {
               utm_campaign: v.utm_campaign || null,
             };
 
+            // If enrolling — show payment details modal first
+            if (leadData.status === 'Enrolled') {
+              setPendingFormData({ leadData, isNew, leadId: v.lead_id });
+              // Use a synthetic "lead" shape so EnrollmentModal can show the name
+              setEnrollmentLead({ full_name: leadData.full_name, _fromForm: true });
+              return;
+            }
+
             if (isNew) {
               try {
                 const res = await duplicatesAPI.check({
@@ -1767,7 +1776,7 @@ const LeadsPageEnhanced = () => {
                   setPendingLeadData(leadData);
                   setDupCandidates(dupes);
                   setDupModalOpen(true);
-                  return; // don't create yet — wait for user decision
+                  return;
                 }
               } catch {
                 // If duplicate-check fails, proceed with creation normally
@@ -2121,17 +2130,41 @@ const LeadsPageEnhanced = () => {
 
       <style>{`.overdue-row { background: #fff2f0 !important; }`}</style>
 
-      {/* Enrollment Modal — triggered when status set to Enrolled */}
+      {/* Enrollment Modal — triggered when status set to Enrolled (inline OR form) */}
       <EnrollmentModal
         open={!!enrollmentLead}
         lead={enrollmentLead}
-        loading={updateMutation.isPending}
-        onCancel={() => setEnrollmentLead(null)}
-        onSave={data => {
-          updateMutation.mutate(
-            { leadId: enrollmentLead.lead_id, data },
-            { onSuccess: () => { setEnrollmentLead(null); message.success('Lead enrolled successfully'); } }
-          );
+        loading={createMutation.isPending || updateMutation.isPending}
+        onCancel={() => { setEnrollmentLead(null); setPendingFormData(null); }}
+        onSave={enrollData => {
+          if (enrollmentLead?._fromForm && pendingFormData) {
+            // Came from the create/edit form — merge enrollment data into leadData
+            const mergedData = { ...pendingFormData.leadData, ...enrollData };
+            const { isNew, leadId } = pendingFormData;
+            if (isNew) {
+              createMutation.mutate(mergedData, {
+                onSuccess: () => {
+                  setEnrollmentLead(null); setPendingFormData(null);
+                  setDrawerVisible(false); form.resetFields();
+                  message.success('Lead created and enrolled');
+                },
+              });
+            } else {
+              updateMutation.mutate({ leadId, data: mergedData }, {
+                onSuccess: () => {
+                  setEnrollmentLead(null); setPendingFormData(null);
+                  setDrawerVisible(false); form.resetFields();
+                  message.success('Lead enrolled successfully');
+                },
+              });
+            }
+          } else {
+            // Came from inline status change
+            updateMutation.mutate(
+              { leadId: enrollmentLead.lead_id, data: enrollData },
+              { onSuccess: () => { setEnrollmentLead(null); message.success('Lead enrolled successfully'); } }
+            );
+          }
         }}
       />
 

@@ -23,24 +23,39 @@ dayjs.extend(isBetween);
 const { Text, Title } = Typography;
 const fmt = v => `₹${Number(v || 0).toLocaleString('en-IN')}`;
 
+// Safe JSON parse — emi_details / lms_modules may arrive as string from Supabase JSONB
+const safeParse = (val, fallback = []) => {
+  if (!val) return fallback;
+  if (Array.isArray(val)) return val;
+  try { return JSON.parse(val); } catch { return fallback; }
+};
+
+const LMS_STATUS_COLOR = {
+  'Not Started': 'default',
+  'Active':      'processing',
+  'On Hold':     'warning',
+  'Completed':   'success',
+};
+
 // ── EMI Status Badge ─────────────────────────────────────────────────────────
 const EmiStatus = ({ status }) => {
   const cfg = {
-    paid:    { color: 'success', icon: <CheckCircle size={12} />,  label: 'Paid' },
-    pending: { color: 'processing', icon: <Clock size={12} />,     label: 'Pending' },
-    overdue: { color: 'error',   icon: <AlertCircle size={12} />,  label: 'Overdue' },
-  }[status] || { color: 'default', icon: null, label: status };
+    paid:    { color: 'success',    label: 'Paid'    },
+    pending: { color: 'processing', label: 'Pending' },
+    overdue: { color: 'error',      label: 'Overdue' },
+  }[status] || { color: 'default', label: status || '—' };
   return <Badge status={cfg.color} text={cfg.label} />;
 };
 
 // ── Expanded Row ─────────────────────────────────────────────────────────────
 const ExpandedRow = ({ lead, onUpload, uploading }) => {
-  const emis    = Array.isArray(lead.emi_details) ? lead.emi_details : [];
-  const total   = lead.actual_revenue     || 0;
-  const reg     = lead.registration_fees  || 0;
-  const emiPaid = emis.filter(e => e.status === 'paid').reduce((s, e) => s + (Number(e.amount) || 0), 0);
-  const collected = reg + emiPaid;
-  const remaining = Math.max(0, total - collected);
+  const emis       = safeParse(lead.emi_details, []);
+  const lmsModules = safeParse(lead.lms_modules, []);
+  const total      = lead.actual_revenue    || 0;
+  const reg        = lead.registration_fees || 0;
+  const emiPaid    = emis.filter(e => e.status === 'paid').reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const collected  = reg + emiPaid;
+  const remaining  = Math.max(0, total - collected);
   const pct = total > 0 ? Math.round((collected / total) * 100) : 0;
 
   return (
@@ -123,7 +138,7 @@ const ExpandedRow = ({ lead, onUpload, uploading }) => {
             <Text type="secondary" style={{ display: 'block', fontSize: 12, marginBottom: 4 }}>
               Doctor Documents
             </Text>
-            {(Array.isArray(lead.documents) ? lead.documents : []).map((doc, i) => (
+            {safeParse(lead.documents, []).map((doc, i) => (
               <div key={i} style={{ marginBottom: 4 }}>
                 <Button size="small" icon={<EyeOutlined />} type="link"
                   href={doc.url} target="_blank">
@@ -140,6 +155,30 @@ const ExpandedRow = ({ lead, onUpload, uploading }) => {
             </Upload>
           </div>
         </Col>
+
+        {/* LMS Status & Modules */}
+        <Col xs={24} style={{ marginTop: 16 }}>
+          <Title level={5} style={{ marginBottom: 10 }}>LMS Access</Title>
+          <Space size={16} wrap>
+            <div>
+              <Text type="secondary" style={{ fontSize: 12 }}>LMS Status </Text>
+              <Badge
+                status={LMS_STATUS_COLOR[lead.lms_status] || 'default'}
+                text={lead.lms_status || 'Not Set'}
+              />
+            </div>
+            <div>
+              <Text type="secondary" style={{ fontSize: 12 }}>Modules Unlocked </Text>
+              {lmsModules.length === 0
+                ? <Text type="secondary">None</Text>
+                : lmsModules.map(m => (
+                    <Tag key={m} color="blue" style={{ marginBottom: 2 }}>{m}</Tag>
+                  ))
+              }
+            </div>
+          </Space>
+        </Col>
+
       </Row>
     </div>
   );
@@ -298,6 +337,28 @@ const PaymentsPage = () => {
       dataIndex: 'assigned_to',
       key: 'counselor',
       render: t => t || <Text type="secondary">Unassigned</Text>,
+    },
+    {
+      title: 'LMS Status',
+      dataIndex: 'lms_status',
+      key: 'lms_status',
+      render: v => v
+        ? <Badge status={LMS_STATUS_COLOR[v] || 'default'} text={v} />
+        : <Text type="secondary">—</Text>,
+    },
+    {
+      title: 'Modules',
+      dataIndex: 'lms_modules',
+      key: 'lms_modules',
+      render: v => {
+        const mods = safeParse(v, []);
+        if (!mods.length) return <Text type="secondary">—</Text>;
+        return (
+          <Space size={2} wrap>
+            {mods.map(m => <Tag key={m} color="blue" style={{ marginBottom: 0 }}>{m}</Tag>)}
+          </Space>
+        );
+      },
     },
     {
       title: '',

@@ -116,6 +116,8 @@ class SupabaseDataLayer:
             "lead_id,full_name,email,phone,whatsapp,country,source,"
             "course_interested,status,ai_score,ai_segment,"
             "conversion_probability,expected_revenue,actual_revenue,"
+            "registration_fees,emi_details,payment_receipt_url,documents,"
+            "lms_status,lms_modules,"
             "follow_up_date,assigned_to,created_at,updated_at,"
             "last_contact_date,buying_signal_strength,churn_risk,"
             "primary_objection,next_action,priority_level,"
@@ -408,7 +410,8 @@ class SupabaseDataLayer:
         # until the migration is run.  If Supabase complains about an unknown column,
         # drop that column and retry so the other fields are still saved.
         NEW_COLUMNS = {'company', 'qualification', 'utm_source', 'utm_medium', 'utm_campaign',
-                       'registration_fees', 'emi_details', 'payment_receipt_url', 'documents'}
+                       'registration_fees', 'emi_details', 'payment_receipt_url', 'documents',
+                       'lms_status', 'lms_modules'}
         try:
             response = self.client.table('leads').update(cleaned_data).eq('lead_id', lead_id).execute()
             return response.data[0] if response.data else None

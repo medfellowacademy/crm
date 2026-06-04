@@ -870,6 +870,8 @@ class LeadUpdate(BaseModel):
     emi_details: Optional[list] = None          # [{amount, date, status}]
     payment_receipt_url: Optional[str] = None
     documents: Optional[list] = None            # [{name, url, type, uploaded_at}]
+    lms_status: Optional[str] = None            # e.g. 'Not Started', 'Active', 'Completed'
+    lms_modules: Optional[list] = None          # ['M1', 'M2', ...]
     next_action: Optional[str] = None
     loss_reason: Optional[str] = None
     loss_note: Optional[str] = None
