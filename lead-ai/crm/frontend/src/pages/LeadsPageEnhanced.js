@@ -7,7 +7,7 @@ import {
   Dropdown, Segmented, Empty, Typography, Divider, Checkbox,
   Radio, InputNumber, Alert, Modal, Upload, Steps, Badge, AutoComplete,
 } from 'antd';
-import { COUNTRIES } from '../config/countries';
+import { COUNTRIES, COUNTRY_DIAL_CODES } from '../config/countries';
 import {
   PlusOutlined, SearchOutlined, FilterOutlined, WhatsAppOutlined,
   MailOutlined, EyeOutlined, DeleteOutlined, ReloadOutlined,
@@ -330,6 +330,9 @@ const LeadsPageEnhanced = () => {
   const [form] = Form.useForm();
   const [bulkForm] = Form.useForm();
   const fileInputRef = useRef(null);
+  // Watch country to show dial code in phone inputs
+  const formCountry = Form.useWatch('country', form);
+  const formDialCode = formCountry ? (COUNTRY_DIAL_CODES[formCountry] ? `+${COUNTRY_DIAL_CODES[formCountry]}` : '') : '';
 
   // Duplicate detection
   const [dupModalOpen,    setDupModalOpen]    = useState(false);
@@ -1710,11 +1713,23 @@ const LeadsPageEnhanced = () => {
           onFinish={async v => {
             // Only check duplicates when creating (no lead_id on form = new record)
             const isNew = !v.lead_id;
+            // Normalize phone: prepend dial code if user entered only local digits
+            const _normalizePhone = (rawPhone, country) => {
+              if (!rawPhone) return rawPhone;
+              const stripped = rawPhone.trim();
+              if (stripped.startsWith('+')) return stripped;
+              const dialCode = COUNTRY_DIAL_CODES[country];
+              if (dialCode && !stripped.startsWith(dialCode)) return `+${dialCode}${stripped}`;
+              return `+${stripped}`;
+            };
+            const _phone    = _normalizePhone(v.phone, v.country);
+            const _whatsapp = _normalizePhone(v.whatsapp || v.phone, v.country);
+
             const leadData = {
               full_name: v.full_name,
               email: v.email || null,
-              phone: v.phone,
-              whatsapp: v.whatsapp || v.phone,
+              phone: _phone,
+              whatsapp: _whatsapp,
               country: v.country,
               source: v.source || 'Direct',
               course_interested: v.course_interested,
@@ -1772,7 +1787,10 @@ const LeadsPageEnhanced = () => {
             </Col>
             <Col span={12}>
               <Form.Item name="phone" label="Phone" rules={[{ required: true }]}>
-                <Input prefix={<PhoneOutlined />} placeholder="+91 9876543210" />
+                <Input
+                  addonBefore={formDialCode || <PhoneOutlined />}
+                  placeholder="9876543210"
+                />
               </Form.Item>
             </Col>
           </Row>
