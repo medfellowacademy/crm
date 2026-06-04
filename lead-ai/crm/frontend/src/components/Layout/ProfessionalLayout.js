@@ -235,8 +235,8 @@ const ProfessionalLayout = ({ children }) => {
   // Filter menu items based on user role
   // ROLES values are lowercase: 'admin', 'manager', 'finance', 'counselor'
   const roleMenuItems = menuItems.filter(item => {
-    const visibleToAllRoles = ['/dashboard', '/followups', '/leads', '/pipeline', '/settings'];
-    const adminManagerFinance = ['/lead-analysis', '/analytics', '/payments', '/conversion-time', '/cohort-analysis', '/sla', '/score-decay'];
+    const visibleToAllRoles = ['/dashboard', '/followups', '/leads', '/pipeline', '/settings', '/payments'];
+    const adminManagerFinance = ['/lead-analysis', '/analytics', '/conversion-time', '/cohort-analysis', '/sla', '/score-decay'];
     const adminManager = ['/hospitals', '/courses', '/user-activity', '/lead-update-activity'];
     const adminOnly = ['/users', '/audit-logs'];
 

@@ -17,6 +17,7 @@ import dayjs from 'dayjs';
 import isBetween from 'dayjs/plugin/isBetween';
 import { leadsAPI, uploadAPI } from '../api/api';
 import EnrollmentModal from '../components/leads/EnrollmentModal';
+import { useAuth } from '../context/AuthContext';
 
 dayjs.extend(isBetween);
 
@@ -187,6 +188,9 @@ const ExpandedRow = ({ lead, onUpload, uploading }) => {
 // ── Main Page ────────────────────────────────────────────────────────────────
 const PaymentsPage = () => {
   const queryClient = useQueryClient();
+  const { user: authUser } = useAuth();
+  const isCounselor = authUser?.role === 'Counselor';
+
   const [searchText,      setSearchText]      = useState('');
   const [filterCounselor, setFilterCounselor] = useState(null);
   const [filterCourse,    setFilterCourse]    = useState(null);
@@ -194,9 +198,18 @@ const PaymentsPage = () => {
   const [uploading,       setUploading]       = useState(null);
   const [editLead,        setEditLead]        = useState(null);
 
+  // Counselors only see their own enrolled leads
+  const queryParams = {
+    status: 'Enrolled',
+    limit: 10000,
+    ...(isCounselor && authUser?.full_name
+      ? { assigned_to: authUser.full_name }
+      : {}),
+  };
+
   const { data: leadsResponse, isLoading } = useQuery({
-    queryKey: ['enrolled-leads'],
-    queryFn: () => leadsAPI.getAll({ status: 'Enrolled', limit: 10000 }).then(r => r.data),
+    queryKey: ['enrolled-leads', isCounselor ? authUser?.full_name : 'all'],
+    queryFn: () => leadsAPI.getAll(queryParams).then(r => r.data),
   });
 
   const updateMutation = useMutation({
@@ -332,12 +345,12 @@ const PaymentsPage = () => {
       render: d => d ? dayjs(d).format('DD MMM YYYY') : '—',
       sorter: (a, b) => dayjs(a.updated_at).unix() - dayjs(b.updated_at).unix(),
     },
-    {
+    ...(!isCounselor ? [{
       title: 'Counselor',
       dataIndex: 'assigned_to',
       key: 'counselor',
       render: t => t || <Text type="secondary">Unassigned</Text>,
-    },
+    }] : []),
     {
       title: 'LMS Status',
       dataIndex: 'lms_status',
@@ -375,7 +388,11 @@ const PaymentsPage = () => {
     <div style={{ padding: '24px' }}>
       <div style={{ marginBottom: 24 }}>
         <h1 style={{ fontSize: 28, fontWeight: 600, marginBottom: 4 }}>Enrolled Leads & Payments</h1>
-        <p style={{ color: 'var(--text-secondary)' }}>Track fees, EMI schedules and documents</p>
+        <p style={{ color: 'var(--text-secondary)' }}>
+          {isCounselor
+            ? `Your enrolled leads — ${authUser?.full_name}`
+            : 'Track fees, EMI schedules and documents for all enrolled leads'}
+        </p>
       </div>
 
       {/* Summary Cards */}
@@ -405,8 +422,10 @@ const PaymentsPage = () => {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12 }}>
           <Input placeholder="Search name / phone…" value={searchText}
             onChange={e => setSearchText(e.target.value)} />
-          <Select placeholder="Counselor" value={filterCounselor} onChange={setFilterCounselor}
-            allowClear options={counselors.map(c => ({ label: c, value: c }))} />
+          {!isCounselor && (
+            <Select placeholder="Counselor" value={filterCounselor} onChange={setFilterCounselor}
+              allowClear options={counselors.map(c => ({ label: c, value: c }))} />
+          )}
           <Select placeholder="Course" value={filterCourse} onChange={setFilterCourse}
             allowClear showSearch options={courses.map(c => ({ label: c, value: c }))} />
           <DatePicker.RangePicker value={dateRange} onChange={setDateRange} />
