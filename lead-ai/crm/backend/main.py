@@ -1503,6 +1503,23 @@ def normalize_lead_values(lead_data: dict) -> dict:
                 # Keep the value but clean underscores/dashes and title-case it
                 normalized['course_interested'] = raw.replace('_', ' ').strip()
     
+    # Normalize qualification → canonical value
+    _QUALIFICATION_MAP = {
+        'mbbs': 'MBBS', 'fmge': 'FMGE', 'md': 'MD', 'ms': 'MS',
+        'dnb': 'DNB', 'dm': 'DM', 'mch': 'Mch', 'm.ch': 'Mch',
+        'bams': 'BAMS', 'bums': 'BUMS', 'bhms': 'BHMS', 'bsms': 'BSMS',
+        'bnys': 'BNYS', 'bds': 'BDS', 'mds': 'MDS', 'bpt': 'BPT', 'mpt': 'MPT',
+        'pharm d': 'PHARM D', 'pharm.d': 'PHARM D', 'pharmd': 'PHARM D', 'd.pharm': 'PHARM D',
+        'others': 'OTHERS', 'other': 'OTHERS',
+        # legacy aliases → OTHERS
+        'b.pharm': 'OTHERS', 'm.pharm': 'OTHERS', 'bsc nursing': 'OTHERS',
+        'msc nursing': 'OTHERS', 'dmlt': 'OTHERS', 'bmlt': 'OTHERS',
+        'bot': 'OTHERS', 'mot': 'OTHERS', 'bsc mlt': 'OTHERS', 'msc mlt': 'OTHERS',
+    }
+    if normalized.get('qualification'):
+        q_lower = str(normalized['qualification']).strip().lower()
+        normalized['qualification'] = _QUALIFICATION_MAP.get(q_lower, 'OTHERS')
+
     # Normalize counselor name (title case)
     if 'assigned_to' in normalized and normalized['assigned_to']:
         normalized['assigned_to'] = normalized['assigned_to'].strip().title()

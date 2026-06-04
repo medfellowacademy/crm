@@ -251,10 +251,9 @@ const normalizeSource = (raw) => {
   return null; // caller decides the fallback
 };
 const QUALIFICATION_OPTIONS = [
-  'MBBS','MD','MS','DNB','MDS','BDS','BAMS','BHMS',
-  'BPT','MPT','BUMS','BNYS','BSc Nursing','MSc Nursing',
-  'B.Pharm','M.Pharm','Pharm.D','DMLT','BMLT',
-  'BOT','MOT','BSc MLT','MSc MLT','Other',
+  'MBBS','FMGE','MD','MS','DNB','DM','Mch',
+  'BAMS','BUMS','BHMS','BSMS','BNYS',
+  'BDS','MDS','BPT','MPT','PHARM D','OTHERS',
 ];
 const STATUS_COLOR_MAP = {
   Enrolled: 'green', Hot: 'red', Warm: 'orange',
@@ -1830,12 +1829,7 @@ const LeadsPageEnhanced = () => {
             <Col span={8}>
               <Form.Item name="qualification" label="Qualification">
                 <Select placeholder="Select" allowClear showSearch>
-                  {[
-                    'MBBS','MD','MS','DNB','MDS','BDS','BAMS','BHMS',
-                    'BPT','MPT','BUMS','BNYS','BSc Nursing','MSc Nursing',
-                    'B.Pharm','M.Pharm','Pharm.D','DMLT','BMLT',
-                    'BOT','MOT','BSc MLT','MSc MLT','Other',
-                  ].map(q => <Option key={q} value={q}>{q}</Option>)}
+                  {QUALIFICATION_OPTIONS.map(q => <Option key={q} value={q}>{q}</Option>)}
                 </Select>
               </Form.Item>
             </Col>
