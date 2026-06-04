@@ -9,11 +9,13 @@ import dayjs from 'dayjs';
 const { Text } = Typography;
 const { Option } = Select;
 
-const fmt   = v => `₹ ${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-const parse = v => Number(String(v).replace(/₹\s?|(,*)/g, ''));
+const fmtNum = v => v != null ? `₹ ${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',') : '';
+const parseNum = v => {
+  const n = Number(String(v ?? '').replace(/₹\s?|,/g, '').trim());
+  return isNaN(n) ? 0 : n;
+};
 
-// All 12 LMS module options
-const MODULE_OPTIONS = ['M1','M2','M3','M4','M5','M6','M7','M8','M9','M10','M11','M12'];
+const MODULE_OPTIONS    = ['M1','M2','M3','M4','M5','M6','M7','M8','M9','M10','M11','M12'];
 const LMS_STATUS_OPTIONS = [
   { value: 'Not Started', color: 'default'    },
   { value: 'Active',      color: 'processing' },
@@ -21,7 +23,6 @@ const LMS_STATUS_OPTIONS = [
   { value: 'Completed',   color: 'success'    },
 ];
 
-// Safe JSON parse for emi_details / lms_modules which may arrive as a string
 const safeParse = (val, fallback = []) => {
   if (!val) return fallback;
   if (Array.isArray(val)) return val;
@@ -29,62 +30,51 @@ const safeParse = (val, fallback = []) => {
 };
 
 const EnrollmentModal = ({ open, lead, onSave, onCancel, loading }) => {
-  const [form]       = Form.useForm();
-  const [emis,       setEmis]       = useState([]);
+  const [form] = Form.useForm();
   const [remaining,  setRemaining]  = useState(0);
   const [lmsModules, setLmsModules] = useState([]);
 
+  // Recalculate remaining from current form values on every change
+  const recalcFromForm = (allValues) => {
+    const total    = allValues.actual_revenue    || 0;
+    const reg      = allValues.registration_fees || 0;
+    const emiTotal = (allValues.emis || []).reduce((s, e) => s + (Number(e?.amount) || 0), 0);
+    setRemaining(Math.max(0, total - reg - emiTotal));
+  };
+
   useEffect(() => {
     if (!open) return;
-    const existing     = lead || {};
-    const savedEmis    = safeParse(existing.emi_details, []).map(e => ({
-      ...e,
-      date: e.date ? dayjs(e.date) : null,
+    const existing  = lead || {};
+    const savedEmis = safeParse(existing.emi_details, []).map(e => ({
+      amount: e.amount ?? null,
+      date:   e.date ? dayjs(e.date) : null,
+      status: e.status || 'pending',
     }));
     const savedModules = safeParse(existing.lms_modules, []);
-
-    setEmis(savedModules.length ? savedEmis : savedEmis);
     setLmsModules(savedModules);
 
     form.setFieldsValue({
-      actual_revenue:    existing.actual_revenue    || null,
-      registration_fees: existing.registration_fees || null,
+      actual_revenue:    existing.actual_revenue    ?? null,
+      registration_fees: existing.registration_fees ?? null,
       lms_status:        existing.lms_status        || 'Not Started',
+      emis:              savedEmis,
     });
-    recalc(existing.actual_revenue || 0, existing.registration_fees || 0, savedEmis);
+
+    recalcFromForm({
+      actual_revenue:    existing.actual_revenue    || 0,
+      registration_fees: existing.registration_fees || 0,
+      emis:              savedEmis,
+    });
   }, [open, lead]);
 
-  const recalc = (total, reg, emiList) => {
-    const emiTotal = (emiList || emis).reduce((s, e) => s + (Number(e.amount) || 0), 0);
-    setRemaining(Math.max(0, (total || 0) - ((reg || 0) + emiTotal)));
-  };
-
-  const handleValuesChange = (_, all) => {
-    recalc(all.actual_revenue || 0, all.registration_fees || 0, emis);
-  };
-
-  const addEmi = () => setEmis(prev => [...prev, { amount: null, date: null, status: 'pending' }]);
-
-  const updateEmi = (idx, field, val) => {
-    const updated = emis.map((e, i) => i === idx ? { ...e, [field]: val } : e);
-    setEmis(updated);
-    const vals = form.getFieldsValue();
-    recalc(vals.actual_revenue || 0, vals.registration_fees || 0, updated);
-  };
-
-  const removeEmi = (idx) => {
-    const updated = emis.filter((_, i) => i !== idx);
-    setEmis(updated);
-    const vals = form.getFieldsValue();
-    recalc(vals.actual_revenue || 0, vals.registration_fees || 0, updated);
-  };
+  const handleValuesChange = (_, allValues) => recalcFromForm(allValues);
 
   const handleSave = () => {
     form.validateFields().then(vals => {
-      const serializedEmis = emis.map(e => ({
-        amount: Number(e.amount) || 0,
-        date:   e.date ? dayjs(e.date).format('YYYY-MM-DD') : null,
-        status: e.status || 'pending',
+      const serializedEmis = (vals.emis || []).map(e => ({
+        amount: Number(e?.amount) || 0,
+        date:   e?.date ? dayjs(e.date).format('YYYY-MM-DD') : null,
+        status: e?.status || 'pending',
       }));
       onSave({
         status:            'Enrolled',
@@ -94,13 +84,15 @@ const EnrollmentModal = ({ open, lead, onSave, onCancel, loading }) => {
         lms_status:        vals.lms_status        || 'Not Started',
         lms_modules:       lmsModules,
       });
-    }).catch(() => message.warning('Please fill in all required fields'));
+    }).catch(() => message.warning('Please fill in Total Course Fee and Registration Fees'));
   };
 
-  const total    = form.getFieldValue('actual_revenue')    || 0;
-  const regFees  = form.getFieldValue('registration_fees') || 0;
-  const emiTotal = emis.reduce((s, e) => s + (Number(e.amount) || 0), 0);
-  const collected = regFees + emiTotal;
+  // Live summary values — read from form
+  const allVals  = form.getFieldsValue(true);
+  const total    = allVals.actual_revenue    || 0;
+  const reg      = allVals.registration_fees || 0;
+  const emiTotal = (allVals.emis || []).reduce((s, e) => s + (Number(e?.amount) || 0), 0);
+  const collected = reg + emiTotal;
 
   return (
     <Modal
@@ -112,7 +104,8 @@ const EnrollmentModal = ({ open, lead, onSave, onCancel, loading }) => {
       }
       open={open}
       onCancel={onCancel}
-      width={600}
+      width={640}
+      destroyOnClose
       footer={
         <Space>
           <Button onClick={onCancel}>Cancel</Button>
@@ -123,18 +116,21 @@ const EnrollmentModal = ({ open, lead, onSave, onCancel, loading }) => {
         </Space>
       }
     >
-      <Form form={form} layout="vertical" onValuesChange={handleValuesChange}>
-
-        {/* Revenue Summary Bar */}
+      <Form
+        form={form}
+        layout="vertical"
+        onValuesChange={handleValuesChange}
+      >
+        {/* ── Summary Bar ────────────────────────────────────────────── */}
         <div style={{
           background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8,
           padding: '12px 16px', marginBottom: 20,
           display: 'flex', gap: 24, flexWrap: 'wrap',
         }}>
           {[
-            { label: 'Total Fee',   val: total,      color: '#059669' },
-            { label: 'Collected',   val: collected,  color: '#2563eb' },
-            { label: 'Remaining',   val: remaining,  color: remaining > 0 ? '#dc2626' : '#059669' },
+            { label: 'Total Fee',  val: total,     color: '#059669' },
+            { label: 'Collected',  val: collected, color: '#2563eb' },
+            { label: 'Remaining',  val: remaining, color: remaining > 0 ? '#dc2626' : '#059669' },
           ].map(({ label, val, color }) => (
             <div key={label}>
               <div style={{ fontSize: 11, color: '#6b7280' }}>{label}</div>
@@ -143,81 +139,97 @@ const EnrollmentModal = ({ open, lead, onSave, onCancel, loading }) => {
           ))}
         </div>
 
-        {/* Revenue Fields */}
+        {/* ── Revenue ────────────────────────────────────────────────── */}
         <Row gutter={16}>
           <Col span={12}>
             <Form.Item name="actual_revenue" label="Total Course Fee (₹)"
               rules={[{ required: true, message: 'Enter total fee' }]}>
-              <InputNumber style={{ width: '100%' }} min={0} formatter={fmt} parser={parse}
-                placeholder="e.g. 150000" />
+              <InputNumber
+                style={{ width: '100%' }} min={0}
+                formatter={fmtNum} parser={parseNum}
+                placeholder="e.g. 150000"
+              />
             </Form.Item>
           </Col>
           <Col span={12}>
             <Form.Item name="registration_fees" label="Registration / Advance Paid (₹)"
               rules={[{ required: true, message: 'Enter registration fees' }]}>
-              <InputNumber style={{ width: '100%' }} min={0} formatter={fmt} parser={parse}
-                placeholder="e.g. 50000" />
+              <InputNumber
+                style={{ width: '100%' }} min={0}
+                formatter={fmtNum} parser={parseNum}
+                placeholder="e.g. 50000"
+              />
             </Form.Item>
           </Col>
         </Row>
 
-        {/* EMI Schedule */}
-        <Divider orientation="left" style={{ fontSize: 13 }}>
-          EMI Schedule&nbsp;
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            ({emis.length} instalment{emis.length !== 1 ? 's' : ''})
-          </Text>
+        {/* ── EMI Schedule (Form.List) ───────────────────────────────── */}
+        <Divider orientation="left" style={{ fontSize: 13, marginBottom: 12 }}>
+          EMI Schedule
         </Divider>
 
-        {emis.length === 0 && (
-          <div style={{ textAlign: 'center', color: '#9ca3af', padding: '4px 0 10px', fontSize: 13 }}>
-            No EMIs — full payment collected upfront
-          </div>
-        )}
+        <Form.List name="emis">
+          {(fields, { add, remove }) => (
+            <>
+              {fields.length === 0 && (
+                <div style={{ textAlign: 'center', color: '#9ca3af', padding: '4px 0 12px', fontSize: 13 }}>
+                  No EMIs — full payment collected upfront
+                </div>
+              )}
 
-        {emis.map((emi, idx) => (
-          <Row key={idx} gutter={10} align="middle" style={{ marginBottom: 10 }}>
-            <Col span={7}>
-              <InputNumber
-                style={{ width: '100%' }} min={0} formatter={fmt} parser={parse}
-                placeholder="Amount"
-                value={emi.amount}
-                onChange={v => updateEmi(idx, 'amount', v)}
-              />
-            </Col>
-            <Col span={8}>
-              <DatePicker
-                style={{ width: '100%' }}
-                placeholder="Due date"
-                value={emi.date ? dayjs(emi.date) : null}
-                onChange={d => updateEmi(idx, 'date', d)}
-              />
-            </Col>
-            <Col span={6}>
-              <Select
-                value={emi.status || 'pending'}
-                onChange={v => updateEmi(idx, 'status', v)}
-                style={{ width: '100%' }}
+              {fields.map(({ key, name }) => (
+                <Row key={key} gutter={10} align="middle" style={{ marginBottom: 8 }}>
+                  {/* Amount */}
+                  <Col span={7}>
+                    <Form.Item name={[name, 'amount']} noStyle>
+                      <InputNumber
+                        style={{ width: '100%' }} min={0}
+                        formatter={fmtNum} parser={parseNum}
+                        placeholder="Amount (₹)"
+                      />
+                    </Form.Item>
+                  </Col>
+
+                  {/* Due Date */}
+                  <Col span={8}>
+                    <Form.Item name={[name, 'date']} noStyle>
+                      <DatePicker style={{ width: '100%' }} placeholder="Due date" />
+                    </Form.Item>
+                  </Col>
+
+                  {/* Status */}
+                  <Col span={6}>
+                    <Form.Item name={[name, 'status']} initialValue="pending" noStyle>
+                      <Select style={{ width: '100%' }}>
+                        <Option value="pending"><Tag color="orange">Pending</Tag></Option>
+                        <Option value="paid"><Tag color="green">Paid</Tag></Option>
+                        <Option value="overdue"><Tag color="red">Overdue</Tag></Option>
+                      </Select>
+                    </Form.Item>
+                  </Col>
+
+                  {/* Remove */}
+                  <Col span={3}>
+                    <Button danger type="text" icon={<DeleteOutlined />}
+                      onClick={() => remove(name)} />
+                  </Col>
+                </Row>
+              ))}
+
+              <Button
+                icon={<PlusOutlined />}
+                onClick={() => add({ amount: null, date: null, status: 'pending' })}
+                type="dashed"
+                style={{ width: '100%', marginBottom: 4 }}
               >
-                <Option value="pending"><Tag color="orange">Pending</Tag></Option>
-                <Option value="paid"><Tag color="green">Paid</Tag></Option>
-                <Option value="overdue"><Tag color="red">Overdue</Tag></Option>
-              </Select>
-            </Col>
-            <Col span={3}>
-              <Button danger type="text" icon={<DeleteOutlined />}
-                onClick={() => removeEmi(idx)} />
-            </Col>
-          </Row>
-        ))}
+                Add EMI
+              </Button>
+            </>
+          )}
+        </Form.List>
 
-        <Button icon={<PlusOutlined />} onClick={addEmi}
-          style={{ width: '100%', marginBottom: 8 }} type="dashed">
-          Add EMI
-        </Button>
-
-        {/* LMS Section */}
-        <Divider orientation="left" style={{ fontSize: 13 }}>LMS Access</Divider>
+        {/* ── LMS ───────────────────────────────────────────────────── */}
+        <Divider orientation="left" style={{ fontSize: 13, marginTop: 16 }}>LMS Access</Divider>
 
         <Row gutter={16}>
           <Col span={10}>
