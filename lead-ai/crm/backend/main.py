@@ -38,6 +38,7 @@ import asyncio as _asyncio
 # Import logging and error handling
 from logger_config import logger
 from middleware import LoggingMiddleware, ErrorHandlingMiddleware, PerformanceMonitoringMiddleware
+from courses_data import COURSE_NAME_MAP, VALID_COURSE_NAMES
 from exceptions import (
     AuthenticationError, AuthorizationError, ValidationError,
     NotFoundError, DatabaseError, ExternalServiceError,
@@ -1487,9 +1488,20 @@ def normalize_lead_values(lead_data: dict) -> dict:
     elif normalized.get('phone'):
         normalized['whatsapp'] = normalized['phone']
 
-    # Normalize course name (title case)
-    if 'course_interested' in normalized and normalized['course_interested']:
-        normalized['course_interested'] = normalized['course_interested'].strip().title()
+    # Normalize course name → canonical Fellowship name
+    if normalized.get('course_interested'):
+        raw = normalized['course_interested'].strip()
+        # Try exact canonical match first
+        if raw in VALID_COURSE_NAMES:
+            normalized['course_interested'] = raw
+        else:
+            # Try lowercase lookup in the normalisation map
+            looked_up = COURSE_NAME_MAP.get(raw.lower().replace('_', ' '))
+            if looked_up:
+                normalized['course_interested'] = looked_up
+            else:
+                # Keep the value but clean underscores/dashes and title-case it
+                normalized['course_interested'] = raw.replace('_', ' ').strip()
     
     # Normalize counselor name (title case)
     if 'assigned_to' in normalized and normalized['assigned_to']:
