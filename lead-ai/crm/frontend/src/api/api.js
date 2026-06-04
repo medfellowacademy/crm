@@ -98,6 +98,12 @@ export const uploadAPI = {
     form.append('file', file);
     return api.post('/api/upload', form, { headers: { 'Content-Type': 'multipart/form-data' } });
   },
+  uploadLeadDocument: (leadId, file, docType = 'document') => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post(`/api/leads/${leadId}/upload-document?doc_type=${docType}`, form,
+      { headers: { 'Content-Type': 'multipart/form-data' } });
+  },
 };
 
 // Dashboard API

@@ -407,7 +407,8 @@ class SupabaseDataLayer:
         # New columns (e.g. 'company', 'qualification') may not exist in Supabase
         # until the migration is run.  If Supabase complains about an unknown column,
         # drop that column and retry so the other fields are still saved.
-        NEW_COLUMNS = {'company', 'qualification', 'utm_source', 'utm_medium', 'utm_campaign'}
+        NEW_COLUMNS = {'company', 'qualification', 'utm_source', 'utm_medium', 'utm_campaign',
+                       'registration_fees', 'emi_details', 'payment_receipt_url', 'documents'}
         try:
             response = self.client.table('leads').update(cleaned_data).eq('lead_id', lead_id).execute()
             return response.data[0] if response.data else None

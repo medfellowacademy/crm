@@ -22,6 +22,7 @@ import ChatDrawer from '../components/ChatDrawer';
 import DuplicateDetectionModal from '../components/leads/DuplicateDetectionModal';
 import FieldMappingModal from '../components/leads/FieldMappingModal';
 import WhatsAppTemplateDrawer from '../components/whatsapp/WhatsAppTemplateDrawer';
+import EnrollmentModal from '../components/leads/EnrollmentModal';
 import { leadsAPI, coursesAPI, counselorsAPI, usersAPI, duplicatesAPI, decayAPI } from '../api/api';
 import { useAuth } from '../context/AuthContext';
 import dayjs from 'dayjs';
@@ -340,6 +341,7 @@ const LeadsPageEnhanced = () => {
 
   // WhatsApp template drawer (for quick-send from table row)
   const [templateLead,    setTemplateLead]    = useState(null);
+  const [enrollmentLead,  setEnrollmentLead]  = useState(null); // lead being enrolled
 
   // Inline cell editing — tracks which cell (leadId + field) is actively being edited
   const [editingCell,  setEditingCell]  = useState({});   // { leadId, field }
@@ -1121,7 +1123,13 @@ const LeadsPageEnhanced = () => {
           value={s || undefined}
           size="small"
           style={{ width: '100%', minWidth: 130 }}
-          onChange={v => inlineUpdate(r.lead_id, 'status', v)}
+          onChange={v => {
+            if (v === 'Enrolled') {
+              setEnrollmentLead(r); // open enrollment modal
+            } else {
+              inlineUpdate(r.lead_id, 'status', v);
+            }
+          }}
           options={STATUS_OPTIONS.map(opt => ({
             value: opt,
             label: <Tag color={STATUS_COLOR_MAP[opt] || 'default'} style={{ marginRight: 0 }}>{opt}</Tag>,
@@ -1820,7 +1828,7 @@ const LeadsPageEnhanced = () => {
                 <Select placeholder="Select course" showSearch
                   loading={!courses || courses.length === 0}
                   notFoundContent={!courses || courses.length === 0 ? "Loading courses..." : "No courses found"}
-                  onChange={name => { const c = (courses || []).find(c => c.course_name === name); if (c) { form.setFieldValue('expected_revenue', c.price); message.info(`Price ₹${(c.price/1000).toFixed(0)}K auto-filled`); } }}
+                  onChange={() => {}}
                   filterOption={(i, o) => o.children.toLowerCase().includes(i.toLowerCase())}>
                   {(courses || []).map(c => <Option key={c.id} value={c.course_name}>{c.course_name} — ₹{(c.price/1000).toFixed(0)}K</Option>)}
                 </Select>
@@ -2112,6 +2120,20 @@ const LeadsPageEnhanced = () => {
       </Drawer>
 
       <style>{`.overdue-row { background: #fff2f0 !important; }`}</style>
+
+      {/* Enrollment Modal — triggered when status set to Enrolled */}
+      <EnrollmentModal
+        open={!!enrollmentLead}
+        lead={enrollmentLead}
+        loading={updateMutation.isPending}
+        onCancel={() => setEnrollmentLead(null)}
+        onSave={data => {
+          updateMutation.mutate(
+            { leadId: enrollmentLead.lead_id, data },
+            { onSuccess: () => { setEnrollmentLead(null); message.success('Lead enrolled successfully'); } }
+          );
+        }}
+      />
 
       {/* WhatsApp Chat Drawer */}
       <ChatDrawer lead={chatLead} onClose={() => setChatLead(null)} />

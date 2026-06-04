@@ -13,7 +13,7 @@ FEATURES:
 ✅ Automated follow-up scheduling
 """
 
-from fastapi import FastAPI, HTTPException, Depends, Query, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, Query, BackgroundTasks, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -866,6 +866,10 @@ class LeadUpdate(BaseModel):
     company: Optional[str] = None         # Company / brand: 'MED' or 'Others'
     actual_revenue: Optional[float] = None
     expected_revenue: Optional[float] = None
+    registration_fees: Optional[float] = None
+    emi_details: Optional[list] = None          # [{amount, date, status}]
+    payment_receipt_url: Optional[str] = None
+    documents: Optional[list] = None            # [{name, url, type, uploaded_at}]
     next_action: Optional[str] = None
     loss_reason: Optional[str] = None
     loss_note: Optional[str] = None
@@ -4675,6 +4679,70 @@ async def ai_status():
         ] if ai_assistant.is_available() else [],
         "status": "ready" if ai_assistant.is_available() else "not_configured"
     }
+
+# ============================================================================
+# FILE UPLOAD  (Supabase Storage → crm-documents bucket)
+# ============================================================================
+
+@app.post("/api/upload")
+async def upload_file(file: UploadFile = File(...), request: Request = None):
+    """Generic file upload → Supabase storage. Returns public URL."""
+    _verify_token(request)
+    try:
+        contents = await file.read()
+        safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', file.filename or 'file')
+        path = f"uploads/{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{safe_name}"
+        supabase_data.client.storage.from_('crm-documents').upload(
+            path, contents, {'content-type': file.content_type or 'application/octet-stream'}
+        )
+        url = supabase_data.client.storage.from_('crm-documents').get_public_url(path)
+        return {'url': url, 'name': file.filename, 'path': path}
+    except Exception as e:
+        logger.error(f"Upload failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+
+@app.post("/api/leads/{lead_id}/upload-document")
+async def upload_lead_document(
+    lead_id: str,
+    file: UploadFile = File(...),
+    doc_type: str = Query('document', description="'receipt' or 'document'"),
+    request: Request = None,
+):
+    """Upload a payment receipt or doctor document for a specific lead.
+    Stores file in Supabase storage and updates the lead record."""
+    _verify_token(request)
+    try:
+        contents = await file.read()
+        safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', file.filename or 'file')
+        path = f"leads/{lead_id}/{doc_type}/{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{safe_name}"
+        supabase_data.client.storage.from_('crm-documents').upload(
+            path, contents, {'content-type': file.content_type or 'application/octet-stream'}
+        )
+        url = supabase_data.client.storage.from_('crm-documents').get_public_url(path)
+
+        # Update lead record
+        existing = supabase_data.get_lead_by_id(lead_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Lead not found")
+
+        new_doc = {'name': file.filename, 'url': url, 'type': doc_type,
+                   'uploaded_at': datetime.utcnow().isoformat() + 'Z'}
+
+        if doc_type == 'receipt':
+            supabase_data.update_lead(lead_id, {'payment_receipt_url': url})
+        else:
+            docs = existing.get('documents') or []
+            docs.append(new_doc)
+            supabase_data.update_lead(lead_id, {'documents': docs})
+
+        return {'url': url, 'name': file.filename, 'type': doc_type}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Document upload failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
 
 # ============================================================================
 # HEALTH CHECK
