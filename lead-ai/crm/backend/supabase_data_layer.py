@@ -6,6 +6,7 @@ Uses Supabase REST API client for data operations
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 import re
+import json
 from supabase_client import supabase_manager
 from logger_config import logger
 
@@ -404,14 +405,21 @@ class SupabaseDataLayer:
                 data[key] = iso if iso.endswith('Z') or '+' in iso else iso + 'Z'
 
         # Strip None values — we never want to accidentally null-out a good column.
+        # Keep empty lists/dicts (falsy but not None) so JSONB columns can be cleared.
         cleaned_data = {k: v for k, v in data.items() if v is not None}
 
-        # New columns (e.g. 'company', 'qualification') may not exist in Supabase
-        # until the migration is run.  If Supabase complains about an unknown column,
-        # drop that column and retry so the other fields are still saved.
-        NEW_COLUMNS = {'company', 'qualification', 'utm_source', 'utm_medium', 'utm_campaign',
-                       'registration_fees', 'emi_details', 'payment_receipt_url', 'documents',
-                       'lms_status', 'lms_modules'}
+        # Explicitly JSON-serialize list/dict values for JSONB columns.
+        # Some versions of postgrest-py expect JSONB fields as serialized strings.
+        JSONB_COLUMNS = {'emi_details', 'documents', 'lms_modules'}
+        for col in JSONB_COLUMNS:
+            if col in cleaned_data and isinstance(cleaned_data[col], (list, dict)):
+                cleaned_data[col] = json.dumps(cleaned_data[col])
+
+        # Only the OLD optional columns (added before the current migration) are in
+        # NEW_COLUMNS so the fallback silently drops them when they don't exist yet.
+        # The newer columns (emi_details, registration_fees, etc.) now ALWAYS exist —
+        # do NOT list them here or they will be silently dropped on any error.
+        NEW_COLUMNS = {'company', 'qualification', 'utm_source', 'utm_medium', 'utm_campaign'}
         try:
             response = self.client.table('leads').update(cleaned_data).eq('lead_id', lead_id).execute()
             return response.data[0] if response.data else None
@@ -450,9 +458,14 @@ class SupabaseDataLayer:
                     data[key] = iso if iso.endswith('Z') or '+' in iso else iso + 'Z'
             
             # Remove None values to avoid Supabase constraint issues
-            # Keep empty strings and 0 values, just remove None
             cleaned_data = {k: v for k, v in data.items() if v is not None}
-            
+
+            # JSON-serialize JSONB columns for compatibility with all postgrest-py versions
+            JSONB_COLUMNS = {'emi_details', 'documents', 'lms_modules'}
+            for col in JSONB_COLUMNS:
+                if col in cleaned_data and isinstance(cleaned_data[col], (list, dict)):
+                    cleaned_data[col] = json.dumps(cleaned_data[col])
+
             response = self.client.table('leads').insert(cleaned_data).execute()
             return response.data[0] if response.data else None
         except Exception as e:
