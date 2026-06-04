@@ -1972,7 +1972,7 @@ const LeadsPageEnhanced = () => {
             <Text strong>Country</Text>
             <Select mode="multiple" style={{ width: '100%', marginTop: 6 }} placeholder="Any country" showSearch
               value={advFilters.country || []} onChange={v => setAdvFilters(f => ({ ...f, country: v }))}>
-              {uniqueCountries.map(c => <Option key={c} value={c}>{c}</Option>)}
+              {COUNTRIES.map(c => <Option key={c} value={c}>{c}</Option>)}
             </Select>
           </div>
 
