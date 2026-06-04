@@ -52,8 +52,9 @@ const EmiStatus = ({ status }) => {
 const ExpandedRow = ({ lead, onUpload, uploading }) => {
   const emis       = safeParse(lead.emi_details, []);
   const lmsModules = safeParse(lead.lms_modules, []);
-  const total      = lead.actual_revenue    || 0;
-  const reg        = lead.registration_fees || 0;
+  // Supabase may return NUMERIC columns as strings — always coerce to number
+  const total      = Number(lead.actual_revenue)     || 0;
+  const reg        = Number(lead.registration_fees)  || 0;
   const emiPaid    = emis.filter(e => e.status === 'paid').reduce((s, e) => s + (Number(e.amount) || 0), 0);
   const collected  = reg + emiPaid;
   const remaining  = Math.max(0, total - collected);
@@ -237,12 +238,12 @@ const PaymentsPage = () => {
   });
 
   // Summary stats
-  const totalRevenue  = filtered.reduce((s, l) => s + (l.actual_revenue || 0), 0);
-  const totalRegFees  = filtered.reduce((s, l) => s + (l.registration_fees || 0), 0);
+  const totalRevenue  = filtered.reduce((s, l) => s + (Number(l.actual_revenue)    || 0), 0);
+  const totalRegFees  = filtered.reduce((s, l) => s + (Number(l.registration_fees) || 0), 0);
   const totalBalance  = filtered.reduce((s, l) => {
     const emPaid = (Array.isArray(l.emi_details) ? l.emi_details : [])
       .filter(e => e.status === 'paid').reduce((a, e) => a + (Number(e.amount) || 0), 0);
-    return s + Math.max(0, (l.actual_revenue || 0) - ((l.registration_fees || 0) + emPaid));
+    return s + Math.max(0, (Number(l.actual_revenue) || 0) - ((Number(l.registration_fees) || 0) + emPaid));
   }, 0);
 
   const counselors = [...new Set(leads.map(l => l.assigned_to).filter(Boolean))];
@@ -290,23 +291,23 @@ const PaymentsPage = () => {
       title: 'Total Fee',
       dataIndex: 'actual_revenue',
       key: 'actual_revenue',
-      render: v => v ? <Text strong style={{ color: '#059669' }}>{fmt(v)}</Text> : <Text type="secondary">—</Text>,
-      sorter: (a, b) => (a.actual_revenue || 0) - (b.actual_revenue || 0),
+      render: v => Number(v) ? <Text strong style={{ color: '#059669' }}>{fmt(Number(v))}</Text> : <Text type="secondary">—</Text>,
+      sorter: (a, b) => (Number(a.actual_revenue) || 0) - (Number(b.actual_revenue) || 0),
       defaultSortOrder: 'descend',
     },
     {
       title: 'Registration',
       dataIndex: 'registration_fees',
       key: 'registration_fees',
-      render: v => v ? <Text style={{ color: '#2563eb' }}>{fmt(v)}</Text> : <Text type="secondary">—</Text>,
+      render: v => Number(v) ? <Text style={{ color: '#2563eb' }}>{fmt(Number(v))}</Text> : <Text type="secondary">—</Text>,
     },
     {
       title: 'Balance Due',
       key: 'balance',
       render: (_, r) => {
-        const emiPaid = (Array.isArray(r.emi_details) ? r.emi_details : [])
+        const emiPaid = safeParse(r.emi_details, [])
           .filter(e => e.status === 'paid').reduce((s, e) => s + (Number(e.amount) || 0), 0);
-        const bal = Math.max(0, (r.actual_revenue || 0) - ((r.registration_fees || 0) + emiPaid));
+        const bal = Math.max(0, (Number(r.actual_revenue) || 0) - ((Number(r.registration_fees) || 0) + emiPaid));
         return bal > 0
           ? <Text strong style={{ color: '#dc2626' }}>{fmt(bal)}</Text>
           : <Tag color="green">Cleared</Tag>;

@@ -54,8 +54,8 @@ const EnrollmentModal = ({ open, lead, onSave, onCancel, loading }) => {
     setLmsModules(savedModules);
 
     form.setFieldsValue({
-      actual_revenue:    existing.actual_revenue    ?? null,
-      registration_fees: existing.registration_fees ?? null,
+      actual_revenue:    existing.actual_revenue    ? Number(existing.actual_revenue)    : null,
+      registration_fees: existing.registration_fees ? Number(existing.registration_fees) : null,
       lms_status:        existing.lms_status        || 'Not Started',
       emis:              savedEmis,
     });
