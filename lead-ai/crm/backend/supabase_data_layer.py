@@ -285,7 +285,7 @@ class SupabaseDataLayer:
             # can render the correct total and build proper pagination controls.
             # Fall back to len(leads) only if Supabase didn't return a count.
             total = db_total if (db_total is not None) else len(leads)
-            eff_limit = min(limit, 10000)
+            eff_limit = limit
             return {
                 "leads": leads,
                 "total": total,

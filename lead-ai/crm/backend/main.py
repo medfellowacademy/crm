@@ -2025,9 +2025,9 @@ async def get_leads(
 ):
     """Get leads with filters. Counselors are restricted to their own leads. Now Supabase-only."""
 
-    # Guardrails for performance: prevent accidental huge payloads.
+    # No artificial cap — the data layer paginates Supabase internally.
     skip = max(0, int(skip))
-    limit = max(1, min(int(limit), 10000))
+    limit = max(1, int(limit))
 
     # Enforce Counselor scope: they may only see leads assigned to themselves.
     try:
