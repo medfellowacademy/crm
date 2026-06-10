@@ -272,6 +272,7 @@ const LeadsPageEnhanced = () => {
   const isCounselor = authUser?.role === 'Counselor';
 
   const [chatLead, setChatLead] = useState(null);
+  const [repeatDrawerVisible, setRepeatDrawerVisible] = useState(false);
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [bulkDrawerVisible, setBulkDrawerVisible] = useState(false);
   const [filterDrawerVisible, setFilterDrawerVisible] = useState(false);
@@ -1432,6 +1433,15 @@ const LeadsPageEnhanced = () => {
               <Button icon={<ExportOutlined />} loading={isExporting}>Export</Button>
             </Dropdown>
             <Button icon={<ReloadOutlined />} onClick={() => refetch()} />
+            <Badge count={repeatedLeadIds.size} size="small" color="volcano">
+              <Button
+                icon={<WarningOutlined />}
+                danger={repeatedLeadIds.size > 0}
+                onClick={() => setRepeatDrawerVisible(true)}
+              >
+                Repeated Leads
+              </Button>
+            </Badge>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => { form.resetFields(); form.setFieldsValue({ assigned_to: authUser?.full_name || null }); setDrawerVisible(true); }}>Add Lead</Button>
           </Space>
         }
@@ -2219,6 +2229,145 @@ const LeadsPageEnhanced = () => {
           queryClient.invalidateQueries({ queryKey: ['leads'] });
         }}
       />
+
+      {/* ── Repeated Leads Drawer ──────────────────────────────────────────── */}
+      <Drawer
+        title={
+          <Space>
+            <WarningOutlined style={{ color: '#f5222d' }} />
+            <span>Repeated Leads</span>
+            <Tag color="volcano">{repeatedLeadIds.size}</Tag>
+          </Space>
+        }
+        open={repeatDrawerVisible}
+        onClose={() => setRepeatDrawerVisible(false)}
+        width={780}
+        extra={
+          <Button size="small" onClick={() => {
+            queryClient.invalidateQueries({ queryKey: ['repeated-leads'] });
+          }} icon={<ReloadOutlined />}>Refresh</Button>
+        }
+      >
+        {repeatedLeadIds.size === 0 ? (
+          <div style={{ textAlign: 'center', padding: '60px 0', color: '#6b7280' }}>
+            <CheckCircleOutlined style={{ fontSize: 48, color: '#10b981', marginBottom: 12 }} />
+            <div style={{ fontSize: 16, fontWeight: 600 }}>No repeated leads</div>
+            <div style={{ fontSize: 13, marginTop: 4 }}>All leads have unique phone, email and name.</div>
+          </div>
+        ) : (() => {
+          // Group leads by their match key for display
+          const allRepeated = repeatedData?.repeated || [];
+
+          // Build groups: phone groups, email groups, name groups
+          const phoneGroups = {};
+          const emailGroups = {};
+          const nameGroups  = {};
+
+          allRepeated.forEach(lead => {
+            const reasons = repeatedReasonMap[lead.lead_id] || [];
+            if (reasons.includes('same_phone') && lead.phone) {
+              const tail = (lead.phone.replace(/\D/g, '') || '').slice(-9);
+              if (tail) { phoneGroups[tail] = phoneGroups[tail] || []; phoneGroups[tail].push(lead); }
+            }
+            if (reasons.includes('same_email') && lead.email) {
+              const em = lead.email.toLowerCase().trim();
+              emailGroups[em] = emailGroups[em] || []; emailGroups[em].push(lead);
+            }
+            if (reasons.includes('same_name') && lead.full_name) {
+              const nm = lead.full_name.toLowerCase().trim();
+              nameGroups[nm] = nameGroups[nm] || []; nameGroups[nm].push(lead);
+            }
+          });
+
+          const renderGroup = (groupMap, label, color) =>
+            Object.entries(groupMap).map(([key, members]) => (
+              <Card
+                key={`${label}-${key}`}
+                size="small"
+                style={{ marginBottom: 16, border: `1px solid ${color}33` }}
+                title={
+                  <Space>
+                    <Tag color={color}>{label}</Tag>
+                    <span style={{ fontSize: 12, color: '#6b7280' }}>{key}</span>
+                    <Tag>{members.length} leads</Tag>
+                  </Space>
+                }
+              >
+                {members.map((lead, idx) => (
+                  <div key={lead.lead_id} style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '8px 0',
+                    borderBottom: idx < members.length - 1 ? '1px solid #f0f0f0' : 'none',
+                  }}>
+                    <Avatar size={32} style={{ background: '#1677ff', flexShrink: 0 }}>
+                      {(lead.full_name || '?')[0].toUpperCase()}
+                    </Avatar>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, fontSize: 13 }}>{lead.full_name}</div>
+                      <div style={{ fontSize: 11, color: '#6b7280' }}>
+                        {lead.phone && <span style={{ marginRight: 8 }}>📞 {lead.phone}</span>}
+                        {lead.email && <span style={{ marginRight: 8 }}>✉ {lead.email}</span>}
+                        {lead.course_interested && <span>📚 {lead.course_interested}</span>}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                      <Tag color={
+                        lead.status === 'Enrolled' ? 'green' :
+                        lead.status === 'New' ? 'blue' :
+                        lead.status === 'Not Interested' ? 'red' : 'default'
+                      } style={{ fontSize: 11 }}>{lead.status}</Tag>
+                      <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 2 }}>
+                        {lead.created_at ? dayjs(lead.created_at).fromNow() : ''}
+                      </div>
+                    </div>
+                    <Button
+                      size="small"
+                      type="link"
+                      onClick={() => { setRepeatDrawerVisible(false); navigate(`/leads/${lead.lead_id}`); }}
+                    >
+                      View
+                    </Button>
+                  </div>
+                ))}
+              </Card>
+            ));
+
+          return (
+            <div>
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginBottom: 16 }}
+                message={`${repeatedLeadIds.size} leads appear more than once based on phone number, email address, or full name.`}
+              />
+              {Object.keys(phoneGroups).length > 0 && (
+                <>
+                  <Divider orientation="left" style={{ fontSize: 13 }}>
+                    Same Phone Number ({Object.keys(phoneGroups).length} groups)
+                  </Divider>
+                  {renderGroup(phoneGroups, 'Same Phone', 'volcano')}
+                </>
+              )}
+              {Object.keys(emailGroups).length > 0 && (
+                <>
+                  <Divider orientation="left" style={{ fontSize: 13 }}>
+                    Same Email ({Object.keys(emailGroups).length} groups)
+                  </Divider>
+                  {renderGroup(emailGroups, 'Same Email', 'orange')}
+                </>
+              )}
+              {Object.keys(nameGroups).length > 0 && (
+                <>
+                  <Divider orientation="left" style={{ fontSize: 13 }}>
+                    Same Name ({Object.keys(nameGroups).length} groups)
+                  </Divider>
+                  {renderGroup(nameGroups, 'Same Name', 'gold')}
+                </>
+              )}
+            </div>
+          );
+        })()}
+      </Drawer>
     </div>
   );
 };
