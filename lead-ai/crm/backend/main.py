@@ -7778,8 +7778,8 @@ async def mark_whatsapp_read(
 @app.post("/api/sheets/sync")
 async def trigger_sheet_sync(current_user: dict = Depends(get_current_user)):
     """Manually trigger a Google Sheets → CRM sync."""
-    role = current_user.get("role", "")
-    if role not in ("admin", "manager"):
+    role = (current_user.get("role") or "").lower()
+    if role not in ("super admin", "manager", "admin", "team leader"):
         raise HTTPException(status_code=403, detail="Admin or Manager required")
     try:
         from google_sheets_sync import sync_sheet_to_crm
