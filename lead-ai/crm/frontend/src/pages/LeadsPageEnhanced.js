@@ -465,6 +465,19 @@ const LeadsPageEnhanced = () => {
   const leads = leadsResponse?.leads || [];
   const totalLeads = leadsResponse?.total || 0;
 
+  // Fetch repeated lead IDs (shared phone/email/name) — used for badge in table
+  const { data: repeatedData } = useQuery({
+    queryKey: ['repeated-leads'],
+    queryFn: () => duplicatesAPI.repeated().then(r => r.data),
+    staleTime: 5 * 60 * 1000,
+  });
+  const repeatedLeadIds = new Set(
+    (repeatedData?.repeated || []).map(l => l.lead_id)
+  );
+  const repeatedReasonMap = Object.fromEntries(
+    (repeatedData?.repeated || []).map(l => [l.lead_id, l.repeat_reasons || []])
+  );
+
   const { data: courses = [] } = useQuery({
     queryKey: ['courses'],
     queryFn: async () => { try { return (await coursesAPI.getAll()).data || []; } catch { return []; } },
@@ -1004,6 +1017,19 @@ const LeadsPageEnhanced = () => {
                   </>
                 )}
                 {decayBadge}
+                {repeatedLeadIds.has(r.lead_id) && (
+                  <Tooltip title={
+                    (repeatedReasonMap[r.lead_id] || []).map(t =>
+                      t === 'same_phone' ? 'Same phone number' :
+                      t === 'same_email' ? 'Same email address' :
+                      'Same name'
+                    ).join(' · ')
+                  }>
+                    <Tag color="volcano" style={{ fontSize: 10, margin: '0 0 0 2px', cursor: 'help', padding: '0 4px' }}>
+                      Repeated
+                    </Tag>
+                  </Tooltip>
+                )}
               </div>
               {editingPhone ? (
                 <Input
@@ -1309,7 +1335,7 @@ const LeadsPageEnhanced = () => {
         </Space>
       ),
     },
-  ], [uniqueCountries, uniqueCourses, uniqueSources, uniqueStatuses, uniqueAssigned, isCounselor, authUser, users, navigate, decayConfig, updateMutation, inlineUpdate, handleTableChange, getActionMenu, editingCell, setEditingCell, commitEdit, setEditingValue, tableFilterState]);
+  ], [uniqueCountries, uniqueCourses, uniqueSources, uniqueStatuses, uniqueAssigned, isCounselor, authUser, users, navigate, decayConfig, updateMutation, inlineUpdate, handleTableChange, getActionMenu, editingCell, setEditingCell, commitEdit, setEditingValue, tableFilterState, repeatedLeadIds, repeatedReasonMap]);
 
   const activeAdvFilters = Object.values(advFilters).filter(v => v && (Array.isArray(v) ? v.length > 0 : true)).length;
 

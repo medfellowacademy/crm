@@ -228,8 +228,9 @@ export const callTimingAPI = {
 
 // Duplicate Detection API
 export const duplicatesAPI = {
-  check:  (data)    => api.post('/api/leads/check-duplicates', data),
-  merge:  (payload) => api.post('/api/leads/merge', payload),
+  check:    (data)    => api.post('/api/leads/check-duplicates', data),
+  merge:    (payload) => api.post('/api/leads/merge', payload),
+  repeated: ()        => api.get('/api/leads/repeated'),
 };
 
 // Score Decay Engine API

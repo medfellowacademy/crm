@@ -7191,18 +7191,92 @@ def _name_overlap(a: str, b: str) -> float:
     return len(sa & sb) / max(len(sa), len(sb))
 
 
+def _strip_phone(phone: str) -> str:
+    """Return digits-only, stripped of country code prefix for loose matching.
+    Keeps last 9 digits so +91-98765-43210 == 9876543210 == 919876543210."""
+    if not phone:
+        return ""
+    digits = re.sub(r'[^0-9]', '', str(phone))
+    return digits[-9:] if len(digits) >= 9 else digits
+
+
 @app.post("/api/leads/check-duplicates")
 async def check_duplicates(
     payload: dict,
     current_user: dict = Depends(get_current_user)
 ):
-    """
-    Given phone / email / full_name of a *new* lead, return any existing leads
-    that look like duplicates - SUPABASE ONLY (Simplified)
-    """
-    
-    # Simplified implementation
-    return {"duplicates": [], "match_count": 0}
+    """Return existing leads that match on phone, email, or name."""
+    phone      = (payload.get("phone")     or "").strip()
+    email      = (payload.get("email")     or "").strip().lower()
+    full_name  = (payload.get("full_name") or "").strip().lower()
+    exclude_id = payload.get("lead_id", "")   # skip the lead being edited
+
+    if not any([phone, email, full_name]):
+        return {"duplicates": [], "match_count": 0}
+
+    phone_tail = _strip_phone(phone)   # last 9 digits for country-code-safe match
+
+    candidates = []
+
+    # ── Phone match ───────────────────────────────────────────────────────────
+    if phone:
+        try:
+            rows = supabase_data.client.table('leads') \
+                .select("lead_id,full_name,phone,email,whatsapp,country,source,"
+                        "course_interested,status,ai_score,ai_segment,assigned_to,created_at") \
+                .neq('lead_id', exclude_id) \
+                .execute().data or []
+            for r in rows:
+                if _strip_phone(r.get('phone') or '') == phone_tail and phone_tail:
+                    candidates.append((r, 'exact_phone'))
+                elif _strip_phone(r.get('whatsapp') or '') == phone_tail and phone_tail:
+                    candidates.append((r, 'exact_phone'))
+        except Exception as e:
+            logger.warning(f"check-duplicates phone search failed: {e}")
+
+    # ── Email match ───────────────────────────────────────────────────────────
+    if email:
+        try:
+            rows = supabase_data.client.table('leads') \
+                .select("lead_id,full_name,phone,email,whatsapp,country,source,"
+                        "course_interested,status,ai_score,ai_segment,assigned_to,created_at") \
+                .ilike('email', email) \
+                .neq('lead_id', exclude_id) \
+                .execute().data or []
+            for r in rows:
+                candidates.append((r, 'exact_email'))
+        except Exception as e:
+            logger.warning(f"check-duplicates email search failed: {e}")
+
+    # ── Name match (exact, case-insensitive) ──────────────────────────────────
+    if full_name:
+        try:
+            rows = supabase_data.client.table('leads') \
+                .select("lead_id,full_name,phone,email,whatsapp,country,source,"
+                        "course_interested,status,ai_score,ai_segment,assigned_to,created_at") \
+                .ilike('full_name', full_name) \
+                .neq('lead_id', exclude_id) \
+                .execute().data or []
+            for r in rows:
+                candidates.append((r, 'fuzzy_name'))
+        except Exception as e:
+            logger.warning(f"check-duplicates name search failed: {e}")
+
+    # Merge: group match_types by lead_id
+    seen: dict = {}
+    for lead, match_type in candidates:
+        lid = lead['lead_id']
+        if lid not in seen:
+            seen[lid] = {**lead, 'match_types': [match_type]}
+        elif match_type not in seen[lid]['match_types']:
+            seen[lid]['match_types'].append(match_type)
+
+    duplicates = list(seen.values())
+    # Sort: phone match first, then email, then name
+    priority = {'exact_phone': 0, 'exact_email': 1, 'fuzzy_name': 2}
+    duplicates.sort(key=lambda d: min(priority.get(t, 9) for t in d['match_types']))
+
+    return {"duplicates": duplicates, "match_count": len(duplicates)}
 
 
 def _lead_row(db_lead) -> dict:
@@ -7223,6 +7297,72 @@ def _lead_row(db_lead) -> dict:
         "assigned_to":      db_lead.assigned_to,
         "created_at":       db_lead.created_at,
     }
+
+
+@app.get("/api/leads/repeated")
+async def get_repeated_leads(
+    request: Request,
+    current_user: dict = Depends(get_current_user)
+):
+    """Return groups of leads that share a phone (last 9 digits), email, or exact name."""
+    _verify_token(request)
+    try:
+        rows = supabase_data.client.table('leads') \
+            .select("lead_id,full_name,phone,email,whatsapp,country,source,"
+                    "course_interested,status,assigned_to,created_at,ai_score,ai_segment") \
+            .execute().data or []
+
+        # Index by phone tail
+        phone_groups: dict = {}
+        email_groups: dict = {}
+        name_groups:  dict = {}
+
+        for r in rows:
+            tail = _strip_phone(r.get('phone') or r.get('whatsapp') or '')
+            if tail:
+                phone_groups.setdefault(tail, []).append(r)
+
+            em = (r.get('email') or '').strip().lower()
+            if em:
+                email_groups.setdefault(em, []).append(r)
+
+            nm = (r.get('full_name') or '').strip().lower()
+            if nm:
+                name_groups.setdefault(nm, []).append(r)
+
+        # Collect lead_ids that appear in any group of size > 1
+        repeated_ids: set = set()
+        repeat_reason: dict = {}   # lead_id → list of match types
+
+        for tail, group in phone_groups.items():
+            if len(group) > 1:
+                for r in group:
+                    lid = r['lead_id']
+                    repeated_ids.add(lid)
+                    repeat_reason.setdefault(lid, set()).add('same_phone')
+
+        for em, group in email_groups.items():
+            if len(group) > 1:
+                for r in group:
+                    lid = r['lead_id']
+                    repeated_ids.add(lid)
+                    repeat_reason.setdefault(lid, set()).add('same_email')
+
+        for nm, group in name_groups.items():
+            if len(group) > 1:
+                for r in group:
+                    lid = r['lead_id']
+                    repeated_ids.add(lid)
+                    repeat_reason.setdefault(lid, set()).add('same_name')
+
+        repeated = [
+            {**r, 'repeat_reasons': list(repeat_reason.get(r['lead_id'], []))}
+            for r in rows if r['lead_id'] in repeated_ids
+        ]
+        return {"repeated": repeated, "total": len(repeated)}
+    except Exception as e:
+        logger.error(f"Error fetching repeated leads: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to fetch repeated leads")
 
 
 @app.post("/api/leads/merge")
