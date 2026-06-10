@@ -7304,20 +7304,37 @@ async def get_repeated_leads(
     request: Request,
     current_user: dict = Depends(get_current_user)
 ):
-    """Return groups of leads that share a phone (last 9 digits), email, or exact name."""
+    """Return all leads that share a phone (last 9 digits), email, or full name with another lead."""
     _verify_token(request)
     try:
-        rows = supabase_data.client.table('leads') \
-            .select("lead_id,full_name,phone,email,whatsapp,country,source,"
-                    "course_interested,status,assigned_to,created_at,ai_score,ai_segment") \
-            .execute().data or []
+        COLS = ("lead_id,full_name,phone,email,whatsapp,country,source,"
+                "course_interested,status,assigned_to,created_at,ai_score,ai_segment")
 
-        # Index by phone tail
+        # Fetch ALL leads in pages of 1000 (Supabase default cap)
+        all_rows: list = []
+        page_size = 1000
+        offset = 0
+        while True:
+            result = (
+                supabase_data.client.table('leads')
+                .select(COLS, count='exact')
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            batch = result.data or []
+            all_rows.extend(batch)
+            if len(batch) < page_size:
+                break
+            offset += page_size
+
+        logger.info(f"Repeated-leads check: loaded {len(all_rows)} total leads")
+
+        # Index by phone tail, email, name
         phone_groups: dict = {}
         email_groups: dict = {}
         name_groups:  dict = {}
 
-        for r in rows:
+        for r in all_rows:
             tail = _strip_phone(r.get('phone') or r.get('whatsapp') or '')
             if tail:
                 phone_groups.setdefault(tail, []).append(r)
@@ -7332,7 +7349,7 @@ async def get_repeated_leads(
 
         # Collect lead_ids that appear in any group of size > 1
         repeated_ids: set = set()
-        repeat_reason: dict = {}   # lead_id → list of match types
+        repeat_reason: dict = {}
 
         for tail, group in phone_groups.items():
             if len(group) > 1:
@@ -7357,8 +7374,9 @@ async def get_repeated_leads(
 
         repeated = [
             {**r, 'repeat_reasons': list(repeat_reason.get(r['lead_id'], []))}
-            for r in rows if r['lead_id'] in repeated_ids
+            for r in all_rows if r['lead_id'] in repeated_ids
         ]
+        logger.info(f"Repeated-leads check: found {len(repeated)} repeated out of {len(all_rows)}")
         return {"repeated": repeated, "total": len(repeated)}
     except Exception as e:
         logger.error(f"Error fetching repeated leads: {e}", exc_info=True)
