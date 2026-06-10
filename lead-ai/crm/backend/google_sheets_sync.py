@@ -65,44 +65,88 @@ def _map_course(raw: str) -> str:
 # ── sheet fetching ─────────────────────────────────────────────────────────────
 
 def get_sheet_tabs() -> List[Dict]:
-    """Return list of {name, gid} for every tab in the sheet."""
+    """
+    Return list of {name, gid} for EVERY tab in the spreadsheet.
+    Uses the Sheets API v4 metadata endpoint — requires API key.
+    Falls back to gid=0 only if no API key is set.
+    """
+    if not SHEETS_API_KEY:
+        logger.warning("GOOGLE_SHEETS_API_KEY not set — only first tab will be synced.")
+        return [{"name": "Sheet1", "gid": "0"}]
+
+    url = (
+        f"https://sheets.googleapis.com/v4/spreadsheets/{SHEET_ID}"
+        f"?key={SHEETS_API_KEY}&fields=sheets.properties"
+    )
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        tabs = [
+            {
+                "name": s["properties"]["title"],
+                "gid": str(s["properties"]["sheetId"]),
+            }
+            for s in resp.json().get("sheets", [])
+        ]
+        logger.info(f"Found {len(tabs)} sheet tabs: {[t['name'] for t in tabs]}")
+        return tabs
+    except Exception as e:
+        logger.error(f"Sheets API tab listing failed: {e}")
+        return [{"name": "Sheet1", "gid": "0"}]
+
+
+def fetch_tab_rows(tab_name: str) -> List[Dict]:
+    """
+    Fetch all rows from a single tab using the Sheets API v4 values endpoint.
+    Returns a list of dicts (header row used as keys).
+    This works for any publicly-accessible sheet + API key — no CSV/browser needed.
+    """
+    import urllib.parse
+    encoded_name = urllib.parse.quote(tab_name)
+    url = (
+        f"https://sheets.googleapis.com/v4/spreadsheets/{SHEET_ID}"
+        f"/values/{encoded_name}?key={SHEETS_API_KEY}"
+        f"&valueRenderOption=UNFORMATTED_VALUE"
+        f"&dateTimeRenderOption=FORMATTED_STRING"
+    )
+    try:
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        raw_rows = data.get("values", [])
+        if not raw_rows:
+            return []
+
+        headers = [str(h).strip().lower() for h in raw_rows[0]]
+        rows = []
+        for row_vals in raw_rows[1:]:
+            # Pad short rows with empty strings
+            padded = row_vals + [""] * (len(headers) - len(row_vals))
+            rows.append(dict(zip(headers, padded)))
+        logger.info(f"Tab '{tab_name}': fetched {len(rows)} rows")
+        return rows
+    except Exception as e:
+        logger.error(f"Sheets API values fetch failed for tab '{tab_name}': {e}")
+        return []
+
+
+def _fetch_rows_for_tab(tab: Dict) -> List[Dict]:
+    """Pick the best fetch method based on what credentials are available."""
     if SHEETS_API_KEY:
-        url = (
-            f"https://sheets.googleapis.com/v4/spreadsheets/{SHEET_ID}"
-            f"?key={SHEETS_API_KEY}&fields=sheets.properties"
-        )
-        try:
-            resp = requests.get(url, timeout=10)
-            if resp.status_code == 200:
-                return [
-                    {
-                        "name": s["properties"]["title"],
-                        "gid": str(s["properties"]["sheetId"]),
-                    }
-                    for s in resp.json().get("sheets", [])
-                ]
-        except Exception as e:
-            logger.warning(f"Sheets API tab listing failed: {e}")
-
-    # Fallback – only gid=0 known without API key
-    return [{"name": "Sheet1", "gid": "0"}]
-
-
-def fetch_csv_rows(gid: str) -> List[Dict]:
-    """Download CSV for a single tab and return list of row dicts."""
+        return fetch_tab_rows(tab["name"])
+    # Fallback: CSV export (only works for fully public sheets)
     url = (
         f"https://docs.google.com/spreadsheets/d/{SHEET_ID}"
-        f"/export?format=csv&gid={gid}"
+        f"/export?format=csv&gid={tab['gid']}"
     )
     try:
         resp = requests.get(url, timeout=30, allow_redirects=True)
         if resp.status_code != 200:
-            logger.error(f"CSV fetch failed (gid={gid}): HTTP {resp.status_code}")
             return []
         content = resp.content.decode("utf-8-sig")
         return list(csv.DictReader(io.StringIO(content)))
     except Exception as e:
-        logger.error(f"CSV fetch error (gid={gid}): {e}")
+        logger.error(f"CSV fallback failed (gid={tab['gid']}): {e}")
         return []
 
 
@@ -121,9 +165,11 @@ def row_to_lead(row: Dict, tab_name: str) -> Optional[Dict]:
     if not full_name and not email and not phone:
         return None
 
-    # Course from custom question
+    # Course from custom question (handle both raw and lowercased header keys)
     course_raw = (
         row.get("which_fellowship_program_are_you_interested_in?")
+        or row.get("which fellowship program are you interested in?")
+        or row.get("fellowship_program")
         or row.get("course")
         or ""
     ).strip()
@@ -215,7 +261,7 @@ def sync_sheet_to_crm() -> Dict:
     error_count = 0
 
     for tab in tabs:
-        rows = fetch_csv_rows(tab["gid"])
+        rows = _fetch_rows_for_tab(tab)
         for row in rows:
             lead = row_to_lead(row, tab["name"])
             if not lead:
