@@ -123,13 +123,15 @@ class SupabaseDataLayer:
             "last_contact_date,buying_signal_strength,churn_risk,"
             "primary_objection,next_action,priority_level,"
             "qualification,company,loss_reason,loss_note,"
-            "utm_source,utm_medium,utm_campaign"
+            "utm_source,utm_medium,utm_campaign,"
+            "meta_lead_id,adset_name,campaign_name,ad_name"
         )
         LIST_COLUMNS_COMPAT = (
             LIST_COLUMNS
             .replace(",qualification", "")
             .replace(",company", "")
             .replace(",utm_source,utm_medium,utm_campaign", "")
+            .replace(",meta_lead_id,adset_name,campaign_name,ad_name", "")
         )
 
         def _build_query(columns):
@@ -419,7 +421,10 @@ class SupabaseDataLayer:
         # NEW_COLUMNS so the fallback silently drops them when they don't exist yet.
         # The newer columns (emi_details, registration_fees, etc.) now ALWAYS exist —
         # do NOT list them here or they will be silently dropped on any error.
-        NEW_COLUMNS = {'company', 'qualification', 'utm_source', 'utm_medium', 'utm_campaign'}
+        NEW_COLUMNS = {
+            'company', 'qualification', 'utm_source', 'utm_medium', 'utm_campaign',
+            'meta_lead_id', 'adset_name', 'campaign_name', 'ad_name',
+        }
         try:
             response = self.client.table('leads').update(cleaned_data).eq('lead_id', lead_id).execute()
             return response.data[0] if response.data else None

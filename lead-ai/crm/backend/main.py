@@ -7771,6 +7771,68 @@ async def mark_whatsapp_read(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ============================================================================
+# GOOGLE SHEETS / META LEADS SYNC
+# ============================================================================
+
+@app.post("/api/sheets/sync")
+async def trigger_sheet_sync(current_user: dict = Depends(get_current_user)):
+    """Manually trigger a Google Sheets → CRM sync."""
+    role = current_user.get("role", "")
+    if role not in ("admin", "manager"):
+        raise HTTPException(status_code=403, detail="Admin or Manager required")
+    try:
+        from google_sheets_sync import sync_sheet_to_crm
+        result = sync_sheet_to_crm()
+        return result
+    except Exception as e:
+        logger.error(f"Sheet sync error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/sheets/status")
+async def get_sheet_sync_status(current_user: dict = Depends(get_current_user)):
+    """Return last sync time and config."""
+    try:
+        client = supabase_manager.get_client()
+        result = client.table("sheet_sync_config").select("*").eq("id", 1).execute()
+        config = result.data[0] if result.data else {}
+
+        import os
+        return {
+            "sheet_id": os.getenv("GOOGLE_SHEET_ID", "1jYweJi8fyy2dwyPyrBYjwKCk0tTP_FDsszlU5PwwFVE"),
+            "sheet_url": f"https://docs.google.com/spreadsheets/d/{os.getenv('GOOGLE_SHEET_ID', '1jYweJi8fyy2dwyPyrBYjwKCk0tTP_FDsszlU5PwwFVE')}",
+            "enabled": config.get("enabled", False),
+            "last_synced_at": config.get("last_synced_at"),
+            "tabs_count": config.get("tabs_count", 0),
+            "api_key_configured": bool(os.getenv("GOOGLE_SHEETS_API_KEY")),
+        }
+    except Exception as e:
+        logger.error(f"Sheet status error: {e}")
+        return {"enabled": False, "last_synced_at": None, "error": str(e)}
+
+
+@app.get("/api/sheets/adsets")
+async def get_adset_stats(current_user: dict = Depends(get_current_user)):
+    """Return per-adset lead counts for all Meta-sourced leads."""
+    try:
+        from google_sheets_sync import get_adset_stats
+        return get_adset_stats()
+    except Exception as e:
+        logger.error(f"Adset stats error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/sheets/tabs")
+async def get_sheet_tabs_endpoint(current_user: dict = Depends(get_current_user)):
+    """List all tab names in the Google Sheet."""
+    try:
+        from google_sheets_sync import get_sheet_tabs
+        return get_sheet_tabs()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
     import uvicorn
     print("🚀 Starting Medical Education CRM API...")

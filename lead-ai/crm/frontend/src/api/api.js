@@ -233,6 +233,14 @@ export const duplicatesAPI = {
   repeated: ()        => api.get('/api/leads/repeated'),
 };
 
+// Google Sheets / Meta Leads Sync API
+export const sheetsAPI = {
+  sync:     ()  => api.post('/api/sheets/sync'),
+  status:   ()  => api.get('/api/sheets/status'),
+  adsets:   ()  => api.get('/api/sheets/adsets'),
+  tabs:     ()  => api.get('/api/sheets/tabs'),
+};
+
 // Score Decay Engine API
 export const decayAPI = {
   getConfig:   ()       => api.get('/api/admin/decay-config'),
