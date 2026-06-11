@@ -156,9 +156,9 @@ const MetaLeadsPage = () => {
   });
 
   // Totals
-  const total      = adsets.reduce((s, a) => s + a.total,       0);
-  const newLeads   = adsets.reduce((s, a) => s + a.new,         0);
-  const enrolled   = adsets.reduce((s, a) => s + a.enrolled,    0);
+  const total      = adsets.reduce((s, a) => s + a.total,        0);
+  const freshLeads = adsets.reduce((s, a) => s + (a.fresh || 0), 0);
+  const enrolled   = adsets.reduce((s, a) => s + a.enrolled,     0);
   const adSetCount = adsets.length;
 
   const columns = [
@@ -189,34 +189,48 @@ const MetaLeadsPage = () => {
       ),
     },
     {
-      title: 'Total Leads',
+      title: 'Total',
       dataIndex: 'total',
       key: 'total',
-      width: 100,
+      width: 80,
       sorter: (a, b) => a.total - b.total,
       defaultSortOrder: 'descend',
       render: v => <Tag color="blue" style={{ fontWeight: 700 }}>{v}</Tag>,
     },
     {
-      title: 'New',
-      dataIndex: 'new',
-      key: 'new',
+      title: 'Fresh',
+      dataIndex: 'fresh',
+      key: 'fresh',
       width: 70,
-      render: v => v > 0 ? <Badge count={v} color="#1677ff" /> : <Text type="secondary">0</Text>,
+      render: v => (v || 0) > 0 ? <Badge count={v} color="#1677ff" /> : <Text type="secondary">0</Text>,
+    },
+    {
+      title: 'Follow Up',
+      dataIndex: 'follow_up',
+      key: 'follow_up',
+      width: 90,
+      render: v => (v || 0) > 0 ? <Badge count={v} color="#f59e0b" /> : <Text type="secondary">0</Text>,
     },
     {
       title: 'Interested',
       dataIndex: 'interested',
       key: 'interested',
       width: 90,
-      render: v => v > 0 ? <Badge count={v} color="#06b6d4" /> : <Text type="secondary">0</Text>,
+      render: v => (v || 0) > 0 ? <Badge count={v} color="#06b6d4" /> : <Text type="secondary">0</Text>,
     },
     {
       title: 'Enrolled',
       dataIndex: 'enrolled',
       key: 'enrolled',
-      width: 90,
-      render: v => v > 0 ? <Badge count={v} color="#10b981" /> : <Text type="secondary">0</Text>,
+      width: 80,
+      render: v => (v || 0) > 0 ? <Badge count={v} color="#10b981" /> : <Text type="secondary">0</Text>,
+    },
+    {
+      title: 'Not Int.',
+      dataIndex: 'not_interested',
+      key: 'not_interested',
+      width: 80,
+      render: v => (v || 0) > 0 ? <Badge count={v} color="#ef4444" /> : <Text type="secondary">0</Text>,
     },
     {
       title: 'Latest Lead',
@@ -317,7 +331,7 @@ const MetaLeadsPage = () => {
         {[
           { title: 'Total Meta Leads', value: total, icon: <TeamOutlined />, color: '#1877f2' },
           { title: 'Ad Sets', value: adSetCount, icon: <BarChartOutlined />, color: '#8b5cf6' },
-          { title: 'New / Uncontacted', value: newLeads, icon: <ClockCircleOutlined />, color: '#f59e0b' },
+          { title: 'Fresh / Uncontacted', value: freshLeads, icon: <ClockCircleOutlined />, color: '#f59e0b' },
           { title: 'Enrolled', value: enrolled, icon: <DollarCircleOutlined />, color: '#10b981' },
         ].map(({ title, value, icon, color }) => (
           <Col xs={12} sm={6} key={title}>

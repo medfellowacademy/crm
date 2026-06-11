@@ -347,10 +347,12 @@ def get_adset_stats() -> List[Dict]:
         "campaign_name": "",
         "source": "Facebook",
         "total": 0,
-        "new": 0,
+        "fresh": 0,
+        "follow_up": 0,
         "interested": 0,
         "enrolled": 0,
         "not_interested": 0,
+        "junk": 0,
         "latest": None,
     })
 
@@ -363,15 +365,19 @@ def get_adset_stats() -> List[Dict]:
         if r.get("source"):
             s["source"] = r["source"]
         s["total"] += 1
-        st = (r.get("status") or "").lower()
-        if st == "new":
-            s["new"] += 1
+        st = (r.get("status") or "").strip().lower()
+        if st in ("fresh", "new"):
+            s["fresh"] += 1
+        elif st in ("follow up", "follow-up", "followup", "warm", "hot"):
+            s["follow_up"] += 1
         elif st == "interested":
             s["interested"] += 1
         elif st == "enrolled":
             s["enrolled"] += 1
-        elif "not" in st and "interest" in st:
+        elif st in ("not interested", "not_interested"):
             s["not_interested"] += 1
+        elif st in ("junk", "not answering", "not_answering"):
+            s["junk"] += 1
         c = r.get("created_at")
         if c and (not s["latest"] or c > s["latest"]):
             s["latest"] = c
