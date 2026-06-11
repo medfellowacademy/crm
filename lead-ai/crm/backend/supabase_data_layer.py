@@ -597,6 +597,222 @@ class SupabaseDataLayer:
             logger.error(f"refresh_repeated_marks failed: {e}")
             return 0
 
+    def cleanup_duplicate_leads(self) -> Dict[str, Any]:
+        """
+        One-time (or repeated) cleanup: find leads sharing phone or email,
+        keep the best record, merge data, delete the rest.
+
+        Keeper selection priority:
+          1. Highest status rank (Enrolled > Interested > Hot > Warm > Follow Up >
+             Not Answering > Not Interested > Junk > Fresh)
+          2. Most non-null fields
+          3. Oldest created_at (first to enter CRM)
+
+        Before deleting a duplicate:
+          - Copy its notes/activities to the keeper (using integer IDs)
+          - Transfer any meta fields (meta_lead_id, adset_name, etc.) the keeper lacks
+          - Transfer any contact fields (email, phone) the keeper lacks
+
+        Returns: { merged_groups, deleted_leads, skipped_groups }
+        """
+        import re as _re
+
+        STATUS_RANK = {
+            'enrolled': 10, 'will enroll later': 9, 'interested': 8,
+            'hot': 7, 'warm': 6, 'follow up': 5,
+            'not answering': 4, 'not interested': 3, 'junk': 2, 'fresh': 1,
+        }
+
+        def _tail(p):
+            d = _re.sub(r'[^0-9]', '', str(p or ''))
+            return d[-9:] if len(d) >= 9 else ''
+
+        def _rank(lead):
+            st = (lead.get('status') or 'fresh').lower()
+            return STATUS_RANK.get(st, 1)
+
+        def _nonnull_count(lead):
+            return sum(1 for v in lead.values() if v is not None and v != '')
+
+        def _pick_keeper(group):
+            return max(
+                group,
+                key=lambda l: (_rank(l), _nonnull_count(l), -(
+                    0 if not l.get('created_at') else
+                    int(l['created_at'].replace('-','').replace('T','').replace(':','').replace('.','').replace('Z','')[:14])
+                ))
+            )
+
+        try:
+            # ── 1. Fetch all leads ────────────────────────────────────────
+            SELECT = (
+                "id,lead_id,full_name,phone,email,status,created_at,"
+                "meta_lead_id,adset_name,campaign_name,ad_name,"
+                "utm_source,utm_medium,utm_campaign,source,country,"
+                "course_interested,assigned_to"
+            )
+            page_size = 1000
+            offset = 0
+            all_leads = []
+            while True:
+                batch = (
+                    self.client.table('leads')
+                    .select(SELECT)
+                    .range(offset, offset + page_size - 1)
+                    .execute()
+                )
+                rows = batch.data or []
+                all_leads.extend(rows)
+                if len(rows) < page_size:
+                    break
+                offset += page_size
+
+            # ── 2. Build duplicate groups ─────────────────────────────────
+            # Map: normalised key → list of lead dicts
+            phone_map: Dict[str, list] = {}
+            email_map: Dict[str, list] = {}
+
+            for lead in all_leads:
+                t = _tail(lead.get('phone'))
+                if t:
+                    phone_map.setdefault(t, []).append(lead)
+                em = (lead.get('email') or '').strip().lower()
+                if em:
+                    email_map.setdefault(em, []).append(lead)
+
+            # Collect groups that have >1 member
+            # Use lead_id as key to avoid counting same lead twice
+            seen_pairs: set = set()
+            groups: list = []
+
+            for key_map in (phone_map, email_map):
+                for _key, members in key_map.items():
+                    if len(members) < 2:
+                        continue
+                    ids = frozenset(l['lead_id'] for l in members)
+                    if ids in seen_pairs:
+                        continue
+                    seen_pairs.add(ids)
+                    groups.append(members)
+
+            # ── 3. Merge each group ───────────────────────────────────────
+            merged_groups = 0
+            deleted_leads = 0
+            skipped_groups = 0
+
+            META_FIELDS = ['meta_lead_id', 'adset_name', 'campaign_name', 'ad_name',
+                           'utm_source', 'utm_medium', 'utm_campaign']
+            CONTACT_FIELDS = ['email', 'phone', 'country', 'course_interested',
+                              'assigned_to', 'source']
+
+            for group in groups:
+                # De-duplicate within the group (a lead might appear in both
+                # phone_map and email_map; use unique lead_ids only)
+                seen = set()
+                unique_group = []
+                for l in group:
+                    if l['lead_id'] not in seen:
+                        seen.add(l['lead_id'])
+                        unique_group.append(l)
+                if len(unique_group) < 2:
+                    skipped_groups += 1
+                    continue
+
+                keeper = _pick_keeper(unique_group)
+                duplicates = [l for l in unique_group if l['lead_id'] != keeper['lead_id']]
+
+                # Build update for keeper: fill missing fields from duplicates
+                keeper_update: Dict[str, Any] = {}
+                for dup in duplicates:
+                    for f in META_FIELDS + CONTACT_FIELDS:
+                        if not keeper.get(f) and dup.get(f):
+                            keeper_update[f] = dup[f]
+                            keeper[f] = dup[f]  # keep in-memory copy up to date
+
+                # Apply update to keeper
+                if keeper_update:
+                    try:
+                        self.client.table('leads').update(keeper_update).eq(
+                            'lead_id', keeper['lead_id']
+                        ).execute()
+                    except Exception as e:
+                        logger.warning(f"Keeper update failed ({keeper['lead_id']}): {e}")
+
+                keeper_int_id = keeper.get('id')
+
+                # Transfer child records then delete duplicates
+                for dup in duplicates:
+                    dup_int_id = dup.get('id')
+                    if keeper_int_id and dup_int_id and keeper_int_id != dup_int_id:
+                        # Reassign notes
+                        try:
+                            self.client.table('notes').update(
+                                {'lead_id': keeper_int_id}
+                            ).eq('lead_id', dup_int_id).execute()
+                        except Exception as e:
+                            logger.warning(f"Notes transfer failed ({dup_int_id}→{keeper_int_id}): {e}")
+                        # Reassign activities
+                        try:
+                            self.client.table('activities').update(
+                                {'lead_id': keeper_int_id}
+                            ).eq('lead_id', dup_int_id).execute()
+                        except Exception as e:
+                            logger.warning(f"Activities transfer failed: {e}")
+                        # Reassign chat messages
+                        try:
+                            self.client.table('chat_messages').update(
+                                {'lead_db_id': keeper_int_id}
+                            ).eq('lead_db_id', dup_int_id).execute()
+                        except Exception as e:
+                            logger.warning(f"Chat messages transfer failed: {e}")
+
+                    # Delete duplicate lead (direct — children already reassigned)
+                    try:
+                        self.client.table('leads').delete().eq(
+                            'lead_id', dup['lead_id']
+                        ).execute()
+                        deleted_leads += 1
+                        logger.info(
+                            f"Deleted duplicate lead {dup['lead_id']} "
+                            f"({dup.get('full_name')}) → kept {keeper['lead_id']}"
+                        )
+                    except Exception as e:
+                        logger.error(f"Delete failed for {dup['lead_id']}: {e}")
+
+                # System note on keeper
+                if keeper_int_id and duplicates:
+                    names = ', '.join(
+                        f"{d.get('full_name') or 'Unknown'} ({d['lead_id'][:8]})"
+                        for d in duplicates
+                    )
+                    try:
+                        self.client.table('notes').insert({
+                            'lead_id':    keeper_int_id,
+                            'content':    f"[CLEANUP] Merged {len(duplicates)} duplicate(s): {names}",
+                            'channel':    'system',
+                            'created_by': 'Cleanup',
+                        }).execute()
+                    except Exception:
+                        pass
+
+                merged_groups += 1
+
+            # ── 4. Reset is_repeated flags ────────────────────────────────
+            remaining = self.refresh_repeated_marks()
+
+            result = {
+                'merged_groups':  merged_groups,
+                'deleted_leads':  deleted_leads,
+                'skipped_groups': skipped_groups,
+                'still_repeated': remaining,
+            }
+            logger.info(f"cleanup_duplicate_leads complete: {result}")
+            return result
+
+        except Exception as e:
+            logger.error(f"cleanup_duplicate_leads failed: {e}", exc_info=True)
+            return {'error': str(e)}
+
     def get_courses(self, is_active: bool = True) -> List[Dict[str, Any]]:
         """Get courses"""
         try:

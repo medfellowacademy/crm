@@ -1,11 +1,19 @@
 """
 Google Sheets → CRM sync.
-Reads Meta Lead Ads data from a publicly-readable Google Sheet
-and creates new CRM leads for any unsynced rows.
+Reads Meta Lead Ads data from a publicly-readable Google Sheet.
+
+Deduplication model (Salesforce/Zoho style):
+  - Before inserting a new lead, check if a lead with the same phone or email
+    already exists in CRM.
+  - If found  → update the existing lead's Meta fields + add a system note.
+  - If not    → create a new lead as normal.
+This ensures one person = one CRM record, regardless of how many Meta forms
+they submit or how many ad sets they come from.
 """
 
 import os
 import io
+import re as _re
 import csv
 import logging
 import requests
@@ -60,6 +68,59 @@ def _map_course(raw: str) -> str:
     except Exception:
         pass
     return raw
+
+
+# ── contact deduplication ──────────────────────────────────────────────────────
+
+def _phone_tail(phone: str) -> str:
+    """Return the last 9 digits of a phone number (country-code-safe)."""
+    digits = _re.sub(r'[^0-9]', '', str(phone or ''))
+    return digits[-9:] if len(digits) >= 9 else ''
+
+
+def find_existing_lead_by_contact(phone: str, email: str) -> Optional[Dict]:
+    """
+    Look up an existing CRM lead matching this phone (last-9-digit) or email.
+    Returns lead dict with id (int), lead_id (uuid), status, meta_lead_id, etc.
+    or None if no match found.
+    """
+    from supabase_client import supabase_manager
+    client = supabase_manager.get_client()
+    SELECT = "id,lead_id,full_name,email,phone,status,meta_lead_id,adset_name,source"
+
+    # Email match (most reliable — try first)
+    if email and '@' in email:
+        try:
+            result = (
+                client.table("leads")
+                .select(SELECT)
+                .ilike("email", email.strip())
+                .limit(1)
+                .execute()
+            )
+            if result.data:
+                return result.data[0]
+        except Exception as e:
+            logger.warning(f"Email dedup lookup failed: {e}")
+
+    # Phone tail match
+    tail = _phone_tail(phone)
+    if tail:
+        try:
+            result = (
+                client.table("leads")
+                .select(SELECT)
+                .like("phone", f"%{tail}")
+                .limit(10)
+                .execute()
+            )
+            for lead in (result.data or []):
+                if _phone_tail(lead.get('phone', '')) == tail:
+                    return lead
+        except Exception as e:
+            logger.warning(f"Phone dedup lookup failed: {e}")
+
+    return None
 
 
 # ── sheet fetching ─────────────────────────────────────────────────────────────
@@ -247,16 +308,24 @@ def _normalize(lead: Dict) -> Dict:
 
 def sync_sheet_to_crm() -> Dict:
     """
-    Main sync entry point.
-    Downloads all tabs, skips already-synced rows, inserts new leads.
-    Returns a stats dict.
+    Main sync entry point — Salesforce-style deduplication.
+
+    For each sheet row:
+      1. Skip if meta_lead_id already synced.
+      2. Check if a lead with the same phone/email already exists.
+         YES → update meta fields on existing lead + add system note (no new row).
+         NO  → insert as a fresh lead.
+
+    Returns a stats dict with new_leads, updated_leads, skipped, errors.
     """
     from supabase_client import supabase_manager
 
     synced_ids = get_synced_meta_ids()
     tabs = get_sheet_tabs()
+    client = supabase_manager.get_client()
 
     new_count = 0
+    updated_count = 0
     skip_count = 0
     error_count = 0
 
@@ -275,19 +344,71 @@ def sync_sheet_to_crm() -> Dict:
 
             lead = _normalize(lead)
 
-            try:
-                client = supabase_manager.get_client()
-                result = client.table("leads").insert(lead).execute()
-                if result.data:
+            # ── Deduplication check ──────────────────────────────────────
+            existing = find_existing_lead_by_contact(
+                lead.get('phone') or '',
+                lead.get('email') or '',
+            )
+
+            if existing:
+                # Person already in CRM — update Meta fields, add note
+                existing_uuid = existing['lead_id']
+                existing_int_id = existing.get('id')
+
+                meta_update = {k: v for k, v in {
+                    'meta_lead_id':  meta_id,
+                    'adset_name':    lead.get('adset_name'),
+                    'campaign_name': lead.get('campaign_name'),
+                    'ad_name':       lead.get('ad_name'),
+                    'utm_source':    lead.get('utm_source'),
+                    'utm_medium':    lead.get('utm_medium'),
+                    'utm_campaign':  lead.get('utm_campaign'),
+                    # Fill empty contact fields if missing on the existing lead
+                    'email':  lead.get('email') if not existing.get('email') else None,
+                    'phone':  lead.get('phone') if not existing.get('phone') else None,
+                    # Update source only if the existing one is blank
+                    'source': lead.get('source') if not existing.get('source') else None,
+                }.items() if v is not None}
+
+                try:
+                    client.table("leads").update(meta_update).eq('lead_id', existing_uuid).execute()
+                    # System note so counselors see the re-submission
+                    if existing_int_id:
+                        try:
+                            client.table("notes").insert({
+                                "lead_id":    existing_int_id,
+                                "content": (
+                                    f"[META SYNC] Re-submitted via Meta ad · "
+                                    f"Ad Set: {lead.get('adset_name') or 'Unknown'} · "
+                                    f"Campaign: {lead.get('campaign_name') or ''} · "
+                                    f"Tab: {tab['name']}"
+                                ),
+                                "channel":    "system",
+                                "created_by": "Sheet Sync",
+                            }).execute()
+                        except Exception:
+                            pass  # Non-critical
                     synced_ids.add(meta_id)
-                    new_count += 1
-            except Exception as e:
-                logger.error(f"Insert failed for meta_id={meta_id}: {e}")
-                error_count += 1
+                    updated_count += 1
+                    logger.info(
+                        f"Updated existing lead {existing_uuid} with meta_id={meta_id}"
+                    )
+                except Exception as e:
+                    logger.error(f"Meta-update failed for {existing_uuid}: {e}")
+                    error_count += 1
+            else:
+                # New person — insert fresh lead
+                try:
+                    result = client.table("leads").insert(lead).execute()
+                    if result.data:
+                        synced_ids.add(meta_id)
+                        new_count += 1
+                except Exception as e:
+                    logger.error(f"Insert failed for meta_id={meta_id}: {e}")
+                    error_count += 1
 
     # Persist last-synced timestamp
     try:
-        client = supabase_manager.get_client()
         client.table("sheet_sync_config").upsert(
             {
                 "id": 1,
@@ -301,8 +422,8 @@ def sync_sheet_to_crm() -> Dict:
     except Exception as e:
         logger.warning(f"Could not update sheet_sync_config: {e}")
 
-    # After importing new leads, refresh is_repeated marks
-    if new_count > 0:
+    # Refresh is_repeated marks after any changes
+    if new_count > 0 or updated_count > 0:
         try:
             from supabase_data_layer import SupabaseDataLayer
             _dl = SupabaseDataLayer()
@@ -311,15 +432,16 @@ def sync_sheet_to_crm() -> Dict:
         except Exception as e:
             logger.warning(f"Post-sync repeated refresh failed: {e}")
 
-    result = {
-        "new_leads": new_count,
-        "skipped": skip_count,
-        "errors": error_count,
-        "tabs_synced": len(tabs),
-        "synced_at": datetime.utcnow().isoformat(),
+    stats = {
+        "new_leads":     new_count,
+        "updated_leads": updated_count,
+        "skipped":       skip_count,
+        "errors":        error_count,
+        "tabs_synced":   len(tabs),
+        "synced_at":     datetime.utcnow().isoformat(),
     }
-    logger.info(f"Sheet sync complete: {result}")
-    return result
+    logger.info(f"Sheet sync complete: {stats}")
+    return stats
 
 
 # ── ad-set stats ───────────────────────────────────────────────────────────────

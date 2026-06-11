@@ -7,9 +7,11 @@ import {
   SyncOutlined, CheckCircleOutlined, ClockCircleOutlined,
   ExclamationCircleOutlined, InstagramOutlined, FacebookOutlined,
   BarChartOutlined, TeamOutlined, DollarCircleOutlined,
+  MergeCellsOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { sheetsAPI, leadsAPI } from '../api/api';
+import { sheetsAPI, leadsAPI, duplicatesAPI } from '../api/api';
+import { useAuth } from '../context/AuthContext';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 dayjs.extend(relativeTime);
@@ -127,6 +129,10 @@ const AllMetaLeadsTable = () => {
 // ── Main page ──────────────────────────────────────────────────────────────────
 const MetaLeadsPage = () => {
   const queryClient = useQueryClient();
+  const { user: authUser } = useAuth();
+  const isAdmin = ['admin', 'super admin', 'manager'].includes(
+    (authUser?.role || '').toLowerCase()
+  );
   const [selectedAdset, setSelectedAdset] = useState(null);
 
   const { data: status, isLoading: statusLoading } = useQuery({
@@ -145,14 +151,38 @@ const MetaLeadsPage = () => {
     mutationFn: () => sheetsAPI.sync(),
     onSuccess: (res) => {
       const d = res.data;
-      message.success(
-        `Sync complete — ${d.new_leads} new leads added, ${d.skipped} already existed.`
-      );
+      const parts = [];
+      if (d.new_leads > 0)     parts.push(`${d.new_leads} new leads created`);
+      if (d.updated_leads > 0) parts.push(`${d.updated_leads} existing leads updated`);
+      if (parts.length === 0)  parts.push('no new leads');
+      message.success(`Sync complete — ${parts.join(', ')} (${d.skipped} skipped)`);
       queryClient.invalidateQueries({ queryKey: ['sheets-status'] });
       queryClient.invalidateQueries({ queryKey: ['sheets-adsets'] });
       queryClient.invalidateQueries({ queryKey: ['leads'] });
+      queryClient.invalidateQueries({ queryKey: ['all-meta-leads'] });
     },
     onError: (e) => message.error(`Sync failed: ${e?.response?.data?.detail || e.message}`),
+  });
+
+  const cleanupMutation = useMutation({
+    mutationFn: () => duplicatesAPI.cleanup(),
+    onSuccess: (res) => {
+      const d = res.data;
+      if (d.error) {
+        message.error(`Cleanup failed: ${d.error}`);
+        return;
+      }
+      message.success(
+        `Cleanup complete — ${d.deleted_leads} duplicate leads removed, ` +
+        `${d.merged_groups} groups merged` +
+        (d.still_repeated > 0 ? `, ${d.still_repeated} still flagged (manual review needed)` : '')
+      );
+      queryClient.invalidateQueries({ queryKey: ['sheets-adsets'] });
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      queryClient.invalidateQueries({ queryKey: ['all-meta-leads'] });
+      queryClient.invalidateQueries({ queryKey: ['repeated-leads'] });
+    },
+    onError: (e) => message.error(`Cleanup failed: ${e?.response?.data?.detail || e.message}`),
   });
 
   // Totals
@@ -266,6 +296,16 @@ const MetaLeadsPage = () => {
           </Text>
         </div>
         <Space>
+          {isAdmin && (
+            <Button
+              icon={<MergeCellsOutlined />}
+              loading={cleanupMutation.isPending}
+              onClick={() => cleanupMutation.mutate()}
+              title="Merge duplicate leads that share phone or email"
+            >
+              Clean Up Duplicates
+            </Button>
+          )}
           <Button
             type="primary"
             icon={<SyncOutlined spin={syncMutation.isPending} />}

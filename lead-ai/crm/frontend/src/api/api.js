@@ -232,6 +232,7 @@ export const duplicatesAPI = {
   merge:           (payload) => api.post('/api/leads/merge', payload),
   repeated:        ()        => api.get('/api/leads/repeated'),
   refreshRepeated: ()        => api.post('/api/leads/refresh-repeated'),
+  cleanup:         ()        => api.post('/api/leads/cleanup-duplicates'),
 };
 
 // Google Sheets / Meta Leads Sync API

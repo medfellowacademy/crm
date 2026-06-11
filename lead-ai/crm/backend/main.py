@@ -7847,6 +7847,24 @@ async def get_sheet_tabs_endpoint(current_user: dict = Depends(get_current_user)
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/leads/cleanup-duplicates")
+async def cleanup_duplicate_leads_endpoint(current_user: dict = Depends(get_current_user)):
+    """
+    Merge duplicate leads that share a phone number or email address.
+    Keeps the most-progressed record, transfers notes/activities, deletes the rest.
+    Admin / Manager only.
+    """
+    role = (current_user.get("role") or "").lower()
+    if role not in ("super admin", "manager", "admin"):
+        raise HTTPException(status_code=403, detail="Admin or Manager role required")
+    try:
+        result = supabase_data.cleanup_duplicate_leads()
+        return result
+    except Exception as e:
+        logger.error(f"cleanup_duplicate_leads error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
     import uvicorn
     print("🚀 Starting Medical Education CRM API...")
