@@ -2360,7 +2360,9 @@ async def get_leads(
     updated_on: Optional[str] = None,
     updated_after: Optional[datetime] = None,
     updated_before: Optional[datetime] = None,
-    search: Optional[str] = None
+    search: Optional[str] = None,
+    adset_name: Optional[str] = None,
+    meta_only: bool = False,
 ):
     """Get leads with filters. Counselors are restricted to their own leads. Now Supabase-only."""
 
@@ -2443,6 +2445,8 @@ async def get_leads(
                 updated_before=updated_before.isoformat() if updated_before else None,
                 updated_from=updated_from.isoformat() if updated_from else None,
                 updated_to=updated_to.isoformat() if updated_to else None,
+                adset_name=adset_name,
+                meta_only=meta_only,
         )
         # Cache and return raw data from Supabase (already in correct format)
         LEAD_CACHE[_cache_key] = leads_data

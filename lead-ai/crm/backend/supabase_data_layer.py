@@ -108,6 +108,8 @@ class SupabaseDataLayer:
         updated_before: Optional[str] = None,
         updated_from: Optional[str] = None,
         updated_to: Optional[str] = None,
+        adset_name: Optional[str] = None,
+        meta_only: bool = False,
     ) -> Dict[str, Any]:
         """Get leads with filters. Returns a paginated response dict."""
         # Base column list. 'qualification' is included when the column exists in
@@ -230,6 +232,10 @@ class SupabaseDataLayer:
                 q = q.gt('updated_at', updated_after)
             elif updated_before:
                 q = q.lt('updated_at', updated_before)
+            if adset_name:
+                q = q.ilike('adset_name', adset_name.strip())
+            if meta_only:
+                q = q.not_.is_('meta_lead_id', 'null')
             effective_limit = min(limit, 10000)
             q = q.order('updated_at', desc=False, nullsfirst=False).order('created_at', desc=False)
             return q, effective_limit

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   Table, Card, Button, Tag, Statistic, Row, Col, Space, Typography,
-  Tooltip, Badge, Alert, Spin, Modal, message, Divider,
+  Tooltip, Badge, Alert, Spin, Modal, message, Divider, Tabs,
 } from 'antd';
 import {
   SyncOutlined, CheckCircleOutlined, ClockCircleOutlined,
@@ -22,11 +22,14 @@ const SOURCE_ICON = {
 };
 
 const STATUS_COLORS = {
+  Fresh: 'blue',
   New: 'blue',
   Interested: 'cyan',
   'Follow-up': 'orange',
   Enrolled: 'green',
   'Not Interested': 'red',
+  Hot: 'red',
+  Warm: 'orange',
 };
 
 // ── Lead list modal ────────────────────────────────────────────────────────────
@@ -34,7 +37,7 @@ const AdSetLeadsModal = ({ adset, open, onClose }) => {
   const { data, isLoading } = useQuery({
     queryKey: ['adset-leads', adset],
     queryFn: () =>
-      leadsAPI.getAll({ limit: 500, utm_medium: adset }).then(r => r.data?.leads || []),
+      leadsAPI.getAll({ limit: 1000, adset_name: adset }).then(r => r.data?.leads || []),
     enabled: open && !!adset,
     staleTime: 2 * 60 * 1000,
   });
@@ -78,6 +81,46 @@ const AdSetLeadsModal = ({ adset, open, onClose }) => {
         />
       )}
     </Modal>
+  );
+};
+
+// ── All Meta Leads table ───────────────────────────────────────────────────────
+const AllMetaLeadsTable = () => {
+  const { data, isLoading } = useQuery({
+    queryKey: ['all-meta-leads'],
+    queryFn: () => leadsAPI.getAll({ limit: 2000, meta_only: true }).then(r => r.data?.leads || []),
+    staleTime: 2 * 60 * 1000,
+  });
+
+  const cols = [
+    {
+      title: 'Name', dataIndex: 'full_name', key: 'name', width: 160,
+      render: v => <Text strong>{v}</Text>,
+    },
+    { title: 'Phone', dataIndex: 'phone', key: 'phone', width: 145 },
+    { title: 'Email', dataIndex: 'email', key: 'email', ellipsis: true },
+    { title: 'Course', dataIndex: 'course_interested', key: 'course', ellipsis: true, width: 200 },
+    { title: 'Ad Set', dataIndex: 'adset_name', key: 'adset', ellipsis: true, width: 180,
+      render: v => v ? <Tag color="purple">{v}</Tag> : '—' },
+    { title: 'Source', dataIndex: 'source', key: 'source', width: 100,
+      render: v => <Space size={4}>{SOURCE_ICON[v]}<span>{v}</span></Space> },
+    { title: 'Status', dataIndex: 'status', key: 'status', width: 100,
+      render: s => <Tag color={STATUS_COLORS[s] || 'default'}>{s}</Tag> },
+    { title: 'Received', dataIndex: 'created_at', key: 'received', width: 120,
+      render: v => v ? dayjs(v).fromNow() : '—' },
+  ];
+
+  return (
+    <Table
+      dataSource={data || []}
+      columns={cols}
+      rowKey="lead_id"
+      loading={isLoading}
+      size="small"
+      pagination={{ pageSize: 50, showSizeChanger: true }}
+      scroll={{ x: 1100 }}
+      locale={{ emptyText: 'No Meta leads synced yet. Click "Sync Now" to import.' }}
+    />
   );
 };
 
@@ -289,21 +332,33 @@ const MetaLeadsPage = () => {
         ))}
       </Row>
 
-      <Divider orientation="left" style={{ marginBottom: 16 }}>
-        Ad Sets ({adSetCount})
-      </Divider>
-
-      {/* Ad sets table */}
+      {/* Tabs: Ad Sets + All Leads */}
       <Card>
-        <Table
-          dataSource={adsets}
-          columns={columns}
-          rowKey="adset_name"
-          loading={adsetsLoading}
-          size="middle"
-          pagination={{ pageSize: 20, showSizeChanger: true }}
-          scroll={{ x: 900 }}
-          locale={{ emptyText: 'No Meta leads synced yet. Click "Sync Now" to import.' }}
+        <Tabs
+          defaultActiveKey="adsets"
+          items={[
+            {
+              key: 'adsets',
+              label: `Ad Sets (${adSetCount})`,
+              children: (
+                <Table
+                  dataSource={adsets}
+                  columns={columns}
+                  rowKey="adset_name"
+                  loading={adsetsLoading}
+                  size="middle"
+                  pagination={{ pageSize: 20, showSizeChanger: true }}
+                  scroll={{ x: 900 }}
+                  locale={{ emptyText: 'No Meta leads synced yet. Click "Sync Now" to import.' }}
+                />
+              ),
+            },
+            {
+              key: 'all',
+              label: `All Meta Leads (${total})`,
+              children: <AllMetaLeadsTable />,
+            },
+          ]}
         />
       </Card>
 

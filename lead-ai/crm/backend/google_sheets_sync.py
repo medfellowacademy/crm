@@ -204,7 +204,7 @@ def row_to_lead(row: Dict, tab_name: str) -> Optional[Dict]:
         "course_interested": course or None,
         "source": source,
         "country": country or None,
-        "status": "New",
+        "status": "Fresh",
         "adset_name": adset or None,
         "campaign_name": campaign or None,
         "ad_name": ad or None,
