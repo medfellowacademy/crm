@@ -1139,23 +1139,20 @@ const LeadsPageEnhanced = () => {
       ),
     },
     {
-      title: 'Company',
-      dataIndex: 'company',
-      key: 'company',
-      width: 120,
-      filteredValue: tableFilterState.company || null,
-      filters: COMPANY_OPTIONS.map(c => ({ text: c, value: c })),
-      render: (c, r) => (
-        <Select
-          variant="borderless"
-          value={c || undefined}
-          placeholder={<Text type="secondary">Company</Text>}
-          size="small"
-          style={{ width: '100%', minWidth: 90 }}
-          allowClear
-          options={COMPANY_OPTIONS.map(o => ({ value: o, label: o }))}
-          onChange={v => inlineUpdate(r.lead_id, 'company', v || null)}
-        />
+      title: 'Assigned To',
+      dataIndex: 'assigned_to',
+      key: 'assigned_to',
+      width: 160,
+      filteredValue: tableFilterState.assigned_to || null,
+      filters: [{ text: 'Unassigned', value: '__none__' }, ...uniqueAssigned.map(u => ({ text: u, value: u }))],
+      render: (val, r) => (
+        <Select value={val || undefined} placeholder="Assign..." size="small" style={{ width: '100%' }} allowClear
+          disabled={isCounselor}
+          loading={!isCounselor && (!users || users.length === 0)}
+          onChange={v => inlineUpdate(r.lead_id, 'assigned_to', v || null)}
+          options={isCounselor
+            ? (authUser?.full_name ? [{ label: authUser.full_name, value: authUser.full_name }] : [])
+            : (users || []).map(u => ({ label: u.full_name, value: u.full_name }))} />
       ),
     },
     {
@@ -1186,6 +1183,26 @@ const LeadsPageEnhanced = () => {
       ),
     },
     {
+      title: 'Company',
+      dataIndex: 'company',
+      key: 'company',
+      width: 120,
+      filteredValue: tableFilterState.company || null,
+      filters: COMPANY_OPTIONS.map(c => ({ text: c, value: c })),
+      render: (c, r) => (
+        <Select
+          variant="borderless"
+          value={c || undefined}
+          placeholder={<Text type="secondary">Company</Text>}
+          size="small"
+          style={{ width: '100%', minWidth: 90 }}
+          allowClear
+          options={COMPANY_OPTIONS.map(o => ({ value: o, label: o }))}
+          onChange={v => inlineUpdate(r.lead_id, 'company', v || null)}
+        />
+      ),
+    },
+    {
       title: 'AI Score',
       dataIndex: 'ai_score',
       key: 'ai_score',
@@ -1197,23 +1214,6 @@ const LeadsPageEnhanced = () => {
             strokeColor={{ '0%': '#108ee9', '50%': '#87d068', '100%': '#ff4d4f' }}
             format={p => `${p?.toFixed(0)}`} />
         </div>
-      ),
-    },
-    {
-      title: 'Assigned To',
-      dataIndex: 'assigned_to',
-      key: 'assigned_to',
-      width: 160,
-      filteredValue: tableFilterState.assigned_to || null,
-      filters: [{ text: 'Unassigned', value: '__none__' }, ...uniqueAssigned.map(u => ({ text: u, value: u }))],
-      render: (val, r) => (
-        <Select value={val || undefined} placeholder="Assign..." size="small" style={{ width: '100%' }} allowClear
-          disabled={isCounselor}
-          loading={!isCounselor && (!users || users.length === 0)}
-          onChange={v => inlineUpdate(r.lead_id, 'assigned_to', v || null)}
-          options={isCounselor
-            ? (authUser?.full_name ? [{ label: authUser.full_name, value: authUser.full_name }] : [])
-            : (users || []).map(u => ({ label: u.full_name, value: u.full_name }))} />
       ),
     },
     {
