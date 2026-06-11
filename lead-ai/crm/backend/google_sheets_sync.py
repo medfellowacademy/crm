@@ -70,6 +70,60 @@ def _map_course(raw: str) -> str:
     return raw
 
 
+# Noise tokens stripped from ad names before course matching
+_AD_NOISE = _re.compile(
+    r'\b(ad|ads|creative|video|image|static|carousel|reel|lead|form|'
+    r'v\d+|version\s*\d+|\d{1,2}[/-]\d{4}|\d{4}|q[1-4]|'
+    r'jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|'
+    r'new|old|copy|test|draft|updated?|revised?|final|'
+    r'medfellow|academy|mfa|dr\.?)\b',
+    _re.IGNORECASE,
+)
+
+
+def _map_course_from_ad_name(ad_name: str) -> str:
+    """
+    Extract a canonical course name from a Meta ad name.
+    Strips ad-specific noise tokens then tries the course alias map.
+    Falls back to substring keyword scan across all known aliases.
+    """
+    if not ad_name:
+        return ""
+    try:
+        from courses_data import COURSE_NAME_MAP, VALID_COURSE_NAMES
+
+        # 1. Direct match on full ad name (covers exact course names as ad names)
+        direct = _map_course(ad_name)
+        if direct and direct in VALID_COURSE_NAMES:
+            return direct
+
+        # 2. Strip noise tokens, collapse whitespace, retry
+        cleaned = _re.sub(r'[_\-|/\\]', ' ', ad_name)
+        cleaned = _AD_NOISE.sub(' ', cleaned)
+        cleaned = _re.sub(r'\s+', ' ', cleaned).strip()
+        if cleaned:
+            mapped = _map_course(cleaned)
+            if mapped and mapped in VALID_COURSE_NAMES:
+                return mapped
+
+        # 3. Keyword scan: check if any alias key appears inside the ad name
+        lower_ad = ad_name.lower().replace('_', ' ').replace('-', ' ')
+        # Sort longest aliases first so more specific matches win
+        for alias in sorted(COURSE_NAME_MAP.keys(), key=len, reverse=True):
+            if alias in lower_ad:
+                return COURSE_NAME_MAP[alias]
+
+        # 4. Exact course name substring
+        lower_ad_orig = ad_name.lower()
+        for name in VALID_COURSE_NAMES:
+            if name.lower() in lower_ad_orig:
+                return name
+
+    except Exception:
+        pass
+    return ""
+
+
 # ── contact deduplication ──────────────────────────────────────────────────────
 
 def _phone_tail(phone: str) -> str:
@@ -226,15 +280,26 @@ def row_to_lead(row: Dict, tab_name: str) -> Optional[Dict]:
     if not full_name and not email and not phone:
         return None
 
-    # Course from custom question (handle both raw and lowercased header keys)
-    course_raw = (
-        row.get("which_fellowship_program_are_you_interested_in?")
-        or row.get("which fellowship program are you interested in?")
-        or row.get("fellowship_program")
-        or row.get("course")
-        or ""
-    ).strip()
-    course = _map_course(course_raw)
+    adset    = (row.get("adset_name")    or "").strip()
+    campaign = (row.get("campaign_name") or "").strip()
+    ad       = (row.get("ad_name")       or "").strip()
+
+    # Course resolution order:
+    # 1. ad_name  — most reliable (controlled by ad team)
+    # 2. Form question answer — explicit but can be blank or freetext
+    # 3. adset_name — last resort
+    course = _map_course_from_ad_name(ad)
+    if not course:
+        question_raw = (
+            row.get("which_fellowship_program_are_you_interested_in?")
+            or row.get("which fellowship program are you interested in?")
+            or row.get("fellowship_program")
+            or row.get("course")
+            or ""
+        ).strip()
+        course = _map_course(question_raw)
+    if not course:
+        course = _map_course_from_ad_name(adset)
 
     # Source from platform column
     source = _map_source(row.get("platform", ""))
@@ -252,10 +317,6 @@ def row_to_lead(row: Dict, tab_name: str) -> Optional[Dict]:
             created_dt = dtparser.parse(raw_time).isoformat()
         except Exception:
             pass
-
-    adset = (row.get("adset_name") or "").strip()
-    campaign = (row.get("campaign_name") or "").strip()
-    ad = (row.get("ad_name") or "").strip()
 
     lead: Dict = {
         "meta_lead_id": meta_id,
