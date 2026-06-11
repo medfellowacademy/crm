@@ -473,13 +473,31 @@ const LeadsPageEnhanced = () => {
     queryFn: () => duplicatesAPI.repeated().then(r => r.data),
     staleTime: 2 * 60 * 1000,
   });
-  // is_repeated comes directly from the lead row — no extra computation needed
-  const repeatedLeadIds = new Set(
-    leads.filter(l => l.is_repeated).map(l => l.lead_id)
+  const repeatedLeadIds = useMemo(
+    () => new Set(leads.filter(l => l.is_repeated).map(l => l.lead_id)),
+    [leads]
   );
-  const repeatedReasonMap = Object.fromEntries(
-    (repeatedData?.repeated || []).map(l => [l.lead_id, l.repeat_reasons || []])
-  );
+  const { repeatedReasonMap, repeatPhoneGroups, repeatEmailGroups, repeatNameGroups } = useMemo(() => {
+    const all = repeatedData?.repeated || [];
+    const reasonMap = Object.fromEntries(all.map(l => [l.lead_id, l.repeat_reasons || []]));
+    const phone = {}, email = {}, name = {};
+    all.forEach(lead => {
+      const reasons = reasonMap[lead.lead_id] || [];
+      if (reasons.includes('same_phone') && lead.phone) {
+        const tail = (String(lead.phone).replace(/\D/g, '') || '').slice(-9);
+        if (tail) { phone[tail] = phone[tail] || []; phone[tail].push(lead); }
+      }
+      if (reasons.includes('same_email') && lead.email) {
+        const em = String(lead.email).toLowerCase().trim();
+        email[em] = email[em] || []; email[em].push(lead);
+      }
+      if (reasons.includes('same_name') && lead.full_name) {
+        const nm = String(lead.full_name).toLowerCase().trim();
+        name[nm] = name[nm] || []; name[nm].push(lead);
+      }
+    });
+    return { repeatedReasonMap: reasonMap, repeatPhoneGroups: phone, repeatEmailGroups: email, repeatNameGroups: name };
+  }, [repeatedData]);
 
   const { data: courses = [] } = useQuery({
     queryKey: ['courses'],
@@ -2238,7 +2256,7 @@ const LeadsPageEnhanced = () => {
           <Space>
             <WarningOutlined style={{ color: '#f5222d' }} />
             <span>Repeated Leads</span>
-            <Tag color="volcano">{repeatedLeadIds.size}</Tag>
+            <Tag color="volcano">{repeatedData?.total || 0}</Tag>
           </Space>
         }
         open={repeatDrawerVisible}
@@ -2255,125 +2273,115 @@ const LeadsPageEnhanced = () => {
           }}>Refresh</Button>
         }
       >
-        {repeatedLeadIds.size === 0 ? (
+        {(repeatedData?.total || 0) === 0 ? (
           <div style={{ textAlign: 'center', padding: '60px 0', color: '#6b7280' }}>
             <CheckCircleOutlined style={{ fontSize: 48, color: '#10b981', marginBottom: 12 }} />
             <div style={{ fontSize: 16, fontWeight: 600 }}>No repeated leads</div>
             <div style={{ fontSize: 13, marginTop: 4 }}>All leads have unique phone, email and name.</div>
           </div>
-        ) : (() => {
-          // Group leads by their match key for display
-          const allRepeated = repeatedData?.repeated || [];
-
-          // Build groups: phone groups, email groups, name groups
-          const phoneGroups = {};
-          const emailGroups = {};
-          const nameGroups  = {};
-
-          allRepeated.forEach(lead => {
-            const reasons = repeatedReasonMap[lead.lead_id] || [];
-            if (reasons.includes('same_phone') && lead.phone) {
-              const tail = (lead.phone.replace(/\D/g, '') || '').slice(-9);
-              if (tail) { phoneGroups[tail] = phoneGroups[tail] || []; phoneGroups[tail].push(lead); }
-            }
-            if (reasons.includes('same_email') && lead.email) {
-              const em = lead.email.toLowerCase().trim();
-              emailGroups[em] = emailGroups[em] || []; emailGroups[em].push(lead);
-            }
-            if (reasons.includes('same_name') && lead.full_name) {
-              const nm = lead.full_name.toLowerCase().trim();
-              nameGroups[nm] = nameGroups[nm] || []; nameGroups[nm].push(lead);
-            }
-          });
-
-          const renderGroup = (groupMap, label, color) =>
-            Object.entries(groupMap).map(([key, members]) => (
-              <Card
-                key={`${label}-${key}`}
-                size="small"
-                style={{ marginBottom: 16, border: `1px solid ${color}33` }}
-                title={
-                  <Space>
-                    <Tag color={color}>{label}</Tag>
-                    <span style={{ fontSize: 12, color: '#6b7280' }}>{key}</span>
-                    <Tag>{members.length} leads</Tag>
-                  </Space>
-                }
-              >
-                {members.map((lead, idx) => (
-                  <div key={lead.lead_id} style={{
-                    display: 'flex', alignItems: 'center', gap: 10,
-                    padding: '8px 0',
-                    borderBottom: idx < members.length - 1 ? '1px solid #f0f0f0' : 'none',
-                  }}>
-                    <Avatar size={32} style={{ background: '#1677ff', flexShrink: 0 }}>
-                      {(lead.full_name || '?')[0].toUpperCase()}
-                    </Avatar>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 600, fontSize: 13 }}>{lead.full_name}</div>
-                      <div style={{ fontSize: 11, color: '#6b7280' }}>
-                        {lead.phone && <span style={{ marginRight: 8 }}>📞 {lead.phone}</span>}
-                        {lead.email && <span style={{ marginRight: 8 }}>✉ {lead.email}</span>}
-                        {lead.course_interested && <span>📚 {lead.course_interested}</span>}
+        ) : (
+          <div>
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message={`${repeatedData?.total || 0} leads appear more than once based on phone number, email address, or full name.`}
+            />
+            {Object.keys(repeatPhoneGroups).length > 0 && (
+              <>
+                <Divider orientation="left" style={{ fontSize: 13 }}>
+                  Same Phone Number ({Object.keys(repeatPhoneGroups).length} groups)
+                </Divider>
+                {Object.entries(repeatPhoneGroups).map(([key, members]) => (
+                  <Card key={`phone-${key}`} size="small" style={{ marginBottom: 16, border: '1px solid #f5222d33' }}
+                    title={<Space><Tag color="volcano">Same Phone</Tag><span style={{ fontSize: 12, color: '#6b7280' }}>{key}</span><Tag>{members.length} leads</Tag></Space>}
+                  >
+                    {members.map((lead, idx) => (
+                      <div key={lead.lead_id || idx} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: idx < members.length - 1 ? '1px solid #f0f0f0' : 'none' }}>
+                        <Avatar size={32} style={{ background: '#1677ff', flexShrink: 0 }}>{(lead.full_name || '?')[0].toUpperCase()}</Avatar>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: 13 }}>{lead.full_name}</div>
+                          <div style={{ fontSize: 11, color: '#6b7280' }}>
+                            {lead.phone && <span style={{ marginRight: 8 }}>📞 {lead.phone}</span>}
+                            {lead.email && <span style={{ marginRight: 8 }}>✉ {lead.email}</span>}
+                            {lead.course_interested && <span>📚 {lead.course_interested}</span>}
+                          </div>
+                        </div>
+                        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                          <Tag color={lead.status === 'Enrolled' ? 'green' : lead.status === 'Fresh' ? 'blue' : lead.status === 'Not Interested' ? 'red' : 'default'} style={{ fontSize: 11 }}>{lead.status}</Tag>
+                          <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 2 }}>{lead.created_at ? dayjs(lead.created_at).fromNow() : ''}</div>
+                        </div>
+                        <Button size="small" type="link" onClick={() => { setRepeatDrawerVisible(false); navigate(`/leads/${lead.lead_id}`); }}>View</Button>
                       </div>
-                    </div>
-                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                      <Tag color={
-                        lead.status === 'Enrolled' ? 'green' :
-                        lead.status === 'New' ? 'blue' :
-                        lead.status === 'Not Interested' ? 'red' : 'default'
-                      } style={{ fontSize: 11 }}>{lead.status}</Tag>
-                      <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 2 }}>
-                        {lead.created_at ? dayjs(lead.created_at).fromNow() : ''}
-                      </div>
-                    </div>
-                    <Button
-                      size="small"
-                      type="link"
-                      onClick={() => { setRepeatDrawerVisible(false); navigate(`/leads/${lead.lead_id}`); }}
-                    >
-                      View
-                    </Button>
-                  </div>
+                    ))}
+                  </Card>
                 ))}
-              </Card>
-            ));
-
-          return (
-            <div>
-              <Alert
-                type="warning"
-                showIcon
-                style={{ marginBottom: 16 }}
-                message={`${repeatedLeadIds.size} leads appear more than once based on phone number, email address, or full name.`}
-              />
-              {Object.keys(phoneGroups).length > 0 && (
-                <>
-                  <Divider orientation="left" style={{ fontSize: 13 }}>
-                    Same Phone Number ({Object.keys(phoneGroups).length} groups)
-                  </Divider>
-                  {renderGroup(phoneGroups, 'Same Phone', 'volcano')}
-                </>
-              )}
-              {Object.keys(emailGroups).length > 0 && (
-                <>
-                  <Divider orientation="left" style={{ fontSize: 13 }}>
-                    Same Email ({Object.keys(emailGroups).length} groups)
-                  </Divider>
-                  {renderGroup(emailGroups, 'Same Email', 'orange')}
-                </>
-              )}
-              {Object.keys(nameGroups).length > 0 && (
-                <>
-                  <Divider orientation="left" style={{ fontSize: 13 }}>
-                    Same Name ({Object.keys(nameGroups).length} groups)
-                  </Divider>
-                  {renderGroup(nameGroups, 'Same Name', 'gold')}
-                </>
-              )}
-            </div>
-          );
-        })()}
+              </>
+            )}
+            {Object.keys(repeatEmailGroups).length > 0 && (
+              <>
+                <Divider orientation="left" style={{ fontSize: 13 }}>
+                  Same Email ({Object.keys(repeatEmailGroups).length} groups)
+                </Divider>
+                {Object.entries(repeatEmailGroups).map(([key, members]) => (
+                  <Card key={`email-${key}`} size="small" style={{ marginBottom: 16, border: '1px solid #fa8c1633' }}
+                    title={<Space><Tag color="orange">Same Email</Tag><span style={{ fontSize: 12, color: '#6b7280' }}>{key}</span><Tag>{members.length} leads</Tag></Space>}
+                  >
+                    {members.map((lead, idx) => (
+                      <div key={lead.lead_id || idx} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: idx < members.length - 1 ? '1px solid #f0f0f0' : 'none' }}>
+                        <Avatar size={32} style={{ background: '#1677ff', flexShrink: 0 }}>{(lead.full_name || '?')[0].toUpperCase()}</Avatar>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: 13 }}>{lead.full_name}</div>
+                          <div style={{ fontSize: 11, color: '#6b7280' }}>
+                            {lead.phone && <span style={{ marginRight: 8 }}>📞 {lead.phone}</span>}
+                            {lead.email && <span style={{ marginRight: 8 }}>✉ {lead.email}</span>}
+                            {lead.course_interested && <span>📚 {lead.course_interested}</span>}
+                          </div>
+                        </div>
+                        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                          <Tag color={lead.status === 'Enrolled' ? 'green' : lead.status === 'Fresh' ? 'blue' : lead.status === 'Not Interested' ? 'red' : 'default'} style={{ fontSize: 11 }}>{lead.status}</Tag>
+                          <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 2 }}>{lead.created_at ? dayjs(lead.created_at).fromNow() : ''}</div>
+                        </div>
+                        <Button size="small" type="link" onClick={() => { setRepeatDrawerVisible(false); navigate(`/leads/${lead.lead_id}`); }}>View</Button>
+                      </div>
+                    ))}
+                  </Card>
+                ))}
+              </>
+            )}
+            {Object.keys(repeatNameGroups).length > 0 && (
+              <>
+                <Divider orientation="left" style={{ fontSize: 13 }}>
+                  Same Name ({Object.keys(repeatNameGroups).length} groups)
+                </Divider>
+                {Object.entries(repeatNameGroups).map(([key, members]) => (
+                  <Card key={`name-${key}`} size="small" style={{ marginBottom: 16, border: '1px solid #d4b10633' }}
+                    title={<Space><Tag color="gold">Same Name</Tag><span style={{ fontSize: 12, color: '#6b7280' }}>{key}</span><Tag>{members.length} leads</Tag></Space>}
+                  >
+                    {members.map((lead, idx) => (
+                      <div key={lead.lead_id || idx} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: idx < members.length - 1 ? '1px solid #f0f0f0' : 'none' }}>
+                        <Avatar size={32} style={{ background: '#1677ff', flexShrink: 0 }}>{(lead.full_name || '?')[0].toUpperCase()}</Avatar>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: 13 }}>{lead.full_name}</div>
+                          <div style={{ fontSize: 11, color: '#6b7280' }}>
+                            {lead.phone && <span style={{ marginRight: 8 }}>📞 {lead.phone}</span>}
+                            {lead.email && <span style={{ marginRight: 8 }}>✉ {lead.email}</span>}
+                            {lead.course_interested && <span>📚 {lead.course_interested}</span>}
+                          </div>
+                        </div>
+                        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                          <Tag color={lead.status === 'Enrolled' ? 'green' : lead.status === 'Fresh' ? 'blue' : lead.status === 'Not Interested' ? 'red' : 'default'} style={{ fontSize: 11 }}>{lead.status}</Tag>
+                          <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 2 }}>{lead.created_at ? dayjs(lead.created_at).fromNow() : ''}</div>
+                        </div>
+                        <Button size="small" type="link" onClick={() => { setRepeatDrawerVisible(false); navigate(`/leads/${lead.lead_id}`); }}>View</Button>
+                      </div>
+                    ))}
+                  </Card>
+                ))}
+              </>
+            )}
+          </div>
+        )}
       </Drawer>
     </div>
   );
