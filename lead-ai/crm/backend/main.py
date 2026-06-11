@@ -7303,7 +7303,7 @@ def _lead_row(db_lead) -> dict:
     }
 
 
-@app.get("/api/leads/repeated")
+@app.get("/api/leads-repeated")
 async def get_repeated_leads(
     request: Request,
     current_user: dict = Depends(get_current_user)

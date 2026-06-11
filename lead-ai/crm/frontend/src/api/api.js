@@ -230,7 +230,7 @@ export const callTimingAPI = {
 export const duplicatesAPI = {
   check:           (data)    => api.post('/api/leads/check-duplicates', data),
   merge:           (payload) => api.post('/api/leads/merge', payload),
-  repeated:        ()        => api.get('/api/leads/repeated'),
+  repeated:        ()        => api.get('/api/leads-repeated'),
   refreshRepeated: ()        => api.post('/api/leads/refresh-repeated'),
   cleanup:         ()        => api.post('/api/leads/cleanup-duplicates'),
 };

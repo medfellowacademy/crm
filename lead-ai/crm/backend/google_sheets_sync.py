@@ -399,6 +399,10 @@ def sync_sheet_to_crm() -> Dict:
             else:
                 # New person — insert fresh lead
                 try:
+                    import random, string as _string
+                    _ts  = datetime.utcnow().strftime('%y%m%d%H%M%S')
+                    _rnd = ''.join(random.choices(_string.ascii_uppercase + _string.digits, k=4))
+                    lead['lead_id'] = f"LEAD{_ts}{_rnd}"
                     result = client.table("leads").insert(lead).execute()
                     if result.data:
                         synced_ids.add(meta_id)
