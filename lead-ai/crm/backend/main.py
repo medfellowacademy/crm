@@ -7308,20 +7308,22 @@ async def get_repeated_leads(
     request: Request,
     current_user: dict = Depends(get_current_user)
 ):
-    """Return all leads that share a phone (last 9 digits), email, or full name with another lead."""
+    """Return all leads marked is_repeated=true (phone or email shared with another lead)."""
     _verify_token(request)
     try:
         COLS = ("lead_id,full_name,phone,email,whatsapp,country,source,"
-                "course_interested,status,assigned_to,created_at,ai_score,ai_segment")
+                "course_interested,status,assigned_to,created_at,ai_score,"
+                "is_repeated")
 
-        # Fetch ALL leads in pages of 1000 (Supabase default cap)
+        # Fetch all repeated leads in pages (no 1000-row cap)
         all_rows: list = []
         page_size = 1000
         offset = 0
         while True:
             result = (
                 supabase_data.client.table('leads')
-                .select(COLS, count='exact')
+                .select(COLS)
+                .eq('is_repeated', True)
                 .range(offset, offset + page_size - 1)
                 .execute()
             )
@@ -7331,60 +7333,50 @@ async def get_repeated_leads(
                 break
             offset += page_size
 
-        logger.info(f"Repeated-leads check: loaded {len(all_rows)} total leads")
-
-        # Index by phone tail, email, name
-        phone_groups: dict = {}
-        email_groups: dict = {}
-        name_groups:  dict = {}
-
+        # Compute repeat_reasons in Python for the drawer grouping
+        phone_seen: dict = {}
+        email_seen: dict = {}
         for r in all_rows:
-            tail = _strip_phone(r.get('phone') or r.get('whatsapp') or '')
-            if tail:
-                phone_groups.setdefault(tail, []).append(r)
-
+            t = _strip_phone(r.get('phone') or r.get('whatsapp') or '')
+            if t:
+                phone_seen.setdefault(t, []).append(r['lead_id'])
             em = (r.get('email') or '').strip().lower()
             if em:
-                email_groups.setdefault(em, []).append(r)
+                email_seen.setdefault(em, []).append(r['lead_id'])
 
-            nm = (r.get('full_name') or '').strip().lower()
-            if nm:
-                name_groups.setdefault(nm, []).append(r)
-
-        # Collect lead_ids that appear in any group of size > 1
-        repeated_ids: set = set()
-        repeat_reason: dict = {}
-
-        for tail, group in phone_groups.items():
-            if len(group) > 1:
-                for r in group:
-                    lid = r['lead_id']
-                    repeated_ids.add(lid)
-                    repeat_reason.setdefault(lid, set()).add('same_phone')
-
-        for em, group in email_groups.items():
-            if len(group) > 1:
-                for r in group:
-                    lid = r['lead_id']
-                    repeated_ids.add(lid)
-                    repeat_reason.setdefault(lid, set()).add('same_email')
-
-        for nm, group in name_groups.items():
-            if len(group) > 1:
-                for r in group:
-                    lid = r['lead_id']
-                    repeated_ids.add(lid)
-                    repeat_reason.setdefault(lid, set()).add('same_name')
+        reason_map: dict = {}
+        for t, ids in phone_seen.items():
+            if len(ids) > 1:
+                for lid in ids:
+                    reason_map.setdefault(lid, set()).add('same_phone')
+        for em, ids in email_seen.items():
+            if len(ids) > 1:
+                for lid in ids:
+                    reason_map.setdefault(lid, set()).add('same_email')
 
         repeated = [
-            {**r, 'repeat_reasons': list(repeat_reason.get(r['lead_id'], []))}
-            for r in all_rows if r['lead_id'] in repeated_ids
+            {**r, 'repeat_reasons': list(reason_map.get(r['lead_id'], ['same_phone']))}
+            for r in all_rows
         ]
-        logger.info(f"Repeated-leads check: found {len(repeated)} repeated out of {len(all_rows)}")
+        logger.info(f"Repeated leads: {len(repeated)} leads with is_repeated=true")
         return {"repeated": repeated, "total": len(repeated)}
     except Exception as e:
         logger.error(f"Error fetching repeated leads: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to fetch repeated leads")
+
+
+@app.post("/api/leads/refresh-repeated")
+async def refresh_repeated_marks(current_user: dict = Depends(get_current_user)):
+    """Re-scan all leads and update is_repeated flag based on phone/email matches."""
+    role = (current_user.get("role") or "").lower()
+    if role not in ("super admin", "admin", "manager", "team leader"):
+        raise HTTPException(status_code=403, detail="Admin or Manager required")
+    try:
+        count = supabase_data.refresh_repeated_marks()
+        return {"marked": count, "message": f"{count} leads marked as repeated"}
+    except Exception as e:
+        logger.error(f"refresh_repeated_marks error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/leads/merge")

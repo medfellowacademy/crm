@@ -466,14 +466,16 @@ const LeadsPageEnhanced = () => {
   const leads = leadsResponse?.leads || [];
   const totalLeads = leadsResponse?.total || 0;
 
-  // Fetch repeated lead IDs (shared phone/email/name) — used for badge in table
-  const { data: repeatedData } = useQuery({
+  // Repeated leads: use is_repeated field from lead data (set in DB) for badge
+  // Drawer uses the dedicated /api/leads/repeated endpoint for grouped view
+  const { data: repeatedData, refetch: refetchRepeated } = useQuery({
     queryKey: ['repeated-leads'],
     queryFn: () => duplicatesAPI.repeated().then(r => r.data),
-    staleTime: 5 * 60 * 1000,
+    staleTime: 2 * 60 * 1000,
   });
+  // is_repeated comes directly from the lead row — no extra computation needed
   const repeatedLeadIds = new Set(
-    (repeatedData?.repeated || []).map(l => l.lead_id)
+    leads.filter(l => l.is_repeated).map(l => l.lead_id)
   );
   const repeatedReasonMap = Object.fromEntries(
     (repeatedData?.repeated || []).map(l => [l.lead_id, l.repeat_reasons || []])
@@ -1433,10 +1435,10 @@ const LeadsPageEnhanced = () => {
               <Button icon={<ExportOutlined />} loading={isExporting}>Export</Button>
             </Dropdown>
             <Button icon={<ReloadOutlined />} onClick={() => refetch()} />
-            <Badge count={repeatedLeadIds.size} size="small" color="volcano">
+            <Badge count={repeatedData?.total || 0} size="small" color="volcano">
               <Button
                 icon={<WarningOutlined />}
-                danger={repeatedLeadIds.size > 0}
+                danger={(repeatedData?.total || 0) > 0}
                 onClick={() => setRepeatDrawerVisible(true)}
               >
                 Repeated Leads
@@ -2243,9 +2245,14 @@ const LeadsPageEnhanced = () => {
         onClose={() => setRepeatDrawerVisible(false)}
         width={780}
         extra={
-          <Button size="small" onClick={() => {
-            queryClient.invalidateQueries({ queryKey: ['repeated-leads'] });
-          }} icon={<ReloadOutlined />}>Refresh</Button>
+          <Button size="small" icon={<ReloadOutlined />} onClick={async () => {
+            try {
+              await duplicatesAPI.refreshRepeated();
+              queryClient.invalidateQueries({ queryKey: ['repeated-leads'] });
+              queryClient.invalidateQueries({ queryKey: ['leads'] });
+              message.success('Repeated leads refreshed');
+            } catch { message.error('Refresh failed'); }
+          }}>Refresh</Button>
         }
       >
         {repeatedLeadIds.size === 0 ? (

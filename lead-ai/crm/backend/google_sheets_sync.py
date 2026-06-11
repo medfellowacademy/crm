@@ -301,6 +301,16 @@ def sync_sheet_to_crm() -> Dict:
     except Exception as e:
         logger.warning(f"Could not update sheet_sync_config: {e}")
 
+    # After importing new leads, refresh is_repeated marks
+    if new_count > 0:
+        try:
+            from supabase_data_layer import SupabaseDataLayer
+            _dl = SupabaseDataLayer()
+            repeated_count = _dl.refresh_repeated_marks()
+            logger.info(f"Post-sync repeated refresh: {repeated_count} leads marked")
+        except Exception as e:
+            logger.warning(f"Post-sync repeated refresh failed: {e}")
+
     result = {
         "new_leads": new_count,
         "skipped": skip_count,

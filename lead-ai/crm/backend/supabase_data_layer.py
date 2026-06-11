@@ -126,7 +126,8 @@ class SupabaseDataLayer:
             "primary_objection,next_action,priority_level,"
             "qualification,company,loss_reason,loss_note,"
             "utm_source,utm_medium,utm_campaign,"
-            "meta_lead_id,adset_name,campaign_name,ad_name"
+            "meta_lead_id,adset_name,campaign_name,ad_name,"
+            "is_repeated"
         )
         LIST_COLUMNS_COMPAT = (
             LIST_COLUMNS
@@ -134,6 +135,7 @@ class SupabaseDataLayer:
             .replace(",company", "")
             .replace(",utm_source,utm_medium,utm_campaign", "")
             .replace(",meta_lead_id,adset_name,campaign_name,ad_name", "")
+            .replace(",is_repeated", "")
         )
 
         def _build_query(columns):
@@ -429,7 +431,7 @@ class SupabaseDataLayer:
         # do NOT list them here or they will be silently dropped on any error.
         NEW_COLUMNS = {
             'company', 'qualification', 'utm_source', 'utm_medium', 'utm_campaign',
-            'meta_lead_id', 'adset_name', 'campaign_name', 'ad_name',
+            'meta_lead_id', 'adset_name', 'campaign_name', 'ad_name', 'is_repeated',
         }
         try:
             response = self.client.table('leads').update(cleaned_data).eq('lead_id', lead_id).execute()
@@ -530,6 +532,71 @@ class SupabaseDataLayer:
             logger.error(f"Error fetching users: {e}")
             return []
     
+    def refresh_repeated_marks(self) -> int:
+        """
+        Re-compute is_repeated for every lead using raw SQL via Supabase RPC.
+        Returns number of leads marked as repeated.
+        """
+        try:
+            # Reset all first
+            self.client.table('leads').update({'is_repeated': False}).neq('lead_id', '00000000-0000-0000-0000-000000000000').execute()
+
+            # Fetch all leads with phone / email for grouping in Python
+            # (Supabase REST API doesn't support UPDATE with self-join)
+            page_size = 1000
+            offset = 0
+            all_rows = []
+            while True:
+                batch = (
+                    self.client.table('leads')
+                    .select('lead_id,phone,email')
+                    .range(offset, offset + page_size - 1)
+                    .execute()
+                )
+                rows = batch.data or []
+                all_rows.extend(rows)
+                if len(rows) < page_size:
+                    break
+                offset += page_size
+
+            import re as _re
+
+            def _tail(p):
+                if not p:
+                    return ''
+                d = _re.sub(r'[^0-9]', '', str(p))
+                return d[-9:] if len(d) >= 9 else ''
+
+            phone_groups: dict = {}
+            email_groups: dict = {}
+            for r in all_rows:
+                t = _tail(r.get('phone'))
+                if t:
+                    phone_groups.setdefault(t, []).append(r['lead_id'])
+                e = (r.get('email') or '').strip().lower()
+                if e:
+                    email_groups.setdefault(e, []).append(r['lead_id'])
+
+            repeated_ids = set()
+            for grp in phone_groups.values():
+                if len(grp) > 1:
+                    repeated_ids.update(grp)
+            for grp in email_groups.values():
+                if len(grp) > 1:
+                    repeated_ids.update(grp)
+
+            # Batch update in chunks of 100
+            repeated_list = list(repeated_ids)
+            for i in range(0, len(repeated_list), 100):
+                chunk = repeated_list[i:i+100]
+                self.client.table('leads').update({'is_repeated': True}).in_('lead_id', chunk).execute()
+
+            logger.info(f"refresh_repeated_marks: marked {len(repeated_ids)} leads as repeated")
+            return len(repeated_ids)
+        except Exception as e:
+            logger.error(f"refresh_repeated_marks failed: {e}")
+            return 0
+
     def get_courses(self, is_active: bool = True) -> List[Dict[str, Any]]:
         """Get courses"""
         try:

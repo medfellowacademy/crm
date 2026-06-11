@@ -228,9 +228,10 @@ export const callTimingAPI = {
 
 // Duplicate Detection API
 export const duplicatesAPI = {
-  check:    (data)    => api.post('/api/leads/check-duplicates', data),
-  merge:    (payload) => api.post('/api/leads/merge', payload),
-  repeated: ()        => api.get('/api/leads/repeated'),
+  check:           (data)    => api.post('/api/leads/check-duplicates', data),
+  merge:           (payload) => api.post('/api/leads/merge', payload),
+  repeated:        ()        => api.get('/api/leads/repeated'),
+  refreshRepeated: ()        => api.post('/api/leads/refresh-repeated'),
 };
 
 // Google Sheets / Meta Leads Sync API
