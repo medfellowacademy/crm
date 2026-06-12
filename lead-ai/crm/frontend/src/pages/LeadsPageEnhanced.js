@@ -535,12 +535,13 @@ const LeadsPageEnhanced = () => {
     ])].filter(Boolean).sort(),
     [courses, leads]
   );
-  const uniqueAssigned   = useMemo(() => 
-    isCounselor
-      ? (authUser?.full_name ? [authUser.full_name] : [])
-      : [...new Set((leads || []).map(l => l.assigned_to))].filter(Boolean).sort(),
-    [leads, isCounselor, authUser]
-  );
+  const uniqueAssigned   = useMemo(() => {
+    if (isCounselor) return authUser?.full_name ? [authUser.full_name] : [];
+    // Prefer the full users list so ALL counselors appear, not just those on current page
+    const fromUsers = (users || []).map(u => u.full_name || u.name).filter(Boolean);
+    const fromLeads = (leads || []).map(l => l.assigned_to).filter(Boolean);
+    return [...new Set([...fromUsers, ...fromLeads])].sort();
+  }, [users, leads, isCounselor, authUser]);
   // Always show exactly the 5 canonical source options in filters —
   // don't derive from lead data (which may have legacy raw values).
   const uniqueSources = SOURCE_OPTIONS;
