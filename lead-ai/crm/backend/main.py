@@ -13,7 +13,7 @@ FEATURES:
 ✅ Automated follow-up scheduling
 """
 
-from fastapi import FastAPI, HTTPException, Depends, Query, BackgroundTasks, UploadFile, File
+from fastapi import FastAPI, HTTPException, Depends, Query, BackgroundTasks, UploadFile, File, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -309,6 +309,9 @@ _PUBLIC_PATHS = {
     "/docs",
     "/redoc",
     "/openapi.json",
+    # Server-to-server webhook from medfellowacademy.com - authenticated via
+    # its own X-Webhook-Secret header instead of a user JWT.
+    "/api/public/website-lead",
 }
 
 from fastapi import Request
@@ -381,6 +384,9 @@ ALLOWED_ORIGINS = os.getenv(
     "http://localhost:3000,https://medfellow.xyz,https://www.medfellow.xyz,https://medfellow-crm.vercel.app"
 ).split(",")
 ALLOWED_ORIGIN_REGEX = r"https://medfellow.*\.vercel\.app"
+
+# Shared secret for the medfellowacademy.com website webhook (server-to-server, not a browser origin)
+WEBSITE_LEAD_SECRET = os.getenv("WEBSITE_LEAD_SECRET")
 
 app.add_middleware(
     CORSMiddleware,
@@ -2150,6 +2156,55 @@ async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, reque
     except Exception as e:
         logger.error(f"Failed to create lead: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to create lead: {str(e)}")
+
+
+class WebsiteLeadPayload(BaseModel):
+    """Minimal payload accepted from the medfellowacademy.com website forms."""
+    full_name: str
+    email: Optional[str] = None
+    phone: str
+    course_interested: Optional[str] = "General Enquiry"
+    country: Optional[str] = "India"
+    message: Optional[str] = None
+    form_type: Optional[str] = None  # e.g. "contact", "counselling", "application"
+
+
+@app.post("/api/public/website-lead", response_model=LeadResponse)
+async def create_website_lead(
+    payload: WebsiteLeadPayload,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    x_webhook_secret: Optional[str] = Header(None, alias="X-Webhook-Secret"),
+):
+    """Webhook endpoint for medfellowacademy.com to push form enquiries directly into the CRM as leads.
+
+    Requires WEBSITE_LEAD_SECRET to be set on this server and matched via the
+    X-Webhook-Secret header - this endpoint has no other authentication since
+    it's called server-to-server from the website's own backend.
+    """
+    if not WEBSITE_LEAD_SECRET or x_webhook_secret != WEBSITE_LEAD_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid or missing webhook secret")
+
+    lead = LeadCreate(
+        full_name=payload.full_name,
+        email=payload.email,
+        phone=payload.phone,
+        country=payload.country or "India",
+        source="Website",
+        course_interested=payload.course_interested or "General Enquiry",
+    )
+    created = await create_lead(lead=lead, background_tasks=background_tasks, request=request)
+
+    if payload.message and created.get("id"):
+        note_prefix = f"[{payload.form_type}] " if payload.form_type else ""
+        supabase_data.create_note(
+            lead_id=created["id"],
+            content=f"{note_prefix}{payload.message}",
+            channel="manual",
+            created_by="Website",
+        )
+
+    return created
 
 
 @app.post("/api/leads/bulk-create")
