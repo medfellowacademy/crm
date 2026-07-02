@@ -355,16 +355,21 @@ List them as brief bullet points:"""
                     "ANTHROPIC_API_KEY in the backend to enable this feature.")
 
         system_prompt = (
-            "You are MedFellow AI, an internal assistant for MedFellow Academy "
-            "counselors and staff. Answer questions about courses, admissions "
-            "policies, and specific leads using the CONTEXT provided below when "
-            "it is relevant. If the context doesn't cover the question, answer "
-            "from general knowledge but say so. Be concise and practical.\n\n"
-            f"CONTEXT:\n{context}" if context else
-            "You are MedFellow AI, an internal assistant for MedFellow Academy "
-            "counselors and staff. Answer questions about courses, admissions "
-            "policies, and leads. Be concise and practical."
+            "You are MedFellow AI, an assistant for MedFellow Academy counselors and staff.\n\n"
+            "Answer every question in this strict order of priority:\n"
+            "1. FIRST, check the CONTEXT section below (MedFellow's internal course/policy "
+            "knowledge base and/or the linked lead's data, if provided). If it answers the "
+            "question, base your answer on it - treat it as the authoritative source for "
+            "anything MedFellow-specific.\n"
+            "2. ONLY IF the CONTEXT is missing or doesn't cover the question, fall back to "
+            "your own general knowledge and answer the same way any helpful, knowledgeable "
+            "assistant would. Never refuse or redirect a question just because it isn't "
+            "about MedFellow's courses or leads.\n\n"
+            "Don't mention whether context was available or not - just answer naturally. "
+            "Be concise and practical."
         )
+        if context:
+            system_prompt += f"\n\nCONTEXT:\n{context}"
 
         try:
             response = self.client.messages.create(
@@ -377,6 +382,56 @@ List them as brief bullet points:"""
         except Exception as e:
             logger.error("AI chat failed: {}", e, extra={"system": "ai"})
             return "Sorry, I couldn't process that message. Please try again."
+
+    async def generate_coaching_tip(self, lead_data: Dict, objection: Optional[str],
+                                     won_examples: List[str], lost_examples: List[str]) -> str:
+        """
+        Suggest how to handle this lead's specific objection/situation, grounded in
+        how similar past leads (same primary_objection) actually turned out.
+
+        Honest by design: with very few total conversions company-wide, many
+        objection types will have zero historical wins to draw on — the prompt
+        explicitly tells Claude to say so rather than invent a success pattern.
+        """
+
+        if not self.is_available():
+            return ("AI coaching is currently unavailable. Please configure "
+                    "ANTHROPIC_API_KEY in the backend to enable this feature.")
+
+        try:
+            won_text = "\n".join(f"- {n}" for n in won_examples) if won_examples else "(none found)"
+            lost_text = "\n".join(f"- {n}" for n in lost_examples) if lost_examples else "(none found)"
+
+            prompt = f"""A counselor is working this lead and needs practical coaching advice.
+
+Lead:
+- Status: {lead_data.get('status')}
+- Course interested: {lead_data.get('course_interested')}
+- Country: {lead_data.get('country')}
+- Primary objection: {objection or 'None detected yet'}
+
+Notes from OTHER leads with the SAME objection who eventually ENROLLED (won):
+{won_text}
+
+Notes from OTHER leads with the SAME objection who ended up Not Interested/Junk (lost):
+{lost_text}
+
+Instructions:
+- If there are real "won" examples above, identify what specifically worked and suggest the counselor try a similar approach.
+- If the won list says "(none found)", say so plainly - do not invent a success story. Instead give general best-practice advice for handling this type of objection in medical education sales.
+- Keep it to 3-4 concise, actionable sentences. No generic platitudes."""
+
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=400,
+                system="You are a sales coaching assistant for medical education counselors. Be honest about data limitations rather than fabricating patterns.",
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return self._text(response)
+
+        except Exception as e:
+            logger.error("Coaching tip generation failed: {}", e, extra={"system": "ai"})
+            return "Unable to generate a coaching tip right now. Please try again."
 
     async def generate_course_recommendation(self, lead_data: Dict, available_courses: List[Dict]) -> Dict:
         """

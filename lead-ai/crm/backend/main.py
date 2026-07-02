@@ -34,6 +34,7 @@ import os
 import re
 import enum
 import statistics
+import threading
 from collections import defaultdict
 import asyncio as _asyncio
 
@@ -1555,39 +1556,74 @@ def normalize_lead_values(lead_data: dict) -> dict:
 class AILeadScorer:
     """AI-powered lead scoring engine with ML + NLP hybrid intelligence"""
     
+    # v4 feature schema — must exactly match lead-ai/scripts/06_train_model_v4.py
+    ML_FEATURE_NAMES = [
+        'country', 'source', 'course_interested', 'qualification', 'assigned_to',
+        'lead_age_days', 'days_since_last_contact', 'notes_count', 'avg_note_length',
+        'buying_signal_strength', 'has_objection', 'churn_risk', 'urgency_high',
+        'has_email', 'has_whatsapp',
+        'total_activities', 'call_count', 'whatsapp_count', 'email_count',
+        'status_change_count', 'distinct_activity_types', 'first_response_hours',
+        'days_since_last_activity', 'activity_velocity',
+    ]
+    ML_CATEGORICAL_FEATURES = ['country', 'source', 'course_interested', 'qualification', 'assigned_to']
+
     def __init__(self):
-        # Load latest trained CatBoost model (96.5% ROC-AUC)
-        model_path = Path(__file__).parent.parent.parent / 'models' / 'lead_conversion_model_v2_20251224_184626.pkl'
+        # CatBoostClassifier.predict_proba is not thread-safe for concurrent calls
+        # on the same instance (observed: "deque mutated during iteration" under
+        # concurrent load). Scoring runs as a FastAPI BackgroundTask, so concurrent
+        # calls are a real scenario whenever multiple notes are added around the
+        # same time — serialize access to the shared model instance.
+        self._ml_lock = threading.Lock()
+        # Load latest trained CatBoost model. v4 replaces v2, which was trained on a
+        # 44-feature schema from a different, older CRM and could never receive valid
+        # input here — it threw "Invalid type for cat_feature" on every call and
+        # silently fell back to rule-based scoring, forever, in production.
+        model_path = Path(__file__).parent.parent.parent / 'models' / 'lead_conversion_model_v4_latest.cbm'
+        metadata_path = Path(__file__).parent.parent.parent / 'models' / 'model_metadata_v4_latest.json'
         if model_path.exists():
             try:
-                self.model = joblib.load(model_path)
+                from catboost import CatBoostClassifier
+                self.model = CatBoostClassifier()
+                self.model.load_model(str(model_path))
                 self.has_model = True
-                logger.info("✅ ML Model loaded successfully (ROC-AUC: 96.5%)", extra={"system": "ml"})
+                auc_note = ""
+                if metadata_path.exists():
+                    try:
+                        meta = json.loads(metadata_path.read_text())
+                        auc = meta.get('metrics', {}).get('catboost_mean_auc_cv')
+                        n_folds = meta.get('metrics', {}).get('n_folds_evaluated')
+                        if auc is not None:
+                            auc_note = f" (cross-validated AUC: {auc:.2f} over {n_folds} folds — honest estimate, not a guarantee)"
+                    except Exception:
+                        pass
+                logger.info(f"✅ ML Model (v4) loaded successfully{auc_note}", extra={"system": "ml"})
             except Exception as e:
-                logger.error(f"⚠️ Failed to load ML model: {e}", extra={"system": "ml", "error": str(e)})
+                logger.error("⚠️ Failed to load ML model: {}", e, extra={"system": "ml"})
                 self.has_model = False
         else:
             logger.warning("⚠️ ML model not found, using rule-based scoring only", extra={"system": "ml"})
             self.has_model = False
-        
+
         self.course_prices = {}  # Will be populated from DB
     
     def load_course_prices(self):
         """Load course prices for revenue calculation (uses cache) - SUPABASE ONLY"""
         self.course_prices = get_cached_course_prices()
     
-    def score_lead(self, lead: DBLead, notes: List[DBNote]) -> Dict[str, Any]:
+    def score_lead(self, lead: DBLead, notes: List[DBNote], activities: List[DBActivity] = None) -> Dict[str, Any]:
         """Score a lead using hybrid ML + Rule-based intelligence"""
-        
+        activities = activities or []
+
         # Analyze conversation with NLP
         conversation_analysis = self._analyze_conversation(notes)
-        
+
         # Calculate scores
         rule_score = self._calculate_rule_based_score(lead, conversation_analysis)
         if self.has_model:
             # HYBRID APPROACH: 70% ML + 30% Rules — falls back to pure rule-based
             # if the ML prediction itself fails (e.g. feature schema mismatch)
-            ml_score, ml_confidence, feature_importance = self._calculate_ml_score(lead, notes, conversation_analysis)
+            ml_score, ml_confidence, feature_importance = self._calculate_ml_score(lead, notes, conversation_analysis, activities)
             if ml_score is not None:
                 final_score = (ml_score * 0.7) + (rule_score * 0.3)
                 scoring_method = 'hybrid_ml'
@@ -1637,127 +1673,92 @@ class AILeadScorer:
             'feature_importance': feature_importance
         }
     
-    def _calculate_ml_score(self, lead: DBLead, notes: List[DBNote], conversation: Dict) -> tuple:
-        """Calculate ML-based score using trained CatBoost model"""
+    def _calculate_ml_score(self, lead: DBLead, notes: List[DBNote], conversation: Dict, activities: List[DBActivity] = None) -> tuple:
+        """Calculate ML-based score using the trained v4 CatBoost model."""
         try:
-            # Extract features for ML model
-            features = self._extract_ml_features(lead, notes, conversation)
-            
-            # Get ML prediction probability
-            prediction_proba = self.model.predict_proba([features])[0]
+            features = self._extract_ml_features(lead, notes, conversation, activities or [])
+
+            # CatBoost accepts a plain feature row directly (categorical columns as
+            # strings) since it remembers which indices were categorical at train
+            # time — no Pool wrapper needed for a single-row prediction. Calls are
+            # serialized: predict_proba is not thread-safe under concurrent use.
+            with self._ml_lock:
+                prediction_proba = self.model.predict_proba([features])[0]
+                raw_importance = self.model.get_feature_importance()
+
             ml_score = prediction_proba[1] * 100  # Probability of conversion * 100
-            
-            # Calculate confidence based on probability distance from 0.5
+
+            # Confidence based on probability distance from 0.5
             confidence = abs(prediction_proba[1] - 0.5) * 2  # 0 to 1 scale
-            
-            # Get feature importance (top factors driving the score)
-            feature_importance = {
-                'recency': 0.35,
-                'engagement': 0.25,
-                'buying_signals': 0.20,
-                'objections': 0.12,
-                'lead_age': 0.08
-            }
-            
+
+            # Real per-model feature importance (not per-lead — CatBoost's
+            # PredictionValuesChange is a global measure), normalized to fractions
+            # of the top 5 drivers so the UI can show relative weight.
+            ranked = sorted(zip(self.ML_FEATURE_NAMES, raw_importance), key=lambda x: -x[1])[:5]
+            total = sum(v for _, v in ranked) or 1
+            feature_importance = {name: round(v / total, 3) for name, v in ranked}
+
             return ml_score, confidence, feature_importance
-            
+
         except Exception as e:
-            logger.warning(f"ML prediction failed, falling back to rule-based: {e}", extra={"system": "ml"})
+            logger.warning("ML prediction failed, falling back to rule-based: {}", e, extra={"system": "ml"})
             return None, None, None
-    
-    def _extract_ml_features(self, lead: DBLead, notes: List[DBNote], conversation: Dict) -> list:
-        """Extract features for ML model prediction (44-feature vector)."""
-        # ── Engagement / temporal ──────────────────────────────────────────────
+
+    def _extract_ml_features(self, lead: DBLead, notes: List[DBNote], conversation: Dict, activities: List[DBActivity] = None) -> list:
+        """Extract features for ML model prediction. Must exactly match the
+        feature engineering in lead-ai/scripts/06_train_model_v4.py — any
+        divergence here is train/serve skew and silently degrades predictions."""
+        activities = activities or []
+
         notes_count = len(notes)
         lead_age_days = (datetime.utcnow() - lead.created_at).days if lead.created_at else 0
-        days_since_last_contact = (datetime.utcnow() - lead.last_contact_date).days if lead.last_contact_date else 999
-        avg_note_length = sum(len(n.content) for n in notes) / max(notes_count, 1)
+        days_since_last_contact = min(
+            (datetime.utcnow() - lead.last_contact_date).days if lead.last_contact_date else 999, 999
+        )
+        avg_note_length = sum(len(n.content or '') for n in notes) / max(notes_count, 1)
 
-        buying_signal_score = conversation['buying_strength'] / 100
-        has_objection = 1 if conversation['primary_objection'] else 0
-        churn_risk = conversation['churn_risk']
+        act_types = [(a.activity_type or '') for a in activities]
+        act_times = sorted([a.created_at for a in activities if a.created_at])
+        total_activities = len(activities)
+        call_count = sum(1 for t in act_types if 'call' in t.lower())
+        whatsapp_count = sum(1 for t in act_types if 'whatsapp' in t.lower())
+        email_count = sum(1 for t in act_types if 'email' in t.lower())
+        status_change_count = sum(1 for t in act_types if 'status' in t.lower())
+        distinct_activity_types = len(set(act_types))
+        if act_times and lead.created_at:
+            first_response_hours = max(0, min((act_times[0] - lead.created_at).total_seconds() / 3600, 999))
+        else:
+            first_response_hours = 999
+        days_since_last_activity = min((datetime.utcnow() - act_times[-1]).days, 999) if act_times else 999
+        activity_velocity = total_activities / max(lead_age_days, 1)
 
-        if days_since_last_contact <= 1:    recency_score = 1.0
-        elif days_since_last_contact <= 3:  recency_score = 0.8
-        elif days_since_last_contact <= 7:  recency_score = 0.5
-        elif days_since_last_contact <= 14: recency_score = 0.3
-        else:                               recency_score = 0.1
-
-        engagement_score = min(1.0, notes_count / 10)
-
-        # ── New profile-quality features (6 additional meaningful signals) ─────
-        # country_tier: 0–1 representing market quality
-        _country_tier_map = {
-            'india': 0.9, 'uae': 0.8, 'saudi arabia': 0.8, 'qatar': 0.8,
-            'kuwait': 0.8, 'bahrain': 0.8, 'oman': 0.8, 'uk': 0.7,
-            'usa': 0.7, 'canada': 0.7, 'australia': 0.7,
+        row = {
+            'country': (getattr(lead, 'country', None) or 'Unknown').strip(),
+            'source': (getattr(lead, 'source', None) or 'Unknown').strip(),
+            'course_interested': (getattr(lead, 'course_interested', None) or 'Unknown').strip(),
+            'qualification': (getattr(lead, 'qualification', None) or 'Unknown').strip() or 'Unknown',
+            'assigned_to': (getattr(lead, 'assigned_to', None) or 'Unassigned').strip(),
+            'lead_age_days': lead_age_days,
+            'days_since_last_contact': days_since_last_contact,
+            'notes_count': notes_count,
+            'avg_note_length': avg_note_length,
+            'buying_signal_strength': conversation['buying_strength'],
+            'has_objection': 1 if conversation['primary_objection'] else 0,
+            'churn_risk': conversation['churn_risk'],
+            'urgency_high': 1 if conversation['urgency'] == 'high' else 0,
+            'has_email': 1 if getattr(lead, 'email', None) else 0,
+            'has_whatsapp': 1 if getattr(lead, 'whatsapp', None) else 0,
+            'total_activities': total_activities,
+            'call_count': call_count,
+            'whatsapp_count': whatsapp_count,
+            'email_count': email_count,
+            'status_change_count': status_change_count,
+            'distinct_activity_types': distinct_activity_types,
+            'first_response_hours': first_response_hours,
+            'days_since_last_activity': days_since_last_activity,
+            'activity_velocity': activity_velocity,
         }
-        country_name = (getattr(lead, 'country', None) or '').lower().strip()
-        country_tier = _country_tier_map.get(country_name, 0.5)
-
-        # source_quality: lead channel quality signal
-        _source_quality_map = {
-            'referral': 1.0, 'website': 0.8, 'direct': 0.8,
-            'facebook': 0.6, 'instagram': 0.6, 'google ads': 0.6,
-            'linkedin': 0.65, 'youtube': 0.55, 'whatsapp': 0.7,
-        }
-        source_name = (getattr(lead, 'source', None) or '').lower().strip()
-        source_quality = _source_quality_map.get(source_name, 0.4)
-
-        # course_tier: estimated value from course pricing dict
-        course_name = (getattr(lead, 'course_interested', None) or '').lower()
-        course_prices = getattr(self, 'course_prices', {}) if hasattr(self, 'course_prices') else {}
-        course_price_val = 0
-        for k, v in course_prices.items():
-            if k.lower() in course_name or course_name in k.lower():
-                course_price_val = v
-                break
-        max_price = max(course_prices.values()) if course_prices else 1
-        course_tier = min(1.0, course_price_val / max(max_price, 1))
-
-        # profile_completeness: fraction of key fields filled in
-        profile_fields = [
-            getattr(lead, 'email', None),
-            getattr(lead, 'whatsapp', None),
-            getattr(lead, 'country', None),
-            getattr(lead, 'qualification', None),
-        ]
-        profile_completeness = sum(1 for f in profile_fields if f) / len(profile_fields)
-
-        # status_progression: encoded lead pipeline progress
-        _status_progression = {
-            'fresh': 0.1, 'warm': 0.5, 'hot': 0.8, 'enrolled': 1.0,
-            'follow up': 0.4, 'junk': 0.0,
-        }
-        status_val = (getattr(lead, 'status', '') or '').lower()
-        status_progression = _status_progression.get(status_val, 0.2)
-
-        # has_qualification: binary flag
-        has_qualification = 1.0 if getattr(lead, 'qualification', None) else 0.0
-
-        # ── Assemble 16-feature vector (pads to 44) ───────────────────────────
-        features = [
-            recency_score,
-            engagement_score,
-            buying_signal_score,
-            churn_risk,
-            lead_age_days / 100,
-            notes_count / 20,
-            avg_note_length / 500,
-            has_objection,
-            days_since_last_contact / 30,
-            1 if conversation['urgency'] == 'high' else 0,
-            # New features — replace 6 padding zeros
-            country_tier,
-            source_quality,
-            course_tier,
-            profile_completeness,
-            status_progression,
-            has_qualification,
-        ]
-
-        features.extend([0] * (44 - len(features)))
-        return features[:44]
+        return [row[name] for name in self.ML_FEATURE_NAMES]
     
     def _calculate_rule_based_score(self, lead: DBLead, conversation: Dict) -> float:
         """Calculate rule-based AI score (original logic)"""
@@ -2820,6 +2821,14 @@ async def rescore_lead_supabase(lead_id: str) -> None:
             return
 
         # Build a transient DBLead just for the scorer (never persisted to SQLite)
+        def _parse_dt(s):
+            if not s:
+                return None
+            try:
+                return datetime.fromisoformat(str(s).replace('Z', '+00:00')).replace(tzinfo=None)
+            except Exception:
+                return None
+
         temp = DBLead(
             lead_id=lead_data.get('lead_id', lead_id),
             full_name=lead_data.get('full_name', ''),
@@ -2829,9 +2838,23 @@ async def rescore_lead_supabase(lead_id: str) -> None:
             country=lead_data.get('country', ''),
             source=lead_data.get('source', ''),
             course_interested=lead_data.get('course_interested', ''),
+            qualification=lead_data.get('qualification'),
             assigned_to=lead_data.get('assigned_to'),
             status=LeadStatus(lead_data.get('status', 'Fresh')),
+            created_at=_parse_dt(lead_data.get('created_at')),
+            last_contact_date=_parse_dt(lead_data.get('last_contact_date')),
         )
+
+        # Fetch the lead's real notes and activities — without these, conversation
+        # analysis (buying signals, objections, churn risk) and the ML model's
+        # engagement features always saw empty/default data, no matter how much
+        # history the lead actually had.
+        lead_internal_id = lead_data.get('id')
+        real_notes = supabase_data.get_notes_for_lead(lead_internal_id) if lead_internal_id else []
+        real_activities = supabase_data.get_activities_for_lead(lead_internal_id) if lead_internal_id else []
+        note_objs = [DBNote(content=n.get('content') or '', created_at=_parse_dt(n.get('created_at'))) for n in real_notes]
+        activity_objs = [DBActivity(activity_type=a.get('activity_type', ''), created_at=_parse_dt(a.get('created_at')))
+                          for a in real_activities]
 
         # Refresh course prices for revenue estimation
         try:
@@ -2840,22 +2863,29 @@ async def rescore_lead_supabase(lead_id: str) -> None:
         except Exception:
             pass
 
-        score_result = ai_scorer.score_lead(temp, [])
+        score_result = ai_scorer.score_lead(temp, note_objs, activity_objs)
 
         # Persist only the AI scoring columns — NEVER touch expected_revenue
         # (that is a user-managed field; the AI's revenue estimate is just for
         # internal reference but must not override what the counsellor entered)
+        feature_importance = score_result.get('feature_importance')
         score_payload = {
             'ai_score':              score_result.get('ai_score', lead_data.get('ai_score', 0)),
             'ai_segment':            (score_result.get('ai_segment').value
                                       if hasattr(score_result.get('ai_segment'), 'value')
                                       else score_result.get('ai_segment', lead_data.get('ai_segment'))),
+            'ml_score':              score_result.get('ml_score'),
+            'rule_score':            score_result.get('rule_score'),
+            'confidence':            score_result.get('confidence'),
+            'scoring_method':        score_result.get('scoring_method'),
             'conversion_probability': score_result.get('conversion_probability', 0),
             'buying_signal_strength': score_result.get('buying_signal_strength', 0),
+            'primary_objection':     score_result.get('primary_objection'),
             'churn_risk':             score_result.get('churn_risk', 0),
             'next_action':            score_result.get('next_action'),
             'priority_level':         score_result.get('priority_level'),
             'recommended_script':     score_result.get('recommended_script'),
+            'feature_importance':    json.dumps(feature_importance) if feature_importance else None,
             # 'expected_revenue' intentionally excluded — user value is preserved
         }
         # Strip Nones so we never overwrite good data with null
@@ -3645,6 +3675,23 @@ async def get_followups_today(request: Request, assigned_to: Optional[str] = Non
             today_query = today_query.eq('assigned_to', assigned_to)
         today_resp = today_query.order('follow_up_date', desc=False).execute()
 
+        def _priority_score(lead):
+            """Higher = call this lead first. Blends conversion likelihood (ai_score),
+            urgency of losing them (churn_risk), and how overdue they already are —
+            so counselors work their highest-value leads first instead of oldest-date-first."""
+            ai_score = lead.get('ai_score') or 0
+            churn_risk = lead.get('churn_risk') or 0
+            days_overdue = 0
+            fu = lead.get('follow_up_date')
+            if fu:
+                try:
+                    fu_dt = datetime.fromisoformat(str(fu).replace('Z', '+00:00')).replace(tzinfo=None)
+                    days_overdue = max(0, (datetime.utcnow() - fu_dt).days)
+                except Exception:
+                    pass
+            overdue_factor = min(days_overdue, 14) / 14 * 100
+            return round(ai_score * 0.5 + churn_risk * 100 * 0.3 + overdue_factor * 0.2, 1)
+
         def fmt(lead):
             return {
                 "id": lead.get('id'),
@@ -3663,10 +3710,11 @@ async def get_followups_today(request: Request, assigned_to: Optional[str] = Non
                 "next_action": lead.get('next_action'),
                 "primary_objection": lead.get('primary_objection'),
                 "churn_risk": round(lead.get('churn_risk') or 0, 2),
+                "priority_score": _priority_score(lead),
             }
 
-        overdue_list = [fmt(l) for l in (overdue_resp.data or [])]
-        today_list = [fmt(l) for l in (today_resp.data or [])]
+        overdue_list = sorted((fmt(l) for l in (overdue_resp.data or [])), key=lambda l: -l['priority_score'])
+        today_list = sorted((fmt(l) for l in (today_resp.data or [])), key=lambda l: -l['priority_score'])
 
         return {
             "overdue": overdue_list,
@@ -3825,48 +3873,188 @@ async def get_counselors():
 
 @app.get("/api/counselors/performance")
 async def get_counselor_performance():
-    """Live counselor performance computed from leads table - SUPABASE ONLY"""
-    
-    try:
-        leads = _fetch_all_leads('assigned_to,status,ai_segment')
+    """Live counselor performance computed from leads table - SUPABASE ONLY.
 
-        # Group by assigned_to
+    Note: field names (`name`, `revenue`, `overdue`, `followups_today`,
+    `avg_ai_score`) must match what CounselorPerformanceWidget.js expects —
+    this previously returned `counselor` and omitted 4 of the widget's
+    columns, so most of the dashboard widget was silently rendering undefined."""
+
+    try:
+        leads = _fetch_all_leads('assigned_to,status,ai_segment,ai_score,actual_revenue,follow_up_date')
+
+        today = datetime.utcnow().date()
+        closed_statuses = {'Enrolled', 'Not Interested', 'Junk'}
+
         counselor_stats = {}
         for lead in leads:
             counselor = lead.get('assigned_to') or 'Unassigned'
-            if counselor not in counselor_stats:
-                counselor_stats[counselor] = {
-                    'total_leads': 0,
-                    'enrolled': 0,
-                    'hot_leads': 0,
-                    'not_interested': 0
-                }
-            
-            counselor_stats[counselor]['total_leads'] += 1
-            if lead.get('status') == 'Enrolled':
-                counselor_stats[counselor]['enrolled'] += 1
+            stats = counselor_stats.setdefault(counselor, {
+                'total_leads': 0, 'enrolled': 0, 'hot_leads': 0, 'not_interested': 0,
+                'revenue': 0.0, 'overdue': 0, 'followups_today': 0, 'ai_score_sum': 0.0, 'ai_score_count': 0,
+            })
+
+            status = lead.get('status')
+            stats['total_leads'] += 1
+            if status == 'Enrolled':
+                stats['enrolled'] += 1
+                stats['revenue'] += lead.get('actual_revenue') or 0
             if lead.get('ai_segment') == 'Hot':
-                counselor_stats[counselor]['hot_leads'] += 1
-            if lead.get('status') == 'Not Interested':
-                counselor_stats[counselor]['not_interested'] += 1
-        
-        # Format results
+                stats['hot_leads'] += 1
+            if status == 'Not Interested':
+                stats['not_interested'] += 1
+
+            if status not in closed_statuses:
+                stats['ai_score_sum'] += lead.get('ai_score') or 0
+                stats['ai_score_count'] += 1
+                fu = lead.get('follow_up_date')
+                if fu:
+                    try:
+                        fu_date = datetime.fromisoformat(str(fu).replace('Z', '+00:00')).date()
+                        if fu_date < today:
+                            stats['overdue'] += 1
+                        elif fu_date == today:
+                            stats['followups_today'] += 1
+                    except Exception:
+                        pass
+
         results = []
         for counselor, stats in counselor_stats.items():
             conversion_rate = (stats['enrolled'] / stats['total_leads'] * 100) if stats['total_leads'] > 0 else 0
+            avg_ai_score = (stats['ai_score_sum'] / stats['ai_score_count']) if stats['ai_score_count'] > 0 else 0
             results.append({
-                'counselor': counselor,
+                'name': counselor,
                 'total_leads': stats['total_leads'],
                 'enrolled': stats['enrolled'],
                 'hot_leads': stats['hot_leads'],
                 'not_interested': stats['not_interested'],
-                'conversion_rate': round(conversion_rate, 2)
+                'conversion_rate': round(conversion_rate, 2),
+                'revenue': round(stats['revenue'], 2),
+                'overdue': stats['overdue'],
+                'followups_today': stats['followups_today'],
+                'avg_ai_score': round(avg_ai_score, 1),
             })
-        
+
+        results.sort(key=lambda r: -r['conversion_rate'])
         return results
     except Exception as e:
-        logger.error(f"Error getting counselor performance: {e}")
+        logger.error("Error getting counselor performance: {}", e)
         return []
+
+
+@app.get("/api/counselors/performance-comparison")
+@cache_async_result(STATS_CACHE, "counselor_performance_comparison")
+async def get_counselor_performance_comparison():
+    """Deeper counselor performance: response time, follow-up cadence, and
+    objection-mix, benchmarked against the team average. Cached 1 minute —
+    this scans the full notes/activities tables, which is too expensive to
+    run on every dashboard refresh.
+
+    Honest caveat: with only ~21 conversions across the whole company, a
+    per-counselor conversion rate is a very small-sample statistic. Response
+    time and cadence (computed from thousands of notes/activities, not just
+    the rare conversion event) are the more statistically stable signals here."""
+
+    try:
+        leads = _fetch_all_leads('id,assigned_to,status,primary_objection,created_at')
+
+        def _fetch_all_table(table, columns, page_size=1000):
+            rows, start = [], 0
+            while True:
+                resp = supabase_data.client.table(table).select(columns).range(start, start + page_size - 1).execute()
+                batch = resp.data or []
+                rows.extend(batch)
+                if len(batch) < page_size:
+                    break
+                start += page_size
+            return rows
+
+        notes = _fetch_all_table('notes', 'lead_id,created_at')
+        activities = _fetch_all_table('activities', 'lead_id,created_at')
+
+        notes_by_lead, activities_by_lead = {}, {}
+        for n in notes:
+            notes_by_lead.setdefault(n['lead_id'], []).append(n['created_at'])
+        for a in activities:
+            activities_by_lead.setdefault(a['lead_id'], []).append(a['created_at'])
+
+        def _parse(s):
+            if not s:
+                return None
+            try:
+                return datetime.fromisoformat(str(s).replace('Z', '+00:00')).replace(tzinfo=None)
+            except Exception:
+                return None
+
+        counselor_data = {}
+        for lead in leads:
+            counselor = lead.get('assigned_to') or 'Unassigned'
+            bucket = counselor_data.setdefault(counselor, {
+                'total_leads': 0, 'enrolled': 0,
+                'response_hours': [], 'note_gaps_days': [], 'objections': {},
+            })
+            bucket['total_leads'] += 1
+            if lead.get('status') == 'Enrolled':
+                bucket['enrolled'] += 1
+
+            lead_id = lead['id']
+            created_at = _parse(lead.get('created_at'))
+            touches = sorted(t for t in (
+                [_parse(x) for x in notes_by_lead.get(lead_id, [])] +
+                [_parse(x) for x in activities_by_lead.get(lead_id, [])]
+            ) if t)
+
+            if touches and created_at:
+                first_response_hours = (touches[0] - created_at).total_seconds() / 3600
+                if 0 <= first_response_hours <= 24 * 30:  # exclude bad data / >30-day outliers
+                    bucket['response_hours'].append(first_response_hours)
+
+            lead_note_times = sorted(t for t in (_parse(x) for x in notes_by_lead.get(lead_id, [])) if t)
+            if len(lead_note_times) >= 2:
+                gaps = [(lead_note_times[i + 1] - lead_note_times[i]).total_seconds() / 86400
+                        for i in range(len(lead_note_times) - 1)]
+                bucket['note_gaps_days'].append(sum(gaps) / len(gaps))
+
+            objection = lead.get('primary_objection')
+            if objection:
+                bucket['objections'][objection] = bucket['objections'].get(objection, 0) + 1
+
+        def _avg(vals):
+            return round(sum(vals) / len(vals), 1) if vals else None
+
+        results = []
+        for counselor, b in counselor_data.items():
+            results.append({
+                'name': counselor,
+                'total_leads': b['total_leads'],
+                'enrolled': b['enrolled'],
+                'conversion_rate': round((b['enrolled'] / b['total_leads'] * 100) if b['total_leads'] else 0, 2),
+                'avg_response_hours': _avg(b['response_hours']),
+                'avg_days_between_notes': _avg(b['note_gaps_days']),
+                'top_objection': (max(b['objections'], key=b['objections'].get) if b['objections'] else None),
+                'objection_distribution': b['objections'],
+                'sample_size_warning': b['enrolled'] < 3,
+            })
+
+        # Team-wide averages as a comparison baseline (not a single "top performer",
+        # since different counselors may lead on different metrics)
+        all_response = [v for r in results for v in [r['avg_response_hours']] if v is not None]
+        all_gaps = [v for r in results for v in [r['avg_days_between_notes']] if v is not None]
+        team_conversion = sum(r['enrolled'] for r in results) / max(sum(r['total_leads'] for r in results), 1) * 100
+
+        results.sort(key=lambda r: -r['conversion_rate'])
+
+        return {
+            'counselors': results,
+            'team_average': {
+                'conversion_rate': round(team_conversion, 2),
+                'avg_response_hours': _avg(all_response),
+                'avg_days_between_notes': _avg(all_gaps),
+            },
+        }
+    except Exception as e:
+        logger.error("Error getting counselor performance comparison: {}", e)
+        return {'counselors': [], 'team_average': {}}
 
 
 # ============================================================================
@@ -4483,23 +4671,24 @@ async def get_model_info():
     """Get current ML model version, metadata, and performance metrics."""
     model = get_cached_model()
     
-    # Load metadata from JSON sidecar files
+    # Load metadata from JSON sidecar files (v4 is the current production model)
     models_dir = Path(__file__).parent.parent.parent / "models"
-    metadata_files = sorted(models_dir.glob("model_metadata_v2_*.json"), reverse=True)
-    
+    metadata_files = sorted(models_dir.glob("model_metadata_v4_*.json"), reverse=True)
+    all_metadata_files = sorted(models_dir.glob("model_metadata_v*.json"), reverse=True)
+
     metadata = None
     if metadata_files:
         try:
             with open(metadata_files[0]) as f:
                 metadata = json.load(f)
         except Exception as e:
-            logger.warning(f"Failed to load model metadata: {e}")
-    
+            logger.warning("Failed to load model metadata: {}", e)
+
     return {
         "model_loaded": model is not None,
         "model_type": "CatBoostClassifier" if model else None,
         "metadata": metadata,
-        "available_versions": [f.stem for f in metadata_files],
+        "available_versions": [f.stem for f in all_metadata_files],
         "timestamp": datetime.utcnow().isoformat(),
     }
 
@@ -4842,6 +5031,75 @@ async def recommend_course(
         raise
     except Exception as e:
         logger.error("Course recommendation failed: {}", e, extra={"endpoint": "recommend_course"})
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/ai/coaching-tip/{lead_id}")
+async def get_coaching_tip(lead_id: str):
+    """
+    🎯 Suggest how to handle this lead's objection, grounded in how similar past
+    leads (same primary_objection) actually turned out - SUPABASE ONLY
+
+    Honest by design: with few total conversions company-wide, most objection
+    types will have zero historical wins - the response says so rather than
+    inventing a success pattern.
+    """
+    if not ai_assistant.is_available():
+        raise HTTPException(
+            status_code=503,
+            detail="AI features unavailable. Please configure ANTHROPIC_API_KEY in .env"
+        )
+
+    lead = supabase_data.get_lead_by_id(lead_id)
+    if not lead:
+        raise NotFoundError("Lead", lead_id)
+
+    try:
+        objection = lead.get("primary_objection")
+        won_examples, lost_examples = [], []
+
+        if objection:
+            similar = (
+                supabase_data.client.table("leads")
+                .select("id,status")
+                .eq("primary_objection", objection)
+                .neq("id", lead.get("id"))
+                .limit(200)
+                .execute()
+            ).data or []
+
+            won_ids = [l["id"] for l in similar if l.get("status") == "Enrolled"][:5]
+            lost_ids = [l["id"] for l in similar if l.get("status") in ("Not Interested", "Junk")][:5]
+
+            for lid in won_ids:
+                notes = supabase_data.get_notes_for_lead(lid)
+                if notes:
+                    won_examples.append(notes[0].get("content", "")[:300])
+            for lid in lost_ids:
+                notes = supabase_data.get_notes_for_lead(lid)
+                if notes:
+                    lost_examples.append(notes[0].get("content", "")[:300])
+
+        tip = await ai_assistant.generate_coaching_tip(lead, objection, won_examples, lost_examples)
+
+        logger.info(
+            f"🎯 Generated coaching tip for lead {lead_id} (objection: {objection})",
+            extra={"endpoint": "coaching_tip", "lead_id": lead_id}
+        )
+
+        return {
+            "lead_id": lead_id,
+            "lead_name": lead.get("full_name"),
+            "objection": objection,
+            "similar_won_count": len(won_examples),
+            "similar_lost_count": len(lost_examples),
+            "tip": tip,
+            "generated_at": datetime.utcnow().isoformat()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Coaching tip generation failed: {}", e, extra={"endpoint": "coaching_tip"})
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/ai/status")
