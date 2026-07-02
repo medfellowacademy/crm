@@ -19,11 +19,12 @@ const FinanceDashboard = () => {
     queryFn: () => adminAPI.getRevenueTrend(30).then(res => Array.isArray(res.data) ? res.data : []),
   });
 
-  // Fetch recent enrolled leads
+  // Fetch recent enrolled leads. /api/leads returns {leads, total, skip, limit,
+  // has_more} - not a bare array and not keyed "data".
   const { data: recentLeads = [] } = useQuery({
     queryKey: ['finance-recent-leads'],
     queryFn: () => leadsAPI.getAll({ status: 'Enrolled', limit: 10 }).then(res => {
-      const data = Array.isArray(res.data) ? res.data : res.data?.data || [];
+      const data = Array.isArray(res.data) ? res.data : res.data?.leads || [];
       return data.slice(0, 10);
     }),
   });
@@ -38,14 +39,14 @@ const FinanceDashboard = () => {
     },
     {
       title: 'Enrolled Count',
-      value: stats?.enrolled_count || 0,
+      value: stats?.enrolled || 0,
       icon: Users,
       color: '#3b82f6',
       subtitle: 'Active enrollments',
     },
     {
       title: 'Avg Revenue per Lead',
-      value: `₹${((stats?.avg_revenue_per_lead || 0) / 1000).toFixed(1)}K`,
+      value: `₹${(((stats?.total_revenue || 0) / Math.max(stats?.enrolled || 0, 1)) / 1000).toFixed(1)}K`,
       icon: TrendingUp,
       color: '#8b5cf6',
       subtitle: 'Per conversion',
@@ -68,8 +69,8 @@ const FinanceDashboard = () => {
     },
     {
       title: 'Course',
-      dataIndex: 'course',
-      key: 'course',
+      dataIndex: 'course_interested',
+      key: 'course_interested',
       render: (text) => <Tag color="blue">{text}</Tag>,
     },
     {
@@ -79,7 +80,7 @@ const FinanceDashboard = () => {
     },
     {
       title: 'Revenue',
-      dataIndex: 'potential_revenue',
+      dataIndex: 'actual_revenue',
       key: 'revenue',
       render: (value) => (
         <span style={{ color: '#10b981', fontWeight: 500 }}>
@@ -89,9 +90,9 @@ const FinanceDashboard = () => {
     },
     {
       title: 'Enrolled Date',
-      dataIndex: 'enrolled_date',
-      key: 'enrolled_date',
-      render: (date) => dayjs(date).format('DD MMM YYYY'),
+      dataIndex: 'updated_at',
+      key: 'updated_at',
+      render: (date) => date ? dayjs(date).format('DD MMM YYYY') : '—',
     },
     {
       title: 'Counselor',

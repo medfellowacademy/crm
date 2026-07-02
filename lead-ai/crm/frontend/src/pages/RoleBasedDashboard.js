@@ -10,8 +10,8 @@ const RoleBasedDashboard = () => {
   const userRole = user.role;
 
   useEffect(() => {
-    document.title = `Dashboard - ${user.name || 'User'}`;
-  }, [user.name]);
+    document.title = `Dashboard - ${user.full_name || 'User'}`;
+  }, [user.full_name]);
 
   // Render role-specific dashboard
   switch (userRole) {

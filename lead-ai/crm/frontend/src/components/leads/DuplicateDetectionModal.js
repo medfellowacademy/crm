@@ -82,7 +82,7 @@ const DuplicateCard = ({ lead, onSelect, selected }) => (
       {/* right — match badges + score */}
       <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          {lead.match_types.map((t) => (
+          {(lead.match_types || []).map((t) => (
             <Tag key={t} color={MATCH_COLOR[t]} style={{ margin: 0, fontSize: 11 }}>
               {MATCH_LABEL[t]}
             </Tag>

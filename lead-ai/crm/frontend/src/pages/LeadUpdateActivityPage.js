@@ -109,7 +109,7 @@ export default function LeadUpdateActivityPage() {
   const drawerLeads = useMemo(() => {
     if (!drawerRow) return [];
     const q = leadSearch.toLowerCase();
-    return drawerRow.leads.filter(l =>
+    return (drawerRow.leads || []).filter(l =>
       !q ||
       (l.full_name || '').toLowerCase().includes(q) ||
       (l.lead_id || '').toLowerCase().includes(q) ||
@@ -411,7 +411,7 @@ export default function LeadUpdateActivityPage() {
               style={{ marginBottom: 16, borderRadius: 10 }}
             >
               <Space wrap size={8}>
-                {drawerRow.action_summary.map(s => (
+                {(drawerRow.action_summary || []).map(s => (
                   <div key={s.type} style={{
                     background: `${TYPE_COLOR[s.type] || '#64748b'}15`,
                     border: `1px solid ${TYPE_COLOR[s.type] || '#64748b'}40`,
@@ -495,7 +495,7 @@ export default function LeadUpdateActivityPage() {
             >
               <Timeline
                 items={[...(drawerRow.leads || [])]
-                  .flatMap(l => l.events.map(ev => ({ ...ev, _lead: l })))
+                  .flatMap(l => (l.events || []).map(ev => ({ ...ev, _lead: l })))
                   .sort((a, b) => (b.ts || '').localeCompare(a.ts || ''))
                   .slice(0, 50)
                   .map(ev => ({

@@ -33,7 +33,7 @@ const AdminDashboard = () => {
   // Fetch funnel leakage analysis
   const { data: funnelLeakage = [] } = useQuery({
     queryKey: ['funnel-leakage'],
-    queryFn: () => adminAPI.getFunnelAnalysis().then(res => Array.isArray(res.data) ? res.data : []),
+    queryFn: () => adminAPI.getFunnelAnalysis().then(res => res.data?.funnel || []),
   });
 
   // Fetch revenue trend
@@ -263,7 +263,7 @@ const AdminDashboard = () => {
                 }}
               />
               <Legend />
-              <Bar dataKey="leads"       fill="#3b82f6" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="total_leads" name="leads" fill="#3b82f6" radius={[4, 4, 0, 0]} />
               <Bar dataKey="conversions" fill="#10b981" radius={[4, 4, 0, 0]} />
               <Bar dataKey="revenue"     fill="#8b5cf6" radius={[4, 4, 0, 0]} />
             </BarChart>

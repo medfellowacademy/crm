@@ -191,10 +191,10 @@ const ConfigCard = ({ config, onSave, saving }) => {
 /* ─── PreviewTable ──────────────────────────────────────────── */
 const PreviewTable = ({ data, onRunNow, running }) => {
   const statusChanges = (data?.leads || []).filter(
-    (l) => l.pending_changes.some((p) => p.type === 'status')
+    (l) => (l.pending_changes || []).some((p) => p.type === 'status')
   );
   const scoreOnly = (data?.leads || []).filter(
-    (l) => l.pending_changes.every((p) => p.type === 'score')
+    (l) => (l.pending_changes || []).every((p) => p.type === 'score')
   );
 
   const columns = [
@@ -226,7 +226,7 @@ const PreviewTable = ({ data, onRunNow, running }) => {
       title: 'Pending Changes',
       render: (_, r) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {r.pending_changes.map((c, i) => (
+          {(r.pending_changes || []).map((c, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               {c.type === 'status' ? (
                 <>

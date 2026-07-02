@@ -32,7 +32,7 @@ const Dashboard = () => {
 
   const { data: conversionFunnel } = useQuery({
     queryKey: ['conversionFunnel'],
-    queryFn: () => analyticsAPI.getConversionFunnel().then(res => res.data)
+    queryFn: () => analyticsAPI.getConversionFunnel().then(res => res.data?.stages || [])
   });
 
   const { data: recentLeads } = useQuery({
@@ -224,7 +224,7 @@ const Dashboard = () => {
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={conversionFunnel}>
                 <CartesianGrid strokeDasharray="3 3" stroke={colors.border} />
-                <XAxis dataKey="stage" stroke={colors.textSecondary} />
+                <XAxis dataKey="name" stroke={colors.textSecondary} />
                 <YAxis stroke={colors.textSecondary} />
                 <Tooltip
                   contentStyle={{
@@ -295,20 +295,20 @@ const Dashboard = () => {
                 <div className="flex items-center gap-4">
                   <Tag
                     color={
-                      lead.segment === 'hot'
+                      lead.ai_segment === 'Hot'
                         ? 'red'
-                        : lead.segment === 'warm'
+                        : lead.ai_segment === 'Warm'
                         ? 'orange'
-                        : lead.segment === 'cold'
+                        : lead.ai_segment === 'Cold'
                         ? 'green'
                         : 'default'
                     }
                   >
-                    {lead.segment?.toUpperCase() || 'UNKNOWN'}
+                    {lead.ai_segment?.toUpperCase() || 'UNKNOWN'}
                   </Tag>
                   <div className="text-right">
                     <p className="text-sm font-semibold" style={{ color: colors.text }}>
-                      {lead.score || 0}
+                      {lead.ai_score || 0}
                     </p>
                     <p className="text-xs" style={{ color: colors.textTertiary }}>
                       Score

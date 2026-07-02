@@ -1,4 +1,5 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   Users,
@@ -17,17 +18,21 @@ import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Cart
 import api, { userStatsAPI, dashboardAPI } from '../../api/api';
 
 const CounselorDashboard = ({ user }) => {
+  const navigate = useNavigate();
+
   // Fetch counselor's personal stats
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['counselor-stats', user.id],
     queryFn: () => userStatsAPI.getStats(user.id).then(res => res.data),
   });
 
-  // Fetch today's follow-ups (using dashboardAPI which handles assigned_to param)
+  // Fetch today's follow-ups. The endpoint expects the counselor's full_name
+  // (it filters leads.assigned_to, a name column) and returns
+  // {overdue, today, overdue_count, today_count} - not a bare array.
   const { data: followUps = [], isLoading: followUpsLoading } = useQuery({
-    queryKey: ['today-followups', user.id],
-    queryFn: () => api.get('/api/leads/followups/today', { params: { assigned_to: user.id } })
-      .then(res => Array.isArray(res.data) ? res.data : []),
+    queryKey: ['today-followups', user.full_name],
+    queryFn: () => api.get('/api/leads/followups/today', { params: { assigned_to: user.full_name } })
+      .then(res => [...(res.data?.overdue || []), ...(res.data?.today || [])]),
   });
 
   // Fetch performance trend (last 7 days)
@@ -53,7 +58,7 @@ const CounselorDashboard = ({ user }) => {
       value: safeFollowUps.length,
       icon: Clock,
       color: '#f59e0b',
-      urgent: safeFollowUps.filter(f => f.priority === 'high').length,
+      urgent: safeFollowUps.filter(f => (f.priority_score || 0) >= 50).length,
     },
     {
       title: 'Conversion Rate',
@@ -75,7 +80,7 @@ const CounselorDashboard = ({ user }) => {
     <div style={{ padding: 'var(--space-6)' }}>
       <div style={{ marginBottom: 'var(--space-6)' }}>
         <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: '600', marginBottom: 'var(--space-2)' }}>
-          Welcome back, {user.name}! 👋
+          Welcome back, {user.full_name}! 👋
         </h1>
         <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-base)' }}>
           Here's your performance overview
@@ -188,16 +193,16 @@ const CounselorDashboard = ({ user }) => {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-              <XAxis dataKey="date" stroke="var(--text-tertiary)" style={{ fontSize: '12px' }} />
+              <XAxis dataKey="day" stroke="var(--text-tertiary)" style={{ fontSize: '12px' }} />
               <YAxis stroke="var(--text-tertiary)" style={{ fontSize: '12px' }} />
-              <Tooltip 
-                contentStyle={{ 
-                  background: 'var(--bg-primary)', 
+              <Tooltip
+                contentStyle={{
+                  background: 'var(--bg-primary)',
                   border: '1px solid var(--border-color)',
                   borderRadius: '8px',
                 }}
               />
-              <Area type="monotone" dataKey="conversions" stroke="#3b82f6" fillOpacity={1} fill="url(#colorConversions)" />
+              <Area type="monotone" dataKey="enrolled" name="Enrolled" stroke="#3b82f6" fillOpacity={1} fill="url(#colorConversions)" />
             </AreaChart>
           </ResponsiveContainer>
         </div>
@@ -260,7 +265,7 @@ const CounselorDashboard = ({ user }) => {
                   padding: 'var(--space-3)',
                   background: 'var(--bg-primary)',
                   borderRadius: '8px',
-                  border: `1px solid ${followUp.priority === 'high' ? '#ef4444' : 'var(--border-color)'}`,
+                  border: `1px solid ${(followUp.priority_score || 0) >= 50 ? '#ef4444' : 'var(--border-color)'}`,
                   display: 'flex',
                   justifyContent: 'space-between',
                   alignItems: 'center',
@@ -268,15 +273,15 @@ const CounselorDashboard = ({ user }) => {
               >
                 <div>
                   <div style={{ fontSize: 'var(--text-base)', fontWeight: '600', marginBottom: '4px' }}>
-                    {followUp.lead_name}
+                    {followUp.full_name}
                   </div>
                   <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
-                    {followUp.note || 'Follow-up required'}
+                    {followUp.next_action || 'Follow-up required'}
                   </div>
                 </div>
-                
+
                 <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-                  {followUp.priority === 'high' && (
+                  {(followUp.priority_score || 0) >= 50 && (
                     <span style={{
                       padding: '4px 8px',
                       background: '#ef444415',
@@ -291,6 +296,7 @@ const CounselorDashboard = ({ user }) => {
                   <motion.button
                     whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
+                    onClick={() => navigate(`/leads/${followUp.lead_id}`)}
                     style={{
                       padding: '8px 16px',
                       background: 'var(--color-primary)',

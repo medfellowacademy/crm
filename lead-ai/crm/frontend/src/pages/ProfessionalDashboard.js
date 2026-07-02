@@ -117,7 +117,7 @@ const ProfessionalDashboard = () => {
 
   const { data: conversionFunnel } = useQuery({
     queryKey: ['conversionFunnel'],
-    queryFn: () => analyticsAPI.getConversionFunnel().then(res => res.data).catch(() => [])
+    queryFn: () => analyticsAPI.getConversionFunnel().then(res => res.data?.stages || []).catch(() => [])
   });
 
   const { data: recentLeads } = useQuery({
@@ -172,7 +172,7 @@ const ProfessionalDashboard = () => {
   ];
 
   const funnelData = Array.isArray(conversionFunnel) ? conversionFunnel.map(item => ({
-    stage: item.stage,
+    stage: item.name,
     count: item.count,
   })) : [];
 
@@ -310,14 +310,14 @@ const ProfessionalDashboard = () => {
                   borderRadius: 6,
                   fontSize: 'var(--text-xs)',
                   fontWeight: 500,
-                  background: lead.segment === 'hot' ? '#fef2f2' : lead.segment === 'warm' ? '#fef3c7' : '#f0fdf4',
-                  color: lead.segment === 'hot' ? '#ef4444' : lead.segment === 'warm' ? '#f59e0b' : '#10b981',
+                  background: lead.ai_segment === 'Hot' ? '#fef2f2' : lead.ai_segment === 'Warm' ? '#fef3c7' : '#f0fdf4',
+                  color: lead.ai_segment === 'Hot' ? '#ef4444' : lead.ai_segment === 'Warm' ? '#f59e0b' : '#10b981',
                 }}>
-                  {lead.segment?.toUpperCase() || 'UNKNOWN'}
+                  {lead.ai_segment?.toUpperCase() || 'UNKNOWN'}
                 </span>
                 <div style={{ textAlign: 'right' }}>
                   <div style={{ fontSize: 'var(--text-base)', fontWeight: 600, color: 'var(--text-primary)' }}>
-                    {lead.score || 0}
+                    {lead.ai_score || 0}
                   </div>
                   <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)' }}>
                     Score
