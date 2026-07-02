@@ -3239,6 +3239,25 @@ async def get_notifications():
                 "lead_name": lead['full_name'],
             })
 
+        # New fresh leads not yet worked (includes website enquiries)
+        fresh_resp = (
+            supabase_data.client.table('leads')
+            .select('id,lead_id,full_name,course_interested,source,created_at')
+            .eq('status', 'Fresh')
+            .order('created_at', desc=True)
+            .limit(20)
+            .execute()
+        )
+        for lead in fresh_resp.data or []:
+            notifications.append({
+                "type": "new_lead",
+                "severity": "success",
+                "title": f"New lead — {lead['full_name']}",
+                "message": f"{lead.get('source') or 'Unknown source'} · {lead.get('course_interested') or 'No course'}",
+                "lead_id": lead.get('id'),
+                "lead_name": lead['full_name'],
+            })
+
         return notifications
     except Exception as e:
         logger.error(f"Error fetching notifications: {e}", exc_info=True)

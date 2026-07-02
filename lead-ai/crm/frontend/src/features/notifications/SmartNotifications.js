@@ -12,6 +12,7 @@ import {
   Check,
   ExternalLink,
   AlertCircle,
+  UserPlus,
 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { isFeatureEnabled } from '../../config/featureFlags';
@@ -97,6 +98,12 @@ const SmartNotifications = () => {
 
   const getNotificationIcon = (type) => {
     const icons = {
+      // Types actually returned by GET /api/notifications
+      overdue_followup: Clock,
+      stale_hot_lead: AlertCircle,
+      followup_today: Phone,
+      new_lead: UserPlus,
+      // Legacy/aspirational types kept for forward-compat
       hot_lead_inactive: AlertCircle,
       payment_opened: CreditCard,
       follow_up_overdue: Clock,

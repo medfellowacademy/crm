@@ -718,6 +718,23 @@ const LeadsPage = () => {
           </div>
 
           <div>
+            <div style={{ marginBottom: '8px', fontWeight: 500 }}>Source</div>
+            <Select
+              style={{ width: '100%' }}
+              placeholder="Select source"
+              allowClear
+              onChange={(value) => handleFilter('source', value)}
+              value={filters.source}
+            >
+              <Option value="Website">Website</Option>
+              <Option value="Instagram">Instagram</Option>
+              <Option value="Facebook">Facebook</Option>
+              <Option value="Referral">Referral</Option>
+              <Option value="WhatsApp">WhatsApp</Option>
+            </Select>
+          </div>
+
+          <div>
             <div style={{ marginBottom: '8px', fontWeight: 500 }}>Assigned To</div>
             <Select
               style={{ width: '100%' }}
