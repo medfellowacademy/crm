@@ -50,7 +50,7 @@ const AuditLogs = () => {
   });
 
   const logs = data?.logs || [];
-  const totalPages = data?.totalPages || 1;
+  const totalPages = data?.pages || 1;
 
   const getActionIcon = (action) => {
     const icons = {

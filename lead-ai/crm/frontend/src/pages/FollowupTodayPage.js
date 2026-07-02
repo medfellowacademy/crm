@@ -59,7 +59,7 @@ function QuickActionModal({ lead, open, onClose, onDone }) {
     if (nextDate) updates.follow_up_date = nextDate.toISOString();
     updateMutation.mutate({ leadId: lead.lead_id, data: updates });
     if (note.trim()) {
-      await addNoteMutation.mutateAsync({ leadId: lead.id, content: note });
+      await addNoteMutation.mutateAsync({ leadId: lead.lead_id, content: note });
     }
   };
 

@@ -115,11 +115,11 @@ const LeadAnalysisPage = () => {
       const leadDate = dayjs(lead.created_at);
       const matchesDate = leadDate.isAfter(dateRange[0]) && leadDate.isBefore(dateRange[1]);
       const matchesCountry = selectedCountry === 'all' || lead.country === selectedCountry;
-      const matchesCourse = selectedCourse === 'all' || lead.course === selectedCourse;
+      const matchesCourse = selectedCourse === 'all' || lead.course_interested === selectedCourse;
       const matchesStatus = selectedStatus === 'all' || lead.status === selectedStatus;
       const matchesUser = selectedUser === 'all' || lead.assigned_to === selectedUser;
-      const matchesSearch = !searchText || 
-        lead.name?.toLowerCase().includes(searchText.toLowerCase()) ||
+      const matchesSearch = !searchText ||
+        lead.full_name?.toLowerCase().includes(searchText.toLowerCase()) ||
         lead.email?.toLowerCase().includes(searchText.toLowerCase()) ||
         lead.phone?.includes(searchText);
 
@@ -210,8 +210,8 @@ const LeadAnalysisPage = () => {
   const courseDistribution = useMemo(() => {
     const distribution = {};
     filteredLeads.forEach(lead => {
-      if (lead.course) {
-        distribution[lead.course] = (distribution[lead.course] || 0) + 1;
+      if (lead.course_interested) {
+        distribution[lead.course_interested] = (distribution[lead.course_interested] || 0) + 1;
       }
     });
     return Object.entries(distribution)
@@ -281,7 +281,7 @@ const LeadAnalysisPage = () => {
     return filteredLeads.map(lead => ({
       age: calculateLeadAge(lead.created_at),
       daysSinceUpdate: calculateDaysSinceUpdate(lead.updated_at),
-      name: lead.name,
+      name: lead.full_name,
       status: lead.status,
       aiScore: lead.ai_score || 0
     }));

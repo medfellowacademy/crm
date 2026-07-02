@@ -20,7 +20,7 @@ const SettingsPage = () => {
       passwordForm.resetFields();
     },
     onError: (error) => {
-      message.error(error.response?.data?.message || 'Failed to change password');
+      message.error(error.response?.data?.detail || 'Failed to change password');
     },
   });
 
