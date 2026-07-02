@@ -1,0 +1,40 @@
+{
+  "version": "v3",
+  "timestamp": "20260702_122744",
+  "features": [
+    "country",
+    "source",
+    "course_interested",
+    "qualification",
+    "assigned_to",
+    "lead_age_days",
+    "days_since_last_contact",
+    "notes_count",
+    "avg_note_length",
+    "buying_signal_strength",
+    "has_objection",
+    "churn_risk",
+    "urgency_high",
+    "has_email",
+    "has_whatsapp"
+  ],
+  "categorical_features": [
+    "country",
+    "source",
+    "course_interested",
+    "qualification",
+    "assigned_to"
+  ],
+  "training_rows": 2566,
+  "positive_rows": 21,
+  "metrics": {
+    "roc_auc_cv": 0.4420058003555057,
+    "precision_at_top5pct_cv": 0.0546875,
+    "recall_at_top5pct_cv": 0.3333333333333333,
+    "precision_at_top10pct_cv": 0.03515625,
+    "recall_at_top10pct_cv": 0.42857142857142855,
+    "note": "Metrics are 5-fold cross-validated out-of-fold estimates, not a single held-out test - with only ~21 positive examples, treat these as directional, not precise."
+  },
+  "model_path": "C:\\Users\\HP\\Downloads\\crm-main\\crm-main\\lead-ai\\models\\lead_conversion_model_v3_20260702_122744.cbm",
+  "model_pkl_path": "C:\\Users\\HP\\Downloads\\crm-main\\crm-main\\lead-ai\\models\\lead_conversion_model_v3_20260702_122744.pkl"
+}
