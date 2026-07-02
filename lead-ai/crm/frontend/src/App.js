@@ -25,6 +25,7 @@ const SLAPage             = lazy(() => import('./pages/SLAPage'));
 const ScoreDecayPage            = lazy(() => import('./pages/ScoreDecayPage'));
 const LeadUpdateActivityPage    = lazy(() => import('./pages/LeadUpdateActivityPage'));
 const MetaLeadsPage             = lazy(() => import('./pages/MetaLeadsPage'));
+const WebsiteLeadsPage          = lazy(() => import('./pages/WebsiteLeadsPage'));
 import { isFeatureEnabled } from './config/featureFlags';
 import ErrorBoundary from './components/ErrorBoundary';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -103,6 +104,7 @@ function AppRoutes() {
                     <Route path="/sla" element={<SLAPage />} />
                     <Route path="/score-decay" element={<ScoreDecayPage />} />
                     <Route path="/meta-leads" element={<MetaLeadsPage />} />
+                    <Route path="/website-leads" element={<WebsiteLeadsPage />} />
                     <Route path="/settings" element={<SettingsPage />} />
                   </Routes>
                 </Suspense>

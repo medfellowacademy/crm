@@ -26,6 +26,7 @@ import {
   TrendingDown,
   ClipboardList,
   Share2,
+  Globe,
 } from 'lucide-react';
 import SmartNotifications from '../../features/notifications/SmartNotifications';
 import { isFeatureEnabled } from '../../config/featureFlags';
@@ -230,6 +231,7 @@ const ProfessionalLayout = ({ children }) => {
     { key: '/score-decay', icon: TrendingDown, label: 'Score Decay' },
     { key: '/audit-logs', icon: Shield, label: 'Audit Logs' },
     { key: '/meta-leads', icon: Share2, label: 'Meta Leads' },
+    { key: '/website-leads', icon: Globe, label: 'Website Leads' },
     { key: '/payments', icon: DollarSign, label: 'Payments' },
     { key: '/settings', icon: Settings, label: 'Settings' },
   ];
@@ -239,7 +241,7 @@ const ProfessionalLayout = ({ children }) => {
   const roleMenuItems = menuItems.filter(item => {
     const visibleToAllRoles = ['/dashboard', '/followups', '/leads', '/pipeline', '/settings', '/payments'];
     const adminManagerFinance = ['/lead-analysis', '/analytics', '/conversion-time', '/cohort-analysis', '/sla', '/score-decay'];
-    const adminManager = ['/hospitals', '/courses', '/user-activity', '/lead-update-activity', '/meta-leads'];
+    const adminManager = ['/hospitals', '/courses', '/user-activity', '/lead-update-activity', '/meta-leads', '/website-leads'];
     const adminOnly = ['/users', '/audit-logs'];
 
     if (visibleToAllRoles.includes(item.key)) return true;

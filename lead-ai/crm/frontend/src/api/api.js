@@ -83,7 +83,7 @@ export const leadsAPI = {
   // Assignment
   assign: (leadId, counselorName) => api.post(`/api/leads/${leadId}/assign`, { counselor_name: counselorName }),
   reassign: (leadId, counselorName, reason) =>
-    api.post(`/api/leads/${leadId}/reassign`, { counselor_name: counselorName, reason }),
+    api.post(`/api/leads/${leadId}/reassign`, { new_counselor: counselorName, reason }),
   assignAll: () => api.post('/api/leads/assign-all'),
 
   // Live Chat (WhatsApp)
