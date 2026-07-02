@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 # Import Supabase data layer
 from supabase_data_layer import supabase_data
+from logger_config import logger
 
 # Security configuration — fail fast if the secret is missing or left as the default.
 _raw_secret = os.getenv("JWT_SECRET_KEY", "")
@@ -48,7 +49,8 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         password_bytes = plain_password.encode('utf-8')[:72]
         hashed_bytes = hashed_password.encode('utf-8')
         return bcrypt.checkpw(password_bytes, hashed_bytes)
-    except Exception:
+    except Exception as e:
+        logger.error("verify_password failed: {}", e)
         return False
 
 

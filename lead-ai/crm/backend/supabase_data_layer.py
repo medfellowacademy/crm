@@ -792,8 +792,8 @@ class SupabaseDataLayer:
                             'channel':    'system',
                             'created_by': 'Cleanup',
                         }).execute()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.error("Failed to write cleanup audit note for lead {}: {}", keeper_int_id, e)
 
                 merged_groups += 1
 

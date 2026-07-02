@@ -73,11 +73,8 @@ from cache import (
     get_cache_stats, warm_cache
 )
 
-# Import query optimizer
-
 # Import AI Assistant (Claude)
 from ai_assistant import ai_assistant
-from query_optimizer import create_database_indexes, analyze_slow_queries
 from communication_service_v2 import whatsapp_service, email_service, comm_service
 from ai_chat import router as ai_chat_router
 
@@ -347,7 +344,12 @@ async def _verify_token(request: Request) -> None:
 
 def _get_counselor_name(request: Request) -> str | None:
     """Return the full_name of the caller if they are a Counselor, else None.
-    Used to enforce per-counselor data isolation. SUPABASE ONLY."""
+    Used to enforce per-counselor data isolation. SUPABASE ONLY.
+
+    Fails closed: if we can't reliably determine whether the caller is a
+    Counselor (e.g. a transient Supabase error), we must not silently return
+    None, since that would be read downstream as "not a counselor, apply no
+    row-level restriction" and could expose another counselor's leads."""
     try:
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
@@ -356,8 +358,11 @@ def _get_counselor_name(request: Request) -> str | None:
                 user = supabase_data.get_user_by_email(token_data.email)
                 if user:
                     return user.get('full_name')
-    except Exception:
-        pass
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("_get_counselor_name failed - failing closed: {}", e)
+        raise HTTPException(status_code=500, detail="Failed to verify account permissions. Please try again.")
     return None
 
 
@@ -1985,7 +1990,8 @@ async def login(request: Request, body: LoginRequest):
                         }
                 finally:
                     db.close()
-        except Exception:
+        except Exception as e:
+            logger.warning("Local SQLite fallback lookup failed during login for {}: {}", body.username, e)
             user = None
 
     if not user:
@@ -2443,6 +2449,8 @@ async def get_leads(
     limit = max(1, int(limit))
 
     # Enforce Counselor scope: they may only see leads assigned to themselves.
+    # Fails closed - a lookup error here must not silently fall through to
+    # "no restriction", which would expose every counselor's leads.
     try:
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
@@ -2452,8 +2460,11 @@ async def get_leads(
                 caller = supabase_data.get_user_by_email(token_data.email)
                 if caller:
                     assigned_to = caller.get('full_name')
-    except Exception:
-        pass  # token errors already handled by _verify_token; never crash the endpoint
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Counselor scope check failed in get_leads - failing closed: {}", e)
+        raise HTTPException(status_code=500, detail="Failed to verify account permissions. Please try again.")
 
     # ── In-memory cache (90 sec TTL) ─────────────────────────────────────────
     _cache_params = dict(
@@ -3633,7 +3644,10 @@ async def get_followups_today(request: Request, assigned_to: Optional[str] = Non
     """All leads with follow_up_date = today + overdue, for the daily work view"""
     
     try:
-        # Counselors may only see their own follow-ups
+        # Counselors may only see their own follow-ups. Fails closed: if this
+        # lookup errors, re-raise into the outer handler (which returns an
+        # empty list) rather than silently continuing with no restriction -
+        # that would expose every counselor's follow-ups to this counselor.
         try:
             auth_header = request.headers.get("Authorization", "")
             if auth_header.startswith("Bearer "):
@@ -3643,8 +3657,9 @@ async def get_followups_today(request: Request, assigned_to: Optional[str] = Non
                     user_resp = supabase_data.client.table('users').select('full_name').eq('email', token_data.email).execute()
                     if user_resp.data:
                         assigned_to = user_resp.data[0].get('full_name')
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error("Counselor scope check failed in get_followups_today - failing closed: {}", e)
+            raise
 
         today = datetime.utcnow().date()
         today_start = f"{today.isoformat()}T00:00:00"
@@ -4598,18 +4613,8 @@ async def trigger_workflows():
             "triggered": triggered_count
         }
     except Exception as e:
-        logger.error(f"Workflow trigger failed: {e}")
+        logger.error("Workflow trigger failed: {}", e)
         raise HTTPException(status_code=500, detail="Workflow trigger failed")
-    
-    from assignment_service import WorkflowAutomation
-    
-    automation = WorkflowAutomation(db)
-    results = await automation.check_and_trigger_workflows()
-    
-    return {
-        "triggered": len(results),
-        "workflows": results
-    }
 
 # ============================================================================
 # API ENDPOINTS - CACHE MANAGEMENT
@@ -5271,163 +5276,8 @@ async def metrics():
 
 
 # ==================== COMMUNICATION INTEGRATIONS ====================
-# WhatsApp, Email, and Call APIs with ML Training Data Collection
-# TEMPORARILY DISABLED - communication_integrations.py needs Supabase migration
-# from communication_integrations import (
-#     communication_service,
-#     CommunicationHistory
-# )
-
-# @app.post("/api/communications/whatsapp/send")
-# async def send_whatsapp_message(
-#     data: Dict[str, Any]
-# ):
-#     """Send WhatsApp message to lead - SUPABASE ONLY"""
-#     if not supabase_data.client:
-#         raise HTTPException(status_code=500, detail="Database not configured")
-#     
-#     try:
-#         result = communication_service.whatsapp.send_message(
-#             to_number=data['to'],
-#             message=data['message'],
-#             lead_id=data['lead_id'],
-#             sender=data['sender']
-#         )
-#         return result
-#     except Exception as e:
-#         logger.error(f"WhatsApp send error: {e}")
-#         raise HTTPException(status_code=500, detail=str(e))
-# 
-# 
-# @app.post("/api/communications/whatsapp/webhook")
-# async def whatsapp_webhook(
-#     data: Dict[str, Any]
-# ):
-#     """Webhook endpoint for incoming WhatsApp messages - SUPABASE ONLY"""
-#     try:
-#         result = communication_service.whatsapp.receive_webhook(data)
-#         return result
-#     except Exception as e:
-#         logger.error(f"WhatsApp webhook error: {e}")
-#         raise HTTPException(status_code=500, detail=str(e))
-# 
-# 
-# @app.post("/api/communications/email/send")
-# async def send_email(
-#     data: Dict[str, Any]
-# ):
-#     """Send email to lead - SUPABASE ONLY"""
-#     try:
-#         result = communication_service.email.send_email(
-#             to_email=data['to'],
-#             subject=data.get('subject', 'Message from Medical CRM'),
-#             body=data['message'],
-#             lead_id=data['lead_id'],
-#             sender=data['sender'],
-#             db=db,
-#             html=data.get('html', False)
-#         )
-#         return result
-#     except Exception as e:
-#         logger.error(f"Email send error: {e}")
-#         raise HTTPException(status_code=500, detail=str(e))
-# 
-# 
-# @app.post("/api/communications/call/initiate")
-# async def initiate_call(
-#     data: Dict[str, Any]
-# ):
-#     """Initiate voice call with recording - SUPABASE ONLY"""
-#     try:
-#         callback_url = os.getenv('TWILIO_CALLBACK_URL', 'http://localhost:8000/api/communications/call')
-#         result = communication_service.calls.initiate_call(
-#             to_number=data['to_number'],
-#             lead_id=data['lead_id'],
-#             counselor=data['counselor'],
-#             db=db,
-#             callback_url=callback_url
-#         )
-#         return result
-#     except Exception as e:
-#         logger.error(f"Call initiation error: {e}")
-#         raise HTTPException(status_code=500, detail=str(e))
-# 
-# 
-# @app.post("/api/communications/call/recording-complete")
-# async def call_recording_complete(
-#     data: Dict[str, Any]
-# ):
-#     """Webhook for call recording completion - SUPABASE ONLY"""
-#     try:
-#         call_sid = data.get('CallSid')
-#         call_status = data.get('CallStatus')
-#         call_duration = int(data.get('CallDuration', 0))
-#         recording_url = data.get('RecordingUrl')
-#         
-#         communication_service.calls.update_call_status(
-#             call_sid=call_sid,
-#             status=call_status,
-#             duration=call_duration,
-#             recording_url=recording_url,
-#             db=db
-#         )
-# 
-#         return {"success": True}
-#     except Exception as e:
-#         logger.error(f"Recording webhook error: {e}")
-#         raise HTTPException(status_code=500, detail=str(e))
-# 
-# 
-# @app.get("/api/communications/{lead_id}/history")
-# async def get_communication_history(
-#     lead_id: str,
-#     type: Optional[str] = Query(None)
-# ):
-#     """Get all communication history for a lead - SUPABASE ONLY"""
-#     try:
-#         history = communication_service.get_conversation_history(
-#             lead_id=lead_id,
-#             communication_type=type
-#         )
-#         return history
-#     except Exception as e:
-#         logger.error(f"Communication history error: {e}")
-#         raise HTTPException(status_code=500, detail=str(e))
-# 
-# 
-# @app.get("/api/communications/training-data")
-# async def get_training_data(
-#     type: Optional[str] = Query(None),
-#     limit: int = Query(1000)
-# ):
-#     """Get communication data for ML model training - SUPABASE ONLY"""
-#     try:
-#         training_data = communication_service.get_training_data(
-#             communication_type=type,
-#             limit=limit
-#         )
-#         return {
-#             "total_records": len(training_data),
-#             "data": training_data
-#         }
-#     except Exception as e:
-#         logger.error(f"Training data error: {e}")
-#         raise HTTPException(status_code=500, detail=str(e))
-# 
-# 
-# @app.post("/api/communications/mark-training")
-# async def mark_as_training_data(
-#     data: Dict[str, List[int]]
-# ):
-#     """Mark specific communications as used for training - SUPABASE ONLY"""
-#     try:
-#         communication_service.mark_as_training_data(
-#             communication_ids=data['ids']
-#         )
-#         return {"success": True, "marked_count": len(data['ids'])}
-#     except Exception as e:
-#         logger.error(f"Mark training error: {e}")
-#         raise HTTPException(status_code=500, detail=str(e))
+# WhatsApp, Email, and Call APIs — see communication_service_v2 below for the
+# live Supabase-backed implementation of these routes.
 
 
 @app.post("/api/communications/{comm_type}/send")
@@ -5924,14 +5774,21 @@ async def get_team_performance():
         
         return result
     except Exception as e:
-        logger.error(f"Team performance error: {e}")
+        logger.error("Team performance error: {}", e)
         return []
+
+
+_FUNNEL_STAGE_ORDER = ["Fresh", "Follow Up", "Warm", "Hot", "Enrolled"]
 
 
 @app.get("/api/admin/funnel-analysis")
 async def get_funnel_analysis():
-    """Funnel analysis - SUPABASE ONLY"""
-    
+    """Funnel analysis - SUPABASE ONLY.
+
+    Returns both the raw per-status counts (`stages`) and an ordered funnel
+    with drop-off between consecutive stages (`funnel`) - the admin dashboard
+    widget visualizes the latter."""
+
     try:
         # Get all leads
         leads = _fetch_all_leads('status')
@@ -5940,11 +5797,22 @@ async def get_funnel_analysis():
         for lead in leads:
             status = lead.get('status', 'Unknown')
             stages[status] = stages.get(status, 0) + 1
-        
-        return {"stages": [{'name': k, 'count': v} for k, v in stages.items()]}
+
+        funnel = []
+        prev_count = None
+        for stage_name in _FUNNEL_STAGE_ORDER:
+            count = stages.get(stage_name, 0)
+            drop_rate = round((1 - count / prev_count) * 100, 1) if prev_count else 0.0
+            funnel.append({"stage": stage_name, "count": count, "drop_rate": max(0.0, drop_rate)})
+            prev_count = count if count > 0 else prev_count
+
+        return {
+            "stages": [{'name': k, 'count': v} for k, v in stages.items()],
+            "funnel": funnel,
+        }
     except Exception as e:
-        logger.error(f"Funnel analysis error: {e}")
-        return {"stages": []}
+        logger.error("Funnel analysis error: {}", e)
+        return {"stages": [], "funnel": []}
 
 
 @app.get("/api/admin/revenue-trend")
@@ -5985,6 +5853,9 @@ async def get_revenue_trend(days: int = 30):
 # USER/COUNSELOR STATS ENDPOINTS
 # ============================================================
 
+_SEGMENT_COLOR = {"Hot": "#ef4444", "Warm": "#f59e0b", "Cold": "#3b82f6", "Junk": "#9ca3af"}
+
+
 @app.get("/api/users/{user_id}/stats")
 async def get_user_stats(user_id: int):
     """Per-user stats for counselor dashboard - SUPABASE ONLY"""
@@ -6005,8 +5876,10 @@ async def get_user_stats(user_id: int):
         hot = sum(1 for l in assigned if l.get('ai_segment') == 'Hot')
         warm = sum(1 for l in assigned if l.get('ai_segment') == 'Warm')
         revenue = sum(l.get('expected_revenue', 0) or 0 for l in assigned if l.get('status') == 'Enrolled')
+        conversion_rate = round((enrolled / max(total, 1)) * 100, 2)
 
-        today = datetime.utcnow().date()
+        now = datetime.utcnow()
+        today = now.date()
 
         # Leads created today
         today_leads = sum(
@@ -6022,6 +5895,40 @@ async def get_user_stats(user_id: int):
             if l.get('follow_up_date') and l['follow_up_date'][:10] == today.isoformat()
         )
 
+        # Week-over-week trend: this week (last 7 days) vs the 7 days before that.
+        def _parse(l):
+            try:
+                return datetime.fromisoformat(l['created_at'].replace('Z', '+00:00')).replace(tzinfo=None)
+            except Exception:
+                return None
+
+        this_week_cutoff = now - timedelta(days=7)
+        last_week_cutoff = now - timedelta(days=14)
+        this_week = [l for l in assigned if (dt := _parse(l)) and dt >= this_week_cutoff]
+        last_week = [l for l in assigned if (dt := _parse(l)) and last_week_cutoff <= dt < this_week_cutoff]
+
+        def _pct_change(curr, prev):
+            if prev == 0:
+                return 100.0 if curr > 0 else 0.0
+            return round((curr - prev) / prev * 100, 1)
+
+        this_week_enrolled = sum(1 for l in this_week if l.get('status') == 'Enrolled')
+        last_week_enrolled = sum(1 for l in last_week if l.get('status') == 'Enrolled')
+        this_week_revenue = sum(l.get('expected_revenue', 0) or 0 for l in this_week if l.get('status') == 'Enrolled')
+        last_week_revenue = sum(l.get('expected_revenue', 0) or 0 for l in last_week if l.get('status') == 'Enrolled')
+        this_week_conv = round((this_week_enrolled / max(len(this_week), 1)) * 100, 2)
+        last_week_conv = round((last_week_enrolled / max(len(last_week), 1)) * 100, 2)
+
+        # Segment breakdown for the "Lead Distribution" pie chart
+        segment_counts = {}
+        for l in assigned:
+            seg = l.get('ai_segment') or 'Unclassified'
+            segment_counts[seg] = segment_counts.get(seg, 0) + 1
+        lead_distribution = [
+            {"name": seg, "value": count, "color": _SEGMENT_COLOR.get(seg, "#9ca3af")}
+            for seg, count in segment_counts.items()
+        ]
+
         return {
             "user_id": user_id,
             "name": user['full_name'],
@@ -6032,14 +5939,21 @@ async def get_user_stats(user_id: int):
             "today_leads": today_leads,
             "followups_today": followups_today,
             "revenue": round(revenue, 2),
-            "conversion_rate": round((enrolled / max(total, 1)) * 100, 2),
+            "total_revenue": round(revenue, 2),
+            "conversion_rate": conversion_rate,
+            "leads_trend": _pct_change(len(this_week), len(last_week)),
+            "conversion_trend": _pct_change(this_week_conv, last_week_conv),
+            "revenue_trend": _pct_change(this_week_revenue, last_week_revenue),
+            "lead_distribution": lead_distribution,
         }
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"User stats error: {e}")
+        logger.error("User stats error: {}", e)
         return {"total_leads": 0, "enrolled": 0, "hot_leads": 0, "warm_leads": 0,
-                "today_leads": 0, "followups_today": 0, "revenue": 0, "conversion_rate": 0}
+                "today_leads": 0, "followups_today": 0, "revenue": 0, "total_revenue": 0,
+                "conversion_rate": 0, "leads_trend": 0, "conversion_trend": 0,
+                "revenue_trend": 0, "lead_distribution": []}
 
 
 @app.get("/api/users/{user_id}/performance")
@@ -6263,7 +6177,8 @@ async def change_password(user_id: int, data: PasswordChangeRequest):
                     data.current_password.encode('utf-8'),
                     user['password'].encode('utf-8')
                 )
-            except Exception:
+            except Exception as e:
+                logger.error("checkpw failed during change_password for user {}: {}", user_id, e)
                 password_valid = False
         else:
             # plain text password (legacy)
@@ -6272,15 +6187,16 @@ async def change_password(user_id: int, data: PasswordChangeRequest):
     if not password_valid:
         raise HTTPException(status_code=400, detail="Current password is incorrect")
 
-    # Hash new password
+    # Hash new password — never fall back to storing it in plain text if
+    # bcrypt fails; that would silently downgrade the account's security.
     try:
         new_hashed = _bcrypt.hashpw(
             data.new_password.encode('utf-8'),
             _bcrypt.gensalt()
         ).decode('utf-8')
-    except Exception:
-        # Fallback to plain text if bcrypt fails
-        new_hashed = data.new_password
+    except Exception as e:
+        logger.error("bcrypt.hashpw failed during change_password for user {}: {}", user_id, e)
+        raise HTTPException(status_code=500, detail="Failed to process new password. Please try again.")
 
     # Update password in Supabase
     updated = supabase_data.update_user(user_id, {'password': new_hashed})
@@ -6306,11 +6222,12 @@ async def admin_reset_password(user_id: int, data: AdminPasswordResetRequest, re
                 raise HTTPException(status_code=403, detail="Only Super Admins can reset user passwords")
         except HTTPException:
             raise
-        except Exception:
+        except Exception as e:
+            logger.error("Token decode failed in admin_reset_password: {}", e)
             raise HTTPException(status_code=403, detail="Only Super Admins can reset user passwords")
     else:
         raise HTTPException(status_code=401, detail="Authentication required")
-    
+
     import bcrypt as _bcrypt
 
     user = supabase_data.get_user_by_id(user_id)
@@ -6320,13 +6237,15 @@ async def admin_reset_password(user_id: int, data: AdminPasswordResetRequest, re
     if not data.new_password or len(data.new_password) < 6:
         raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
 
+    # Never fall back to storing the new password in plain text if bcrypt fails.
     try:
         new_hashed = _bcrypt.hashpw(
             data.new_password.encode('utf-8'),
             _bcrypt.gensalt()
         ).decode('utf-8')
-    except Exception:
-        new_hashed = data.new_password
+    except Exception as e:
+        logger.error("bcrypt.hashpw failed during admin_reset_password for user {}: {}", user_id, e)
+        raise HTTPException(status_code=500, detail="Failed to process new password. Please try again.")
 
     # Update password in Supabase
     updated = supabase_data.update_user(user_id, {'password': new_hashed})
@@ -7957,8 +7876,8 @@ def _meta_wa_mark_read(message_id: str):
             json={"messaging_product": "whatsapp", "status": "read", "message_id": message_id},
             headers=_meta_wa_headers(), timeout=5,
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Failed to mark WhatsApp message {} as read: {}", message_id, e)
 
 
 def _get_lead_by_phone(phone: str) -> Optional[dict]:
@@ -7975,7 +7894,8 @@ def _get_lead_by_phone(phone: str) -> Optional[dict]:
             "id,lead_id,full_name,whatsapp,phone,assigned_to"
         ).ilike("phone", f"%{last10}%").limit(1).execute()
         return r.data[0] if r.data else None
-    except Exception:
+    except Exception as e:
+        logger.warning("Failed to look up lead by phone {}: {}", phone, e)
         return None
 
 
@@ -8003,7 +7923,11 @@ async def meta_whatsapp_webhook(request: FARequest):
     """
     try:
         body = await request.json()
-    except Exception:
+    except Exception as e:
+        # Still return 200 "ok" - a non-200 here makes Meta retry a payload
+        # that will never parse, forever. Just log it so we can see if this
+        # starts happening for a real reason.
+        logger.warning("WhatsApp webhook received non-JSON body: {}", e)
         return {"status": "ok"}
 
     try:
