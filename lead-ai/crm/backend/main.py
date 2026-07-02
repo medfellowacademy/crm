@@ -33,6 +33,8 @@ import json
 import os
 import re
 import enum
+import statistics
+from collections import defaultdict
 import asyncio as _asyncio
 
 # Import logging and error handling
@@ -72,10 +74,11 @@ from cache import (
 
 # Import query optimizer
 
-# Import AI Assistant (GPT-4)
+# Import AI Assistant (Claude)
 from ai_assistant import ai_assistant
 from query_optimizer import create_database_indexes, analyze_slow_queries
 from communication_service_v2 import whatsapp_service, email_service, comm_service
+from ai_chat import router as ai_chat_router
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -245,8 +248,8 @@ async def lifespan(app: FastAPI):
     # --- Warn on missing optional-but-important env vars ---
     if os.getenv("SUPABASE_URL") and not os.getenv("SUPABASE_KEY"):
         logger.warning("⚠️ SUPABASE_URL is set but SUPABASE_KEY is missing — Supabase will not connect.")
-    if not os.getenv("OPENAI_API_KEY"):
-        logger.warning("⚠️ OPENAI_API_KEY is not set — AI assistant features will be disabled.")
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        logger.warning("⚠️ ANTHROPIC_API_KEY is not set — AI assistant features will be disabled.")
     if not os.getenv("META_WHATSAPP_ACCESS_TOKEN") or not os.getenv("META_WHATSAPP_PHONE_NUMBER_ID"):
         logger.warning("⚠️ Meta WhatsApp credentials not set — WhatsApp messaging will be disabled.")
     if not os.getenv("SMTP_USER") or not os.getenv("SMTP_PASSWORD"):
@@ -396,6 +399,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(ai_chat_router)
 
 logger.info("🚀 FastAPI application initialized with logging and error handling")
 
@@ -963,6 +968,7 @@ class HospitalCreate(BaseModel):
     contact_person: Optional[str] = None
     contact_email: Optional[EmailStr] = None
     contact_phone: Optional[str] = None
+    collaboration_status: Optional[str] = "Active"
     courses_offered: List[int] = []
 
 class WhatsAppRequest(BaseModel):
@@ -1551,7 +1557,7 @@ class AILeadScorer:
     
     def __init__(self):
         # Load latest trained CatBoost model (96.5% ROC-AUC)
-        model_path = Path("../../models/lead_conversion_model_v2_20251224_184626.pkl")
+        model_path = Path(__file__).parent.parent.parent / 'models' / 'lead_conversion_model_v2_20251224_184626.pkl'
         if model_path.exists():
             try:
                 self.model = joblib.load(model_path)
@@ -1577,21 +1583,23 @@ class AILeadScorer:
         conversation_analysis = self._analyze_conversation(notes)
         
         # Calculate scores
+        rule_score = self._calculate_rule_based_score(lead, conversation_analysis)
         if self.has_model:
-            # HYBRID APPROACH: 70% ML + 30% Rules
+            # HYBRID APPROACH: 70% ML + 30% Rules — falls back to pure rule-based
+            # if the ML prediction itself fails (e.g. feature schema mismatch)
             ml_score, ml_confidence, feature_importance = self._calculate_ml_score(lead, notes, conversation_analysis)
-            rule_score = self._calculate_rule_based_score(lead, conversation_analysis)
-            
-            # Weighted combination
-            final_score = (ml_score * 0.7) + (rule_score * 0.3)
-            
-            scoring_method = 'hybrid_ml'
-            confidence = ml_confidence
+            if ml_score is not None:
+                final_score = (ml_score * 0.7) + (rule_score * 0.3)
+                scoring_method = 'hybrid_ml'
+                confidence = ml_confidence
+            else:
+                final_score = rule_score
+                scoring_method = 'rule_based'
+                confidence = 0.75
         else:
-            # Fallback to pure rule-based
-            final_score = self._calculate_rule_based_score(lead, conversation_analysis)
+            # No model loaded — pure rule-based
+            final_score = rule_score
             ml_score = None
-            rule_score = final_score
             feature_importance = None
             scoring_method = 'rule_based'
             confidence = 0.75
@@ -1654,9 +1662,8 @@ class AILeadScorer:
             return ml_score, confidence, feature_importance
             
         except Exception as e:
-            print(f"ML scoring error: {e}")
-            # Fallback to rule-based
-            return self._calculate_rule_based_score(lead, conversation), 0.5, None
+            logger.warning(f"ML prediction failed, falling back to rule-based: {e}", extra={"system": "ml"})
+            return None, None, None
     
     def _extract_ml_features(self, lead: DBLead, notes: List[DBNote], conversation: Dict) -> list:
         """Extract features for ML model prediction (44-feature vector)."""
@@ -2123,12 +2130,21 @@ async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, reque
             "follow_up_date": lead.follow_up_date.isoformat() if lead.follow_up_date else None,
             "status": db_lead.status.value if hasattr(db_lead.status, 'value') else db_lead.status,
             "ai_score": db_lead.ai_score or 0.0,
+            "ml_score": db_lead.ml_score,
+            "rule_score": db_lead.rule_score,
+            "confidence": db_lead.confidence,
+            "scoring_method": db_lead.scoring_method,
             "ai_segment": db_lead.ai_segment.value if hasattr(db_lead.ai_segment, 'value') else db_lead.ai_segment,
             "conversion_probability": db_lead.conversion_probability or 0.0,
             "expected_revenue": db_lead.expected_revenue or 0.0,
             "actual_revenue": db_lead.actual_revenue or 0.0,
             "buying_signal_strength": db_lead.buying_signal_strength or 0.0,
+            "primary_objection": db_lead.primary_objection,
             "churn_risk": db_lead.churn_risk or 0.0,
+            "next_action": db_lead.next_action,
+            "priority_level": db_lead.priority_level,
+            "recommended_script": db_lead.recommended_script,
+            "feature_importance": db_lead.feature_importance,
         }
         # Strip None values (keep 0.0 floats)
         payload = {k: v for k, v in payload.items() if v is not None}
@@ -3164,133 +3180,233 @@ async def get_courses(
 # API ENDPOINTS - DASHBOARD & ANALYTICS
 # ============================================================================
 
+_NOTIFICATION_PRIORITY = {"error": "high", "warning": "medium", "info": "low", "success": "low"}
+
+def _compute_raw_notifications() -> list:
+    """Compute the current notification candidates: overdue follow-ups, stale hot
+    leads, follow-ups due today, new leads. Shared by GET /api/notifications and
+    the read-all endpoint so both agree on what "all" means."""
+    today = datetime.utcnow().date()
+    now_iso = datetime.utcnow().isoformat()
+    notifications = []
+
+    # Overdue follow-ups
+    overdue_resp = (
+        supabase_data.client.table('leads')
+        .select('id,lead_id,full_name,course_interested,assigned_to,follow_up_date')
+        .lt('follow_up_date', now_iso)
+        .not_.in_('status', ['Enrolled', 'Not Interested', 'Junk'])
+        .order('follow_up_date', desc=False)
+        .limit(20)
+        .execute()
+    )
+    for lead in overdue_resp.data or []:
+        if lead.get('follow_up_date'):
+            follow_up_dt = datetime.fromisoformat(lead['follow_up_date'].replace('Z', '+00:00'))
+            days = (datetime.utcnow() - follow_up_dt).days
+            notifications.append({
+                "type": "overdue_followup",
+                "severity": "error",
+                "title": f"Overdue follow-up — {lead['full_name']}",
+                "message": f"{days} day{'s' if days != 1 else ''} overdue · {lead.get('course_interested') or 'No course'} · {lead.get('assigned_to') or 'Unassigned'}",
+                "lead_id": lead.get('id'),
+                "lead_string_id": lead.get('lead_id'),
+                "lead_name": lead['full_name'],
+                "event_time": lead.get('follow_up_date'),
+            })
+
+    # Hot leads not contacted in 3+ days
+    three_days_ago = (datetime.utcnow() - timedelta(days=3)).isoformat()
+    stale_hot_resp = (
+        supabase_data.client.table('leads')
+        .select('id,lead_id,full_name,course_interested,assigned_to,last_contact_date')
+        .eq('ai_segment', 'Hot')
+        .not_.in_('status', ['Enrolled', 'Not Interested'])
+        .or_(f'last_contact_date.lt.{three_days_ago},last_contact_date.is.null')
+        .limit(10)
+        .execute()
+    )
+    for lead in stale_hot_resp.data or []:
+        notifications.append({
+            "type": "stale_hot_lead",
+            "severity": "warning",
+            "title": f"Hot lead going cold — {lead['full_name']}",
+            "message": f"No contact in 3+ days · {lead.get('course_interested') or 'No course'} · {lead.get('assigned_to') or 'Unassigned'}",
+            "lead_id": lead.get('id'),
+            "lead_string_id": lead.get('lead_id'),
+            "lead_name": lead['full_name'],
+            "event_time": lead.get('last_contact_date'),
+        })
+
+    # Follow-ups due today
+    today_start = f"{today.isoformat()}T00:00:00"
+    today_end = f"{today.isoformat()}T23:59:59"
+    due_today_resp = (
+        supabase_data.client.table('leads')
+        .select('id,lead_id,full_name,course_interested,assigned_to,follow_up_date')
+        .gte('follow_up_date', today_start)
+        .lte('follow_up_date', today_end)
+        .not_.in_('status', ['Enrolled', 'Not Interested', 'Junk'])
+        .limit(20)
+        .execute()
+    )
+    for lead in due_today_resp.data or []:
+        notifications.append({
+            "type": "followup_today",
+            "severity": "info",
+            "title": f"Follow-up due today — {lead['full_name']}",
+            "message": f"{lead.get('course_interested') or 'No course'} · {lead.get('assigned_to') or 'Unassigned'}",
+            "lead_id": lead.get('id'),
+            "lead_string_id": lead.get('lead_id'),
+            "lead_name": lead['full_name'],
+            "event_time": lead.get('follow_up_date'),
+        })
+
+    # New fresh leads not yet worked (includes website enquiries)
+    fresh_resp = (
+        supabase_data.client.table('leads')
+        .select('id,lead_id,full_name,course_interested,source,created_at')
+        .eq('status', 'Fresh')
+        .order('created_at', desc=True)
+        .limit(20)
+        .execute()
+    )
+    for lead in fresh_resp.data or []:
+        notifications.append({
+            "type": "new_lead",
+            "severity": "success",
+            "title": f"New lead — {lead['full_name']}",
+            "message": f"{lead.get('source') or 'Unknown source'} · {lead.get('course_interested') or 'No course'}",
+            "lead_id": lead.get('id'),
+            "lead_string_id": lead.get('lead_id'),
+            "lead_name": lead['full_name'],
+            "event_time": lead.get('created_at'),
+        })
+
+    for n in notifications:
+        n["id"] = f"{n['type']}:{n['lead_id']}"
+    return notifications
+
+
 @app.get("/api/notifications")
-async def get_notifications():
-    """Real notifications: overdue follow-ups + stale hot leads"""
-    
+async def get_notifications(current_user: dict = Depends(get_current_user)):
+    """Real notifications, enriched with per-user read/snooze state."""
     try:
-        today = datetime.utcnow().date()
-        now_iso = datetime.utcnow().isoformat()
-        notifications = []
+        notifications = _compute_raw_notifications()
+        user_email = (current_user.get('email') or '').lower()
 
-        # Overdue follow-ups
-        overdue_resp = (
-            supabase_data.client.table('leads')
-            .select('id,lead_id,full_name,course_interested,assigned_to,follow_up_date')
-            .lt('follow_up_date', now_iso)
-            .not_.in_('status', ['Enrolled', 'Not Interested', 'Junk'])
-            .order('follow_up_date', desc=False)
-            .limit(20)
-            .execute()
-        )
-        for lead in overdue_resp.data or []:
-            if lead.get('follow_up_date'):
-                follow_up_dt = datetime.fromisoformat(lead['follow_up_date'].replace('Z', '+00:00'))
-                days = (datetime.utcnow() - follow_up_dt).days
-                notifications.append({
-                    "type": "overdue_followup",
-                    "severity": "error",
-                    "title": f"Overdue follow-up — {lead['full_name']}",
-                    "message": f"{days} day{'s' if days != 1 else ''} overdue · {lead.get('course_interested') or 'No course'} · {lead.get('assigned_to') or 'Unassigned'}",
-                    "lead_id": lead.get('id'),
-                    "lead_name": lead['full_name'],
-                })
+        state_by_key = {}
+        if user_email and notifications:
+            keys = [n["id"] for n in notifications]
+            state_resp = (
+                supabase_data.client.table('notification_state')
+                .select('notification_key,read_at,snoozed_until')
+                .eq('user_email', user_email)
+                .in_('notification_key', keys)
+                .execute()
+            )
+            state_by_key = {row['notification_key']: row for row in (state_resp.data or [])}
 
-        # Hot leads not contacted in 3+ days
-        three_days_ago = (datetime.utcnow() - timedelta(days=3)).isoformat()
-        stale_hot_resp = (
-            supabase_data.client.table('leads')
-            .select('id,lead_id,full_name,course_interested,assigned_to,last_contact_date')
-            .eq('ai_segment', 'Hot')
-            .not_.in_('status', ['Enrolled', 'Not Interested'])
-            .or_(f'last_contact_date.lt.{three_days_ago},last_contact_date.is.null')
-            .limit(10)
-            .execute()
-        )
-        for lead in stale_hot_resp.data or []:
-            notifications.append({
-                "type": "stale_hot_lead",
-                "severity": "warning",
-                "title": f"Hot lead going cold — {lead['full_name']}",
-                "message": f"No contact in 3+ days · {lead.get('course_interested') or 'No course'} · {lead.get('assigned_to') or 'Unassigned'}",
-                "lead_id": lead.get('id'),
-                "lead_name": lead['full_name'],
-            })
+        result = []
+        now = datetime.utcnow()
+        for n in notifications:
+            state = state_by_key.get(n["id"])
+            if state and state.get('snoozed_until'):
+                snoozed_until = datetime.fromisoformat(state['snoozed_until'].replace('Z', '+00:00')).replace(tzinfo=None)
+                if snoozed_until > now:
+                    continue  # still snoozed — hide it
+            n["priority"] = _NOTIFICATION_PRIORITY.get(n["severity"], "low")
+            n["description"] = n["message"]
+            n["createdAt"] = n.get("event_time") or now.isoformat()
+            n["readAt"] = state.get('read_at') if state else None
+            if n.get("lead_string_id"):
+                n["actionUrl"] = f"/leads/{n['lead_string_id']}"
+                n["actionLabel"] = "View Lead"
+            result.append(n)
 
-        # Follow-ups due today
-        today_start = f"{today.isoformat()}T00:00:00"
-        today_end = f"{today.isoformat()}T23:59:59"
-        due_today_resp = (
-            supabase_data.client.table('leads')
-            .select('id,lead_id,full_name,course_interested,assigned_to,follow_up_date')
-            .gte('follow_up_date', today_start)
-            .lte('follow_up_date', today_end)
-            .not_.in_('status', ['Enrolled', 'Not Interested', 'Junk'])
-            .limit(20)
-            .execute()
-        )
-        for lead in due_today_resp.data or []:
-            notifications.append({
-                "type": "followup_today",
-                "severity": "info",
-                "title": f"Follow-up due today — {lead['full_name']}",
-                "message": f"{lead.get('course_interested') or 'No course'} · {lead.get('assigned_to') or 'Unassigned'}",
-                "lead_id": lead.get('id'),
-                "lead_name": lead['full_name'],
-            })
-
-        # New fresh leads not yet worked (includes website enquiries)
-        fresh_resp = (
-            supabase_data.client.table('leads')
-            .select('id,lead_id,full_name,course_interested,source,created_at')
-            .eq('status', 'Fresh')
-            .order('created_at', desc=True)
-            .limit(20)
-            .execute()
-        )
-        for lead in fresh_resp.data or []:
-            notifications.append({
-                "type": "new_lead",
-                "severity": "success",
-                "title": f"New lead — {lead['full_name']}",
-                "message": f"{lead.get('source') or 'Unknown source'} · {lead.get('course_interested') or 'No course'}",
-                "lead_id": lead.get('id'),
-                "lead_name": lead['full_name'],
-            })
-
-        return notifications
+        return result
     except Exception as e:
         logger.error(f"Error fetching notifications: {e}", exc_info=True)
         return []
 
 
+_AUDIT_ACTION_TO_TYPES = {
+    "create": ["lead_created"],
+    "update": ["field_update", "reassignment"],
+}
+_AUDIT_TYPE_TO_ACTION = {
+    "lead_created": "create",
+    "field_update": "update",
+    "reassignment": "update",
+}
+
 @app.get("/api/audit-logs")
-async def get_audit_logs(page: int = 1, limit: int = 50):
-    """Get recent activity logs as audit trail - SUPABASE ONLY"""
-    
+async def get_audit_logs(
+    page: int = 1,
+    limit: int = 50,
+    user: Optional[str] = None,
+    action: Optional[str] = None,
+    entityType: Optional[str] = None,
+    search: Optional[str] = None,
+    date_from: Optional[str] = Query(None, alias="from"),
+    date_to: Optional[str] = Query(None, alias="to"),
+):
+    """Get recent activity logs as audit trail - SUPABASE ONLY
+
+    This table only tracks lead-related activity (creation, field updates,
+    reassignment) - there's no cross-system audit trail for users/payments/
+    roles/settings yet. entityType values other than "lead" correctly
+    return no results rather than pretending to filter data that isn't
+    tracked here.
+    """
     try:
+        if entityType and entityType != "lead":
+            return {"logs": [], "total": 0, "page": page, "limit": limit, "pages": 0}
+
         offset = (page - 1) * limit
-        
-        # Get activities with pagination
-        response = supabase_data.client.table('activities').select('*').order('created_at', desc=True).range(offset, offset + limit - 1).execute()
+
+        def build_query(q):
+            if user:
+                q = q.ilike('created_by', f'%{user}%')
+            if action and action in _AUDIT_ACTION_TO_TYPES:
+                q = q.in_('activity_type', _AUDIT_ACTION_TO_TYPES[action])
+            if search:
+                safe_search = re.sub(r"[%_\(\),\"]", "", search).strip()[:100]
+                if safe_search:
+                    q = q.or_(f"description.ilike.%{safe_search}%,created_by.ilike.%{safe_search}%")
+            if date_from:
+                q = q.gte('created_at', date_from)
+            if date_to:
+                q = q.lte('created_at', date_to)
+            return q
+
+        response = build_query(
+            supabase_data.client.table('activities').select('*')
+        ).order('created_at', desc=True).range(offset, offset + limit - 1).execute()
         activities = response.data if response.data else []
-        
-        # Get total count
-        count_response = supabase_data.client.table('activities').select('id', count='exact').execute()
+
+        count_response = build_query(
+            supabase_data.client.table('activities').select('id', count='exact')
+        ).execute()
         total = count_response.count if count_response.count else 0
-        
+
         logs = [
             {
                 "id": a.get('id'),
                 "lead_id": a.get('lead_id'),
+                "entityId": a.get('lead_id'),
+                "entityType": "lead",
                 "activity_type": a.get('activity_type'),
+                "action": _AUDIT_TYPE_TO_ACTION.get(a.get('activity_type'), 'update'),
                 "description": a.get('description'),
                 "created_by": a.get('created_by'),
+                "performedBy": a.get('created_by'),
                 "created_at": a.get('created_at'),
+                "createdAt": a.get('created_at'),
             }
             for a in activities
         ]
-        
+
         return {
             "logs": logs,
             "total": total,
@@ -4388,358 +4504,344 @@ async def get_model_info():
     }
 
 # ============================================================================
-# AI-POWERED SMART FEATURES (PHASE 8) - REQUIRES SUPABASE CONVERSION
-# These endpoints currently use db.query() and need Supabase implementation
-# Returning not-implemented responses until conversion is complete
-# ============================================================================
-
-def _ai_not_implemented():
-    raise HTTPException(
-        status_code=501,
-        detail="AI features require Supabase conversion - coming soon"
-    )
-
-# ============================================================================
 # AI-POWERED SMART FEATURES (PHASE 8)
 # ============================================================================
 
+class SearchQuery(BaseModel):
+    query: str
+
+_SEARCH_FIELDS = 'id,lead_id,full_name,phone,email,country,course_interested,status,ai_segment,ai_score,conversion_probability,updated_at'
+
 @app.post("/api/ai/search")
-async def ai_natural_language_search(
-    query: str = Query(..., description="Natural language search query")
-):
+async def ai_natural_language_search(payload: SearchQuery):
     """
-    🔍 Search leads using natural language - SUPABASE ONLY (Simplified)
-    
-    Examples:
-    - "Show me all hot leads from India interested in MBBS"
-    - "Find leads that haven't been contacted in 7 days"
-    - "Which leads have high conversion probability?"
+    🔍 Search leads by name/phone/email/lead_id/course. When ANTHROPIC_API_KEY is
+    configured, results are additionally re-ranked by natural-language intent
+    (e.g. "hot leads from India interested in MBBS") - SUPABASE ONLY
     """
-    _ai_not_implemented()  # Stub until Supabase conversion
-    
-    if not ai_assistant.is_available():
-        raise HTTPException(
-            status_code=503,
-            detail="AI features unavailable. Please configure OPENAI_API_KEY in .env"
-        )
-    
+    query = payload.query.strip()
+    if not query:
+        return {"query": query, "results_count": 0, "leads": []}
+
     try:
-        # Get all leads
-        leads = db.query(DBLead).all()
-        lead_dicts = [
-            {
-                "id": lead.id,
-                "full_name": lead.full_name,
-                "country": lead.country,
-                "course_interested": lead.course_interested,
-                "status": lead.status,
-                "ai_segment": lead.ai_segment,
-                "ai_score": lead.ai_score,
-                "conversion_probability": lead.conversion_probability,
-                "updated_at": lead.updated_at.isoformat() if lead.updated_at else None
-            }
-            for lead in leads
-        ]
-        
-        # AI-powered search
-        results = await ai_assistant.natural_language_search(query, lead_dicts)
-        
-        logger.info(f"🔍 AI Search: '{query}' → {len(results)} results", extra={"endpoint": "ai_search"})
-        
+        if ai_assistant.is_available():
+            # Natural-language search over a broad recent slice of leads
+            resp = (
+                supabase_data.client.table('leads')
+                .select(_SEARCH_FIELDS)
+                .order('updated_at', desc=True)
+                .limit(500)
+                .execute()
+            )
+            results = await ai_assistant.natural_language_search(query, resp.data or [])
+        else:
+            # No AI configured — plain substring match on common fields
+            safe_search = re.sub(r"[%_\(\),\"]", "", query).strip()[:100]
+            resp = (
+                supabase_data.client.table('leads')
+                .select(_SEARCH_FIELDS)
+                .or_(
+                    f"full_name.ilike.%{safe_search}%,"
+                    f"email.ilike.%{safe_search}%,"
+                    f"phone.ilike.%{safe_search}%,"
+                    f"lead_id.ilike.%{safe_search}%,"
+                    f"course_interested.ilike.%{safe_search}%"
+                )
+                .limit(20)
+                .execute()
+            )
+            results = resp.data or []
+
+        logger.info(f"🔍 Search: '{query}' → {len(results)} results", extra={"endpoint": "ai_search"})
+
         return {
             "query": query,
             "results_count": len(results),
             "leads": results
         }
-        
+
     except Exception as e:
-        logger.error(f"AI search failed: {e}", extra={"endpoint": "ai_search"})
+        logger.error(f"Search failed: {e}", extra={"endpoint": "ai_search"})
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/ai/smart-reply/{lead_id}")
 async def generate_smart_reply(
-    lead_id: int,
+    lead_id: str,
     context: str = Query("follow-up", description="Message context: follow-up, welcome, reminder, thank-you")
 ):
     """
     ✉️ Generate AI-powered personalized messages - SUPABASE ONLY
-    
+
     Creates contextual email/WhatsApp messages based on lead data
     """
-    _ai_not_implemented()  # Stub until Supabase conversion
-    
     if not ai_assistant.is_available():
         raise HTTPException(
             status_code=503,
-            detail="AI features unavailable. Please configure OPENAI_API_KEY in .env"
+            detail="AI features unavailable. Please configure ANTHROPIC_API_KEY in .env"
         )
-    
-    lead = db.query(DBLead).filter(DBLead.id == lead_id).first()
+
+    lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
         raise NotFoundError("Lead", lead_id)
-    
+
     try:
         lead_data = {
-            "full_name": lead.full_name,
-            "country": lead.country,
-            "course_interested": lead.course_interested,
-            "status": lead.status,
-            "ai_score": lead.ai_score
+            "full_name": lead.get("full_name"),
+            "country": lead.get("country"),
+            "course_interested": lead.get("course_interested"),
+            "status": lead.get("status"),
+            "ai_score": lead.get("ai_score") or 0
         }
-        
+
         message = await ai_assistant.generate_smart_reply(lead_data, context)
-        
+
         logger.info(
             f"✉️ Generated smart reply for lead {lead_id} ({context})",
             extra={"endpoint": "smart_reply", "lead_id": lead_id}
         )
-        
+
         return {
             "lead_id": lead_id,
-            "lead_name": lead.full_name,
+            "lead_name": lead.get("full_name"),
             "context": context,
             "message": message,
             "generated_at": datetime.utcnow().isoformat()
         }
-        
+
     except Exception as e:
-        logger.error(f"Smart reply generation failed: {e}", extra={"endpoint": "smart_reply"})
+        logger.error("Smart reply generation failed: {}", e, extra={"endpoint": "smart_reply"})
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/ai/summarize-notes/{lead_id}")
 async def summarize_lead_notes(
-    lead_id: int
+    lead_id: str
 ):
     """
     📝 Summarize all notes for a lead using AI - SUPABASE ONLY
-    
+
     Returns key insights, sentiment, and recommended actions
     """
-    
+
     if not ai_assistant.is_available():
         raise HTTPException(
             status_code=503,
-            detail="AI features unavailable. Please configure OPENAI_API_KEY in .env"
+            detail="AI features unavailable. Please configure ANTHROPIC_API_KEY in .env"
         )
-    
-    lead = db.query(DBLead).filter(DBLead.id == lead_id).first()
+
+    lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
         raise NotFoundError("Lead", lead_id)
-    
+
     try:
         # Get all notes for this lead
-        notes = db.query(DBNote).filter(DBNote.lead_id == lead_id).order_by(DBNote.created_at.desc()).all()
-        
+        notes = supabase_data.get_notes_for_lead(lead.get('id'))
+
         if not notes:
             return {
                 "lead_id": lead_id,
                 "summary": "No notes available for this lead.",
                 "notes_count": 0
             }
-        
+
         notes_data = [
             {
-                "content": note.content,
-                "created_at": note.created_at.isoformat()
+                "content": note.get("content"),
+                "created_at": note.get("created_at")
             }
             for note in notes
         ]
-        
+
         summary = await ai_assistant.summarize_notes(notes_data)
-        
+
         logger.info(
             f"📝 Summarized {len(notes)} notes for lead {lead_id}",
             extra={"endpoint": "summarize_notes", "lead_id": lead_id}
         )
-        
+
         return {
             "lead_id": lead_id,
-            "lead_name": lead.full_name,
+            "lead_name": lead.get("full_name"),
             "notes_count": len(notes),
             "summary": summary,
             "generated_at": datetime.utcnow().isoformat()
         }
-        
+
     except Exception as e:
-        logger.error(f"Note summarization failed: {e}", extra={"endpoint": "summarize_notes"})
+        logger.error("Note summarization failed: {}", e, extra={"endpoint": "summarize_notes"})
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/ai/next-action/{lead_id}")
 async def predict_next_action(
-    lead_id: int
+    lead_id: str
 ):
     """
     🎯 AI-powered prediction of best next action for a lead - SUPABASE ONLY
-    
+
     Analyzes lead data and history to recommend optimal next steps
     """
-    
+
     if not ai_assistant.is_available():
         raise HTTPException(
             status_code=503,
-            detail="AI features unavailable. Please configure OPENAI_API_KEY in .env"
+            detail="AI features unavailable. Please configure ANTHROPIC_API_KEY in .env"
         )
-    
-    lead = db.query(DBLead).filter(DBLead.id == lead_id).first()
+
+    lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
         raise NotFoundError("Lead", lead_id)
-    
+
     try:
         lead_data = {
-            "full_name": lead.full_name,
-            "status": lead.status,
-            "ai_score": lead.ai_score,
-            "ai_segment": lead.ai_segment,
-            "conversion_probability": lead.conversion_probability,
-            "course_interested": lead.course_interested,
-            "country": lead.country
+            "full_name": lead.get("full_name"),
+            "status": lead.get("status"),
+            "ai_score": lead.get("ai_score") or 0,
+            "ai_segment": lead.get("ai_segment"),
+            "conversion_probability": lead.get("conversion_probability") or 0,
+            "course_interested": lead.get("course_interested"),
+            "country": lead.get("country")
         }
-        
+
         # Get recent activities
-        activities = db.query(DBActivity).filter(
-            DBActivity.lead_id == lead_id
-        ).order_by(DBActivity.created_at.desc()).limit(5).all()
-        
+        activities = supabase_data.get_activities_for_lead(lead.get('id'))[:5]
+
         activities_data = [
             {
-                "activity_type": act.activity_type,
-                "created_at": act.created_at.isoformat()
+                "activity_type": act.get("activity_type"),
+                "created_at": act.get("created_at")
             }
             for act in activities
         ]
-        
+
         prediction = await ai_assistant.predict_best_action(lead_data, activities_data)
-        
+
         logger.info(
             f"🎯 Predicted next action for lead {lead_id}: {prediction.get('action')}",
             extra={"endpoint": "next_action", "lead_id": lead_id}
         )
-        
+
         return {
             "lead_id": lead_id,
-            "lead_name": lead.full_name,
+            "lead_name": lead.get("full_name"),
             "prediction": prediction,
             "generated_at": datetime.utcnow().isoformat()
         }
-        
+
     except Exception as e:
-        logger.error(f"Action prediction failed: {e}", extra={"endpoint": "next_action"})
+        logger.error("Action prediction failed: {}", e, extra={"endpoint": "next_action"})
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/ai/conversion-barriers/{lead_id}")
 async def analyze_conversion_barriers(
-    lead_id: int
+    lead_id: str
 ):
     """
     🚧 Identify potential barriers preventing lead conversion - SUPABASE ONLY
-    
+
     AI analyzes lead data and notes to find blockers
     """
-    
+
     if not ai_assistant.is_available():
         raise HTTPException(
             status_code=503,
-            detail="AI features unavailable. Please configure OPENAI_API_KEY in .env"
+            detail="AI features unavailable. Please configure ANTHROPIC_API_KEY in .env"
         )
-    
-    lead = db.query(DBLead).filter(DBLead.id == lead_id).first()
+
+    lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
         raise NotFoundError("Lead", lead_id)
-    
+
     try:
         lead_data = {
-            "status": lead.status,
-            "ai_score": lead.ai_score,
-            "conversion_probability": lead.conversion_probability,
-            "expected_revenue": lead.expected_revenue
+            "status": lead.get("status"),
+            "ai_score": lead.get("ai_score") or 0,
+            "conversion_probability": lead.get("conversion_probability") or 0,
+            "expected_revenue": lead.get("expected_revenue") or 0
         }
-        
+
         # Get notes
-        notes = db.query(DBNote).filter(
-            DBNote.lead_id == lead_id
-        ).order_by(DBNote.created_at.desc()).limit(10).all()
-        
-        notes_data = [{"content": note.content} for note in notes]
-        
+        notes = supabase_data.get_notes_for_lead(lead.get('id'))[:10]
+
+        notes_data = [{"content": note.get("content")} for note in notes]
+
         barriers = await ai_assistant.analyze_conversion_barriers(lead_data, notes_data)
-        
+
         logger.info(
             f"🚧 Identified {len(barriers)} barriers for lead {lead_id}",
             extra={"endpoint": "conversion_barriers", "lead_id": lead_id}
         )
-        
+
         return {
             "lead_id": lead_id,
-            "lead_name": lead.full_name,
+            "lead_name": lead.get("full_name"),
             "barriers": barriers,
             "barriers_count": len(barriers),
             "generated_at": datetime.utcnow().isoformat()
         }
-        
+
     except Exception as e:
-        logger.error(f"Barrier analysis failed: {e}", extra={"endpoint": "conversion_barriers"})
+        logger.error("Barrier analysis failed: {}", e, extra={"endpoint": "conversion_barriers"})
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/ai/recommend-course/{lead_id}")
 async def recommend_course(
-    lead_id: int
+    lead_id: str
 ):
     """
     🎓 AI-powered course recommendation based on lead profile - SUPABASE ONLY
-    
+
     Analyzes lead data to suggest the best-fit course
     """
-    _ai_not_implemented()  # Stub until Supabase conversion
-    
     if not ai_assistant.is_available():
         raise HTTPException(
             status_code=503,
-            detail="AI features unavailable. Please configure OPENAI_API_KEY in .env"
+            detail="AI features unavailable. Please configure ANTHROPIC_API_KEY in .env"
         )
-    
-    lead = db.query(DBLead).filter(DBLead.id == lead_id).first()
+
+    lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
         raise NotFoundError("Lead", lead_id)
-    
+
     try:
         lead_data = {
-            "country": lead.country,
-            "course_interested": lead.course_interested,
-            "ai_score": lead.ai_score
+            "country": lead.get("country"),
+            "course_interested": lead.get("course_interested"),
+            "ai_score": lead.get("ai_score") or 0
         }
-        
+
         # Get available courses
-        courses = db.query(DBCourse).filter(DBCourse.is_active == True).all()
+        courses = supabase_data.get_courses(is_active=True)
         courses_data = [
             {
-                "course_name": course.course_name,
-                "category": course.category,
-                "duration": course.duration,
-                "price": float(course.price) if course.price else 0
+                "course_name": course.get("course_name"),
+                "category": course.get("category"),
+                "duration": course.get("duration"),
+                "price": float(course.get("price")) if course.get("price") else 0
             }
             for course in courses
         ]
-        
+
         if not courses_data:
             raise HTTPException(status_code=404, detail="No active courses available")
-        
+
         recommendation = await ai_assistant.generate_course_recommendation(lead_data, courses_data)
-        
+
         logger.info(
             f"🎓 Recommended course for lead {lead_id}: {recommendation.get('course_name')}",
             extra={"endpoint": "recommend_course", "lead_id": lead_id}
         )
-        
+
         return {
             "lead_id": lead_id,
-            "lead_name": lead.full_name,
-            "current_interest": lead.course_interested,
+            "lead_name": lead.get("full_name"),
+            "current_interest": lead.get("course_interested"),
             "recommendation": recommendation,
             "generated_at": datetime.utcnow().isoformat()
         }
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Course recommendation failed: {e}", extra={"endpoint": "recommend_course"})
+        logger.error("Course recommendation failed: {}", e, extra={"endpoint": "recommend_course"})
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/ai/status")
@@ -5725,22 +5827,47 @@ async def get_user_performance(user_id: int, days: int = 7):
 # NOTIFICATION ACTION ENDPOINTS
 # ============================================================
 
+class SnoozeRequest(BaseModel):
+    hours: int = 1
+
+
 @app.patch("/api/notifications/{notification_id}/read")
-async def mark_notification_read(notification_id: str):
-    """Mark a notification as read (acknowledged)."""
+async def mark_notification_read(notification_id: str, current_user: dict = Depends(get_current_user)):
+    """Mark a notification as read (persisted per-user)."""
+    user_email = (current_user.get('email') or '').lower()
+    supabase_data.client.table('notification_state').upsert({
+        'user_email': user_email,
+        'notification_key': notification_id,
+        'read_at': datetime.utcnow().isoformat(),
+    }, on_conflict='user_email,notification_key').execute()
     return {"status": "ok", "notification_id": notification_id, "read": True}
 
 
 @app.patch("/api/notifications/{notification_id}/snooze")
-async def snooze_notification(notification_id: str, hours: int = 1):
-    """Snooze a notification for N hours."""
-    snooze_until = (datetime.utcnow() + timedelta(hours=hours)).isoformat()
+async def snooze_notification(notification_id: str, payload: SnoozeRequest, current_user: dict = Depends(get_current_user)):
+    """Snooze a notification for N hours (persisted per-user)."""
+    user_email = (current_user.get('email') or '').lower()
+    snooze_until = (datetime.utcnow() + timedelta(hours=payload.hours)).isoformat()
+    supabase_data.client.table('notification_state').upsert({
+        'user_email': user_email,
+        'notification_key': notification_id,
+        'snoozed_until': snooze_until,
+    }, on_conflict='user_email,notification_key').execute()
     return {"status": "ok", "notification_id": notification_id, "snoozed_until": snooze_until}
 
 
 @app.post("/api/notifications/read-all")
-async def mark_all_notifications_read():
-    """Mark all notifications as read."""
+async def mark_all_notifications_read(current_user: dict = Depends(get_current_user)):
+    """Mark every currently-visible notification as read for this user."""
+    user_email = (current_user.get('email') or '').lower()
+    notifications = _compute_raw_notifications()
+    now_iso = datetime.utcnow().isoformat()
+    rows = [
+        {'user_email': user_email, 'notification_key': n['id'], 'read_at': now_iso}
+        for n in notifications
+    ]
+    if rows:
+        supabase_data.client.table('notification_state').upsert(rows, on_conflict='user_email,notification_key').execute()
     return {"status": "ok", "message": "All notifications marked as read"}
 
 
@@ -6277,125 +6404,120 @@ async def get_sla_compliance():
 
 @app.get("/api/admin/cohort-analysis")
 async def get_cohort_analysis():
-    """Cohort analysis grouped by month - SUPABASE ONLY (Simplified)"""
-    
+    """Cohort analysis grouped by signup month, with conversion-rate benchmarks - SUPABASE ONLY"""
+
+    empty_response = {"cohorts": [], "benchmarks": {}, "underperforming": []}
+    TERMINAL = {"Enrolled", "Not Interested", "Junk"}
+
+    def conv_days(lead):
+        if not lead.get('created_at') or not lead.get('updated_at'):
+            return None
+        try:
+            created = datetime.fromisoformat(lead['created_at'].replace('Z', '+00:00'))
+            updated = datetime.fromisoformat(lead['updated_at'].replace('Z', '+00:00'))
+            if updated > created:
+                return (updated - created).days
+        except Exception:
+            pass
+        return None
+
     try:
-        from datetime import datetime
-        from collections import defaultdict
-        
-        # Get all leads
         all_leads = _fetch_all_leads('created_at,status,updated_at')
-        
+
         # Group by cohort month
         cohorts = defaultdict(list)
         for lead in all_leads:
             if lead.get('created_at'):
                 try:
                     dt = datetime.fromisoformat(lead['created_at'].replace('Z', '+00:00'))
-                    key = dt.strftime("%Y-%m")
-                    cohorts[key].append(lead)
-                except:
+                    cohorts[dt.strftime("%Y-%m")].append(lead)
+                except Exception:
                     pass
-        
-        # Calculate stats for each cohort
-        result = []
-        for month, leads in sorted(cohorts.items()):
+
+        if not cohorts:
+            return empty_response
+
+        now = datetime.utcnow()
+        rows = []
+        for key in sorted(cohorts.keys()):
+            leads = cohorts[key]
             size = len(leads)
-            enrolled = sum(1 for l in leads if l.get('status') == 'Enrolled')
-            result.append({
-                "month": month,
-                "size": size,
-                "enrolled": enrolled,
-                "rate": round((enrolled / size * 100) if size > 0 else 0, 2)
+            cohort_start = datetime.strptime(key, "%Y-%m")
+            age_days = (now - cohort_start).days  # how old is this cohort in days
+
+            enrolled = [l for l in leads if l.get('status') == 'Enrolled']
+            active   = [l for l in leads if l.get('status') not in TERMINAL]
+            dead     = [l for l in leads if l.get('status') in ('Not Interested', 'Junk')]
+
+            # conversions within N days (only count enrolled leads with valid day delta)
+            def within(n):
+                return sum(
+                    1 for l in enrolled
+                    if (d := conv_days(l)) is not None and d <= n
+                )
+
+            c30  = within(30)
+            c60  = within(60)
+            c90  = within(90)
+            ctot = len(enrolled)
+
+            rate = lambda c: round(c / size * 100, 1) if size else 0.0
+
+            # Compute median days for enrolled leads in this cohort
+            enrolled_days = [d for l in enrolled if (d := conv_days(l)) is not None]
+            med_days = round(statistics.median(enrolled_days), 0) if enrolled_days else None
+
+            rows.append({
+                "cohort":      key,
+                "label":       cohort_start.strftime("%b %Y"),
+                "size":        size,
+                "conv_30":     c30,
+                "conv_60":     c60,
+                "conv_90":     c90,
+                "conv_total":  ctot,
+                "rate_30":     rate(c30),
+                "rate_60":     rate(c60),
+                "rate_90":     rate(c90),
+                "rate_total":  rate(ctot),
+                "active":      len(active),
+                "dead":        len(dead),
+                "age_days":    age_days,
+                "mature_30":   age_days >= 30,
+                "mature_60":   age_days >= 60,
+                "mature_90":   age_days >= 90,
+                "median_days": med_days,
             })
-        
+
+        # ── benchmarks from mature cohorts only ───────────────
+        def bench(field, min_age):
+            vals = [r[field] for r in rows if r["age_days"] >= min_age and r["size"] >= 3]
+            if not vals:
+                return None
+            return round(sum(vals) / len(vals), 1)
+
+        benchmarks = {
+            "avg_rate_30":    bench("rate_30",  30),
+            "avg_rate_60":    bench("rate_60",  60),
+            "avg_rate_90":    bench("rate_90",  90),
+            "avg_rate_total": bench("rate_total", 0),
+        }
+
+        # ── underperforming cohorts ────────────────────────────
+        avg90 = benchmarks["avg_rate_90"]
+        threshold = 15  # percentage points below average
+        underperforming = [
+            r["cohort"] for r in rows
+            if r["mature_90"] and avg90 is not None and (avg90 - r["rate_90"]) >= threshold
+        ]
+
         return {
-            "cohorts": result,
-            "benchmarks": {},
-            "underperforming": []
+            "cohorts":        rows,
+            "benchmarks":     benchmarks,
+            "underperforming": underperforming,
         }
     except Exception as e:
         logger.error(f"Cohort analysis error: {e}")
-        return {"cohorts": [], "benchmarks": {}, "underperforming": []}
-        return None  # enrolled but timestamps missing / same day
-
-    rows = []
-    for key in sorted(cohorts.keys()):
-        leads = cohorts[key]
-        size = len(leads)
-        cohort_start = datetime.strptime(key, "%Y-%m")
-        age_days = (now - cohort_start).days  # how old is this cohort in days
-
-        enrolled = [l for l in leads if l.status == LeadStatus.ENROLLED]
-        active   = [l for l in leads if l.status not in TERMINAL]
-        dead     = [l for l in leads if l.status in (LeadStatus.NOT_INTERESTED, LeadStatus.JUNK)]
-
-        # conversions within N days (only count enrolled leads with valid day delta)
-        def within(n):
-            return sum(
-                1 for l in enrolled
-                if (d := conv_days(l)) is not None and d <= n
-            )
-
-        c30  = within(30)
-        c60  = within(60)
-        c90  = within(90)
-        ctot = len(enrolled)
-
-        r = lambda n, c: round(c / size * 100, 1) if size else 0.0
-
-        # Compute median days for enrolled leads in this cohort
-        enrolled_days = [d for l in enrolled if (d := conv_days(l)) is not None]
-        med_days = round(statistics.median(enrolled_days), 0) if enrolled_days else None
-
-        rows.append({
-            "cohort":      key,
-            "label":       cohort_start.strftime("%b %Y"),
-            "size":        size,
-            "conv_30":     c30,
-            "conv_60":     c60,
-            "conv_90":     c90,
-            "conv_total":  ctot,
-            "rate_30":     r(30,  c30),
-            "rate_60":     r(60,  c60),
-            "rate_90":     r(90,  c90),
-            "rate_total":  r(None, ctot),
-            "active":      len(active),
-            "dead":        len(dead),
-            "age_days":    age_days,
-            "mature_30":   age_days >= 30,
-            "mature_60":   age_days >= 60,
-            "mature_90":   age_days >= 90,
-            "median_days": med_days,
-        })
-
-    # ── benchmarks from mature cohorts only ───────────────
-    def bench(field, min_age):
-        vals = [r[field] for r in rows if r["age_days"] >= min_age and r["size"] >= 3]
-        if not vals:
-            return None
-        return round(sum(vals) / len(vals), 1)
-
-    benchmarks = {
-        "avg_rate_30":    bench("rate_30",  30),
-        "avg_rate_60":    bench("rate_60",  60),
-        "avg_rate_90":    bench("rate_90",  90),
-        "avg_rate_total": bench("rate_total", 0),
-    }
-
-    # ── underperforming cohorts ────────────────────────────
-    avg90 = benchmarks["avg_rate_90"]
-    threshold = 15  # percentage points below average
-    underperforming = [
-        r["cohort"] for r in rows
-        if r["mature_90"] and avg90 is not None and (avg90 - r["rate_90"]) >= threshold
-    ]
-
-    return {
-        "cohorts":        rows,
-        "benchmarks":     benchmarks,
-        "underperforming": underperforming,
-    }
+        return empty_response
 
 
 # ============================================================
@@ -6404,51 +6526,20 @@ async def get_cohort_analysis():
 
 @app.get("/api/admin/conversion-time")
 async def get_conversion_time():
-    """Compute days from creation to enrollment - SUPABASE ONLY (Simplified)"""
-    
-    try:
-        from datetime import datetime
-        
-        # Get enrolled leads (paginated)
-        enrolled = _fetch_all_leads('created_at,updated_at,assigned_to,course_interested,country', {'status': 'Enrolled'})
-        
-        # Calculate days to conversion
-        conversion_days = []
-        for lead in enrolled:
-            if lead.get('created_at') and lead.get('updated_at'):
-                try:
-                    created = datetime.fromisoformat(lead['created_at'].replace('Z', '+00:00'))
-                    updated = datetime.fromisoformat(lead['updated_at'].replace('Z', '+00:00'))
-                    if updated > created:
-                        days = (updated - created).days
-                        conversion_days.append(days)
-                except:
-                    pass
-        
-        if not conversion_days:
-            return {"overall": {"count": 0}, "distribution": [], "by_counselor": [], "by_course": [], "by_country": []}
-        
-        # Calculate stats
-        avg_days = sum(conversion_days) / len(conversion_days)
-        conversion_days.sort()
-        median = conversion_days[len(conversion_days) // 2]
-        
-        return {
-            "overall": {
-                "avg": round(avg_days, 1),
-                "median": median,
-                "min": min(conversion_days),
-                "max": max(conversion_days),
-                "count": len(conversion_days)
-            },
-            "distribution": [],
-            "by_counselor": [],
-            "by_course": [],
-            "by_country": []
-        }
-    except Exception as e:
-        logger.error(f"Conversion time error: {e}")
-        return {"overall": {"count": 0}, "distribution": [], "by_counselor": [], "by_course": [], "by_country": []}
+    """Compute days from creation to enrollment, with histogram + breakdowns - SUPABASE ONLY"""
+
+    empty_response = {"overall": {"count": 0}, "distribution": [], "by_counselor": [], "by_course": [], "by_country": []}
+
+    def days_to_convert(lead):
+        if not lead.get('created_at') or not lead.get('updated_at'):
+            return None
+        try:
+            created = datetime.fromisoformat(lead['created_at'].replace('Z', '+00:00'))
+            updated = datetime.fromisoformat(lead['updated_at'].replace('Z', '+00:00'))
+            if updated > created:
+                return (updated - created).days
+        except Exception:
+            pass
         return None
 
     def agg(day_list):
@@ -6466,47 +6557,51 @@ async def get_conversion_time():
             "count": n,
         }
 
-    all_days = [d for lead in enrolled_leads if (d := days(lead)) is not None]
+    try:
+        enrolled = _fetch_all_leads('created_at,updated_at,assigned_to,course_interested,country', {'status': 'Enrolled'})
 
-    # histogram buckets
-    buckets = [
-        ("0–7 days",  0,   7),
-        ("8–14 days", 8,   14),
-        ("15–30 days",15,  30),
-        ("31–60 days",31,  60),
-        ("61–90 days",61,  90),
-        ("90+ days",  91,  9999),
-    ]
-    distribution = []
-    for label, lo, hi in buckets:
-        count = sum(1 for d in all_days if lo <= d <= hi)
-        distribution.append({"bucket": label, "count": count, "lo": lo, "hi": hi})
+        all_days = [d for lead in enrolled if (d := days_to_convert(lead)) is not None]
+        if not all_days:
+            return empty_response
 
-    # group helpers
-    def group_by(key_fn):
-        groups = {}
-        for lead in enrolled_leads:
-            k = key_fn(lead) or "Unknown"
-            d = days(lead)
-            if d is None:
-                continue
-            groups.setdefault(k, []).append(d)
-        return [
-            {"name": k, **agg(v)}
-            for k, v in sorted(groups.items(), key=lambda x: (agg(x[1])["avg_days"] or 9999))
+        # Histogram buckets
+        buckets = [
+            ("0–7 days",   0,  7),
+            ("8–14 days",  8,  14),
+            ("15–30 days", 15, 30),
+            ("31–60 days", 31, 60),
+            ("61–90 days", 61, 90),
+            ("90+ days",   91, 9999),
+        ]
+        distribution = [
+            {"bucket": label, "count": sum(1 for d in all_days if lo <= d <= hi), "lo": lo, "hi": hi}
+            for label, lo, hi in buckets
         ]
 
-    by_counselor = group_by(lambda l: l.assigned_to)
-    by_course    = group_by(lambda l: l.course_interested)
-    by_country   = group_by(lambda l: l.country)
+        # Group helpers (leads here are plain dicts from Supabase)
+        def group_by(key_fn):
+            groups = {}
+            for lead in enrolled:
+                d = days_to_convert(lead)
+                if d is None:
+                    continue
+                k = key_fn(lead) or "Unknown"
+                groups.setdefault(k, []).append(d)
+            return [
+                {"name": k, **agg(v)}
+                for k, v in sorted(groups.items(), key=lambda x: (agg(x[1])["avg_days"] or 9999))
+            ]
 
-    return {
-        "overall": agg(all_days),
-        "distribution": distribution,
-        "by_counselor": by_counselor,
-        "by_course":    by_course,
-        "by_country":   by_country,
-    }
+        return {
+            "overall": agg(all_days),
+            "distribution": distribution,
+            "by_counselor": group_by(lambda l: l.get('assigned_to')),
+            "by_course": group_by(lambda l: l.get('course_interested')),
+            "by_country": group_by(lambda l: l.get('country')),
+        }
+    except Exception as e:
+        logger.error(f"Conversion time error: {e}")
+        return empty_response
 
 
 # ============================================================

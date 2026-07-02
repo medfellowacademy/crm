@@ -26,6 +26,7 @@ const ScoreDecayPage            = lazy(() => import('./pages/ScoreDecayPage'));
 const LeadUpdateActivityPage    = lazy(() => import('./pages/LeadUpdateActivityPage'));
 const MetaLeadsPage             = lazy(() => import('./pages/MetaLeadsPage'));
 const WebsiteLeadsPage          = lazy(() => import('./pages/WebsiteLeadsPage'));
+const AIChatPage                = lazy(() => import('./pages/AIChatPage'));
 import { isFeatureEnabled } from './config/featureFlags';
 import ErrorBoundary from './components/ErrorBoundary';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -84,6 +85,7 @@ function AppRoutes() {
                   <Routes>
                     <Route path="/" element={<Navigate to="/dashboard" replace />} />
                     <Route path="/dashboard" element={<RoleBasedDashboard />} />
+                    <Route path="/ai-chat" element={<AIChatPage />} />
                     <Route path="/followups" element={<FollowupTodayPage />} />
                     <Route path="/leads" element={<LeadsPageEnhanced />} />
                     <Route path="/leads/:leadId" element={<LeadDetails />} />

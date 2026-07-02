@@ -185,12 +185,38 @@ export const aiSearchAPI = {
 export const aiAPI = {
   search: (query) => api.post('/api/ai/search', { query }),
   status: () => api.get('/api/ai/status'),
-  smartReply: (leadId, context) => api.post(`/api/ai/smart-reply/${leadId}`, { context }),
+  smartReply: (leadId, context) =>
+    api.post(`/api/ai/smart-reply/${leadId}`, null, { params: { context } }),
   summarizeNotes: (leadId) => api.get(`/api/ai/summarize-notes/${leadId}`),
   nextAction: (leadId) => api.get(`/api/ai/next-action/${leadId}`),
   conversionBarriers: (leadId) => api.get(`/api/ai/conversion-barriers/${leadId}`),
-  recommendCourse: (leadId, budget) =>
-    api.post(`/api/ai/recommend-course/${leadId}`, budget ? { budget } : {}),
+  recommendCourse: (leadId) => api.post(`/api/ai/recommend-course/${leadId}`),
+};
+
+// MedFellow AI Chat API
+export const aiChatAPI = {
+  // Knowledge base documents
+  listDocuments: (params) => api.get('/api/ai-chat/documents', { params }),
+  uploadDocument: (file, title, category) => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('title', title);
+    form.append('category', category);
+    return api.post('/api/ai-chat/documents', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+  },
+  deleteDocument: (id) => api.delete(`/api/ai-chat/documents/${id}`),
+
+  // Chat sessions
+  createSession: (data) => api.post('/api/ai-chat/sessions', data || {}),
+  listSessions: () => api.get('/api/ai-chat/sessions'),
+  getMessages: (sessionId) => api.get(`/api/ai-chat/sessions/${sessionId}/messages`),
+  sendMessage: (sessionId, content) => api.post(`/api/ai-chat/sessions/${sessionId}/messages`, { content }),
+  deleteSession: (sessionId) => api.delete(`/api/ai-chat/sessions/${sessionId}`),
+  attachFile: (sessionId, file) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post(`/api/ai-chat/sessions/${sessionId}/attach`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+  },
 };
 
 // ML Model API
