@@ -27,6 +27,7 @@ const LeadUpdateActivityPage    = lazy(() => import('./pages/LeadUpdateActivityP
 const MetaLeadsPage             = lazy(() => import('./pages/MetaLeadsPage'));
 const WebsiteLeadsPage          = lazy(() => import('./pages/WebsiteLeadsPage'));
 const AIChatPage                = lazy(() => import('./pages/AIChatPage'));
+const TeamPerformancePage       = lazy(() => import('./pages/TeamPerformancePage'));
 import { isFeatureEnabled } from './config/featureFlags';
 import ErrorBoundary from './components/ErrorBoundary';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -95,6 +96,7 @@ function AppRoutes() {
                     <Route path="/hospitals" element={<HospitalsPage />} />
                     <Route path="/courses" element={<CoursesPageEnhanced />} />
                     <Route path="/users" element={<UsersPage />} />
+                    <Route path="/team-performance" element={<TeamPerformancePage />} />
                     <Route path="/user-activity" element={<UserActivityPage />} />
                     <Route path="/lead-update-activity" element={<LeadUpdateActivityPage />} />
                     {isFeatureEnabled('AUDIT_LOGS') && (

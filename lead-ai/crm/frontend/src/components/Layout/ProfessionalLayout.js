@@ -28,6 +28,7 @@ import {
   Share2,
   Globe,
   Bot,
+  Trophy,
 } from 'lucide-react';
 import SmartNotifications from '../../features/notifications/SmartNotifications';
 import { isFeatureEnabled } from '../../config/featureFlags';
@@ -224,6 +225,7 @@ const ProfessionalLayout = ({ children }) => {
     { key: '/hospitals', icon: Hospital, label: 'Hospitals' },
     { key: '/courses', icon: BookOpen, label: 'Courses' },
     { key: '/users', icon: UserPlus, label: 'Team' },
+    { key: '/team-performance', icon: Trophy, label: 'Team Performance' },
     { key: '/user-activity', icon: Activity, label: 'User Activity' },
     { key: '/lead-update-activity', icon: ClipboardList, label: 'Lead Updates' },
     { key: '/analytics', icon: BarChart3, label: 'Analytics' },
@@ -244,7 +246,7 @@ const ProfessionalLayout = ({ children }) => {
     const visibleToAllRoles = ['/dashboard', '/ai-chat', '/followups', '/leads', '/pipeline', '/settings', '/payments'];
     const adminManagerFinance = ['/lead-analysis', '/analytics', '/conversion-time', '/cohort-analysis', '/sla', '/score-decay'];
     const adminManager = ['/hospitals', '/courses', '/user-activity', '/lead-update-activity', '/meta-leads', '/website-leads'];
-    const adminOnly = ['/users', '/audit-logs'];
+    const adminOnly = ['/users', '/audit-logs', '/team-performance'];
 
     if (visibleToAllRoles.includes(item.key)) return true;
     if (adminManagerFinance.includes(item.key)) {

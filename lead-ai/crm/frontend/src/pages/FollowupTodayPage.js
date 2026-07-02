@@ -163,11 +163,12 @@ function QuickActionModal({ lead, open, onClose, onDone }) {
 }
 
 // ── Lead row card (mobile-friendly) ─────────────────────────────────────────
-function LeadRow({ lead, isOverdue, onQuickAction, onChat }) {
+function LeadRow({ lead, isOverdue, onQuickAction, onChat, rank }) {
   const navigate = useNavigate();
   const daysOverdue = isOverdue && lead.follow_up_date
     ? dayjs().diff(dayjs(lead.follow_up_date), 'day')
     : 0;
+  const isTopPriority = rank != null && rank < 3;
 
   return (
     <Card
@@ -181,7 +182,20 @@ function LeadRow({ lead, isOverdue, onQuickAction, onChat }) {
     >
       <Row align="middle" gutter={8} wrap={false}>
         {/* Avatar */}
-        <Col flex="none">
+        <Col flex="none" style={{ position: 'relative' }}>
+          {isTopPriority && (
+            <Tooltip title={`Call priority #${rank + 1} — ranked by conversion likelihood, churn risk, and how overdue this lead is`}>
+              <div style={{
+                position: 'absolute', top: -6, left: -6, zIndex: 1,
+                width: 18, height: 18, borderRadius: '50%',
+                background: '#faad14', color: '#fff', fontSize: 10, fontWeight: 700,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                border: '1px solid #fff',
+              }}>
+                {rank + 1}
+              </div>
+            </Tooltip>
+          )}
           <Avatar
             size={38}
             style={{ background: segmentColor[lead.ai_segment] || '#1890ff', flexShrink: 0 }}
@@ -200,6 +214,9 @@ function LeadRow({ lead, isOverdue, onQuickAction, onChat }) {
               <Tag color="red" icon={<WarningOutlined />} style={{ margin: 0 }}>
                 {daysOverdue}d overdue
               </Tag>
+            )}
+            {isTopPriority && (
+              <Tag color="gold" style={{ margin: 0 }}>Call first</Tag>
             )}
           </Space>
           <div style={{ marginTop: 3, fontSize: 12, color: '#666' }}>
@@ -316,8 +333,8 @@ export default function FollowupTodayPage() {
           {overdue.length === 0 ? (
             <Empty description="No overdue follow-ups 🎉" image={Empty.PRESENTED_IMAGE_SIMPLE} />
           ) : (
-            overdue.map(l => (
-              <LeadRow key={l.id} lead={l} isOverdue
+            overdue.map((l, i) => (
+              <LeadRow key={l.id} lead={l} isOverdue rank={i}
                 onQuickAction={setActionLead}
                 onChat={setChatLead}
               />
@@ -342,8 +359,8 @@ export default function FollowupTodayPage() {
           {today.length === 0 ? (
             <Empty description="No follow-ups scheduled for today" image={Empty.PRESENTED_IMAGE_SIMPLE} />
           ) : (
-            today.map(l => (
-              <LeadRow key={l.id} lead={l} isOverdue={false}
+            today.map((l, i) => (
+              <LeadRow key={l.id} lead={l} isOverdue={false} rank={i}
                 onQuickAction={setActionLead}
                 onChat={setChatLead}
               />

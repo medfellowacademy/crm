@@ -83,37 +83,60 @@ function ChatPanel() {
   });
 
   const sendMessageMutation = useMutation({
-    mutationFn: (content) => aiChatAPI.sendMessage(activeSessionId, content),
-    onSuccess: () => {
+    mutationFn: ({ sessionId, content }) => aiChatAPI.sendMessage(sessionId, content),
+    onSuccess: (_res, variables) => {
       setInput('');
-      queryClient.invalidateQueries({ queryKey: ['ai-chat-messages', activeSessionId] });
+      queryClient.invalidateQueries({ queryKey: ['ai-chat-messages', variables.sessionId] });
       queryClient.invalidateQueries({ queryKey: ['ai-chat-sessions'] });
     },
-    onError: (error) => {
+    onError: (error, variables) => {
       if (error?.response?.status === 503) {
         message.warning('AI chat is not configured yet. Set ANTHROPIC_API_KEY in the backend.');
       } else {
         message.error('Failed to send message');
       }
-      queryClient.invalidateQueries({ queryKey: ['ai-chat-messages', activeSessionId] });
+      queryClient.invalidateQueries({ queryKey: ['ai-chat-messages', variables.sessionId] });
     },
   });
 
   const attachMutation = useMutation({
-    mutationFn: (file) => aiChatAPI.attachFile(activeSessionId, file),
-    onSuccess: () => {
+    mutationFn: ({ sessionId, file }) => aiChatAPI.attachFile(sessionId, file),
+    onSuccess: (_res, variables) => {
       message.success('File attached — you can now ask about it');
-      queryClient.invalidateQueries({ queryKey: ['ai-chat-messages', activeSessionId] });
+      queryClient.invalidateQueries({ queryKey: ['ai-chat-messages', variables.sessionId] });
     },
     onError: (error) => {
       message.error(error?.response?.data?.detail || 'Failed to attach file');
     },
   });
 
-  const handleSend = () => {
+  // Lazily create a session on first message/attachment, like Claude/ChatGPT —
+  // no need to click "New Chat" before you can type.
+  const ensureSession = async () => {
+    if (activeSessionId) return activeSessionId;
+    const res = await createSessionMutation.mutateAsync();
+    return res.data.id;
+  };
+
+  const handleSend = async () => {
     const content = input.trim();
-    if (!content || !activeSessionId) return;
-    sendMessageMutation.mutate(content);
+    if (!content || sendMessageMutation.isPending) return;
+    try {
+      const sessionId = await ensureSession();
+      sendMessageMutation.mutate({ sessionId, content });
+    } catch {
+      message.error('Failed to start chat');
+    }
+  };
+
+  const handleAttach = async (file) => {
+    try {
+      const sessionId = await ensureSession();
+      attachMutation.mutate({ sessionId, file });
+    } catch {
+      message.error('Failed to start chat');
+    }
+    return false;
   };
 
   const activeSession = sessions.find(s => s.id === activeSessionId);
@@ -186,80 +209,76 @@ function ChatPanel() {
           style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
           styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column', height: '100%', padding: 16 } }}
         >
-          {!activeSessionId ? (
-            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Empty description="Start a new chat to ask MedFellow AI anything" />
-            </div>
-          ) : (
-            <>
-              <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', marginBottom: 12, paddingRight: 4 }}>
-                {messagesLoading ? (
-                  <Spin />
-                ) : messages.length === 0 ? (
-                  <Empty description="Ask a question to get started" />
-                ) : (
-                  messages.map((m) => (
-                    <div
-                      key={m.id}
-                      style={{
-                        display: 'flex',
-                        justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start',
-                        marginBottom: 12,
-                      }}
-                    >
-                      <div
-                        style={{
-                          maxWidth: '75%',
-                          background: m.role === 'user' ? '#1677ff' : '#f5f5f5',
-                          color: m.role === 'user' ? '#fff' : '#262626',
-                          borderRadius: 10,
-                          padding: '8px 12px',
-                          whiteSpace: 'pre-wrap',
-                          fontSize: 13.5,
-                        }}
-                      >
-                        <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 4 }}>
-                          {m.role === 'user' ? <UserOutlined /> : <RobotOutlined />}{' '}
-                          {m.role === 'user' ? 'You' : 'MedFellow AI'}
-                          {m.attachment_name && <Tag style={{ marginLeft: 6 }}>{m.attachment_name}</Tag>}
-                        </div>
-                        {m.content}
-                      </div>
+          <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', marginBottom: 12, paddingRight: 4 }}>
+            {!activeSessionId ? (
+              <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Empty description="Ask MedFellow AI anything to get started" />
+              </div>
+            ) : messagesLoading ? (
+              <Spin />
+            ) : messages.length === 0 ? (
+              <Empty description="Ask a question to get started" />
+            ) : (
+              messages.map((m) => (
+                <div
+                  key={m.id}
+                  style={{
+                    display: 'flex',
+                    justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start',
+                    marginBottom: 12,
+                  }}
+                >
+                  <div
+                    style={{
+                      maxWidth: '75%',
+                      background: m.role === 'user' ? '#1677ff' : '#f5f5f5',
+                      color: m.role === 'user' ? '#fff' : '#262626',
+                      borderRadius: 10,
+                      padding: '8px 12px',
+                      whiteSpace: 'pre-wrap',
+                      fontSize: 13.5,
+                    }}
+                  >
+                    <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 4 }}>
+                      {m.role === 'user' ? <UserOutlined /> : <RobotOutlined />}{' '}
+                      {m.role === 'user' ? 'You' : 'MedFellow AI'}
+                      {m.attachment_name && <Tag style={{ marginLeft: 6 }}>{m.attachment_name}</Tag>}
                     </div>
-                  ))
-                )}
-              </div>
+                    {m.content}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
 
-              <div style={{ display: 'flex', gap: 8 }}>
-                <Upload
-                  showUploadList={false}
-                  beforeUpload={(file) => { attachMutation.mutate(file); return false; }}
-                >
-                  <Button icon={<PaperClipOutlined />} loading={attachMutation.isPending} />
-                </Upload>
-                <TextArea
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onPressEnter={(e) => { if (!e.shiftKey) { e.preventDefault(); handleSend(); } }}
-                  placeholder="Ask about a course, policy, or this lead…"
-                  autoSize={{ minRows: 1, maxRows: 4 }}
-                  style={{ flex: 1 }}
-                />
-                <Button
-                  type="primary"
-                  icon={<SendOutlined />}
-                  loading={sendMessageMutation.isPending}
-                  onClick={handleSend}
-                >
-                  Send
-                </Button>
-              </div>
-              {activeSession?.lead_id && (
-                <Text type="secondary" style={{ fontSize: 11, marginTop: 6 }}>
-                  This chat has context from lead {activeSession.lead_id}.
-                </Text>
-              )}
-            </>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Upload
+              showUploadList={false}
+              beforeUpload={handleAttach}
+            >
+              <Button icon={<PaperClipOutlined />} loading={attachMutation.isPending} />
+            </Upload>
+            <TextArea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onPressEnter={(e) => { if (!e.shiftKey) { e.preventDefault(); handleSend(); } }}
+              placeholder="Ask about a course, policy, or a lead…"
+              autoSize={{ minRows: 1, maxRows: 4 }}
+              style={{ flex: 1 }}
+            />
+            <Button
+              type="primary"
+              icon={<SendOutlined />}
+              loading={sendMessageMutation.isPending || createSessionMutation.isPending}
+              onClick={handleSend}
+            >
+              Send
+            </Button>
+          </div>
+          {activeSession?.lead_id && (
+            <Text type="secondary" style={{ fontSize: 11, marginTop: 6 }}>
+              This chat has context from lead {activeSession.lead_id}.
+            </Text>
           )}
         </Card>
       </Col>

@@ -140,6 +140,7 @@ export const coursesAPI = {
 export const counselorsAPI = {
   getAll: () => api.get('/api/counselors'),
   getPerformance: () => api.get('/api/counselors/performance'),
+  getPerformanceComparison: () => api.get('/api/counselors/performance-comparison'),
   getWorkload: () => api.get('/api/counselors/workload'),
 };
 
@@ -191,6 +192,7 @@ export const aiAPI = {
   nextAction: (leadId) => api.get(`/api/ai/next-action/${leadId}`),
   conversionBarriers: (leadId) => api.get(`/api/ai/conversion-barriers/${leadId}`),
   recommendCourse: (leadId) => api.post(`/api/ai/recommend-course/${leadId}`),
+  coachingTip: (leadId) => api.get(`/api/ai/coaching-tip/${leadId}`),
 };
 
 // MedFellow AI Chat API

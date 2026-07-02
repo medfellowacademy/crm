@@ -20,6 +20,7 @@ import {
   StopOutlined,
   BookOutlined,
   CopyOutlined,
+  BulbOutlined,
 } from '@ant-design/icons';
 import { aiAPI } from '../../api/api';
 
@@ -242,6 +243,50 @@ function CourseRecommendationTab({ leadId }) {
   );
 }
 
+function CoachingTipTab({ leadId }) {
+  const mutation = useMutation({
+    mutationFn: () => aiAPI.coachingTip(leadId).then(res => res.data),
+    onError: (error) => {
+      if (!isAiUnavailable(error)) message.error('Failed to generate a coaching tip');
+    },
+  });
+
+  return (
+    <div>
+      <Button
+        type="primary"
+        icon={<BulbOutlined />}
+        loading={mutation.isPending}
+        onClick={() => mutation.mutate()}
+        style={{ marginBottom: 16 }}
+      >
+        Get Coaching Tip
+      </Button>
+
+      {mutation.isError && isAiUnavailable(mutation.error) && <AiUnavailableAlert />}
+
+      {mutation.data && (
+        <Card size="small" style={{ background: '#fafafa' }}>
+          {mutation.data.objection ? (
+            <div style={{ marginBottom: 8 }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>Objection: </Text>
+              <Tag color="orange">{mutation.data.objection}</Tag>
+              <Text type="secondary" style={{ fontSize: 11, marginLeft: 8 }}>
+                {mutation.data.similar_won_count} similar win{mutation.data.similar_won_count !== 1 ? 's' : ''}, {mutation.data.similar_lost_count} similar loss{mutation.data.similar_lost_count !== 1 ? 'es' : ''} found
+              </Text>
+            </div>
+          ) : (
+            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
+              No specific objection detected yet for this lead — general guidance below.
+            </Text>
+          )}
+          <Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>{mutation.data.tip}</Paragraph>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 const AIAssistantPanel = ({ leadId }) => {
   const items = [
     { key: 'smart-reply', label: 'Smart Reply', children: <SmartReplyTab leadId={leadId} /> },
@@ -249,6 +294,7 @@ const AIAssistantPanel = ({ leadId }) => {
     { key: 'next-action', label: 'Next Action', children: <NextActionTab leadId={leadId} /> },
     { key: 'barriers', label: 'Conversion Barriers', children: <ConversionBarriersTab leadId={leadId} /> },
     { key: 'course', label: 'Course Fit', children: <CourseRecommendationTab leadId={leadId} /> },
+    { key: 'coaching', label: 'Coaching Tip', children: <CoachingTipTab leadId={leadId} /> },
   ];
 
   return (
