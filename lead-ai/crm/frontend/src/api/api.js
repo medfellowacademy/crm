@@ -298,6 +298,15 @@ export const communicationAPI = {
   markTraining: (id, data) => api.post(`/api/communications/mark-training`, { id, ...data }),
 };
 
+// Attendance API (geofenced check-in/check-out)
+export const attendanceAPI = {
+  today:      ()             => api.get('/api/attendance/today'),
+  checkIn:    (lat, lng)     => api.post('/api/attendance/check-in', { lat, lng }),
+  checkOut:   (lat, lng)     => api.post('/api/attendance/check-out', { lat, lng }),
+  history:    (days = 30)    => api.get('/api/attendance/history', { params: { days } }),
+  team:       (date)         => api.get('/api/attendance/team', date ? { params: { date } } : {}),
+};
+
 // Audit Logs API
 export const auditLogsAPI = {
   getLogs: (params) => api.get('/api/audit-logs', { params }),

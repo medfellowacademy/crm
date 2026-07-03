@@ -77,6 +77,7 @@ from cache import (
 from ai_assistant import ai_assistant
 from communication_service_v2 import whatsapp_service, email_service, comm_service
 from ai_chat import router as ai_chat_router
+from attendance import router as attendance_router
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -407,6 +408,7 @@ app.add_middleware(
 )
 
 app.include_router(ai_chat_router)
+app.include_router(attendance_router)
 
 logger.info("🚀 FastAPI application initialized with logging and error handling")
 

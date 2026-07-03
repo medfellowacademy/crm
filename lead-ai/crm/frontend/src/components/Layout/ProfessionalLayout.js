@@ -29,6 +29,7 @@ import {
   Globe,
   Bot,
   Trophy,
+  MapPin,
 } from 'lucide-react';
 import SmartNotifications from '../../features/notifications/SmartNotifications';
 import { isFeatureEnabled } from '../../config/featureFlags';
@@ -218,6 +219,7 @@ const ProfessionalLayout = ({ children }) => {
   const menuItems = [
     { key: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
     { key: '/ai-chat', icon: Bot, label: 'MedFellow AI Chat' },
+    { key: '/attendance', icon: MapPin, label: 'Attendance' },
     { key: '/followups', icon: CalendarClock, label: "Today's Follow-ups" },
     { key: '/leads', icon: Users, label: 'Leads' },
     { key: '/pipeline', icon: GitBranch, label: 'Pipeline' },
@@ -243,7 +245,7 @@ const ProfessionalLayout = ({ children }) => {
   // Filter menu items based on user role
   // ROLES values are lowercase: 'admin', 'manager', 'finance', 'counselor'
   const roleMenuItems = menuItems.filter(item => {
-    const visibleToAllRoles = ['/dashboard', '/ai-chat', '/followups', '/leads', '/pipeline', '/settings', '/payments'];
+    const visibleToAllRoles = ['/dashboard', '/ai-chat', '/attendance', '/followups', '/leads', '/pipeline', '/settings', '/payments'];
     const adminManagerFinance = ['/lead-analysis', '/analytics', '/conversion-time', '/cohort-analysis', '/sla', '/score-decay'];
     const adminManager = ['/hospitals', '/courses', '/user-activity', '/lead-update-activity', '/meta-leads', '/website-leads'];
     const adminOnly = ['/users', '/audit-logs', '/team-performance'];
