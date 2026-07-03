@@ -41,6 +41,53 @@ import { COUNTRIES } from '../config/countries';
 
 const SOURCE_OPTIONS = ['Website', 'Instagram', 'Facebook', 'Referral', 'WhatsApp'];
 
+// Plain-English labels for the AI model's internal feature names, shown in
+// the "Score Drivers" panel. Without this, counselors saw raw column names
+// like "activity_velocity" and "first_response_hours" with no explanation.
+const SCORE_DRIVER_LABELS = {
+  country: 'Country',
+  source: 'Lead Source',
+  course_interested: 'Course Interest',
+  qualification: 'Qualification',
+  assigned_to: 'Assigned Counselor',
+  lead_age_days: 'How Long They\'ve Been a Lead',
+  days_since_last_contact: 'Time Since Last Contact',
+  notes_count: 'Number of Notes Logged',
+  avg_note_length: 'Note Detail Level',
+  buying_signal_strength: 'Buying Signals in Conversation',
+  has_objection: 'Objection Raised',
+  churn_risk: 'Risk of Losing This Lead',
+  urgency_high: 'Urgency',
+  has_email: 'Has Email on File',
+  has_whatsapp: 'Has WhatsApp on File',
+  total_activities: 'Total Interactions',
+  call_count: 'Calls Made',
+  whatsapp_count: 'WhatsApp Messages Sent',
+  email_count: 'Emails Sent',
+  status_change_count: 'Status Changes',
+  distinct_activity_types: 'Contact Channels Used',
+  first_response_hours: 'Speed of First Response',
+  days_since_last_activity: 'Time Since Last Activity',
+  activity_velocity: 'How Often You\'ve Followed Up',
+};
+const scoreDriverLabel = (key) =>
+  SCORE_DRIVER_LABELS[key] || key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+
+// The backend stores feature_importance as a JSON string (it's a `text`
+// column, not `jsonb`) - it arrives here unparsed. Without this, iterating
+// it directly would walk the string character-by-character instead of its
+// key/value pairs.
+const parseFeatureImportance = (raw) => {
+  if (!raw) return null;
+  if (typeof raw === 'object') return raw;
+  try {
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === 'object') ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
 // Call disposition map.  Keys are the "main" call status; values are arrays of
 // sub-statuses for that main status, split by call number (1st vs 2nd call).
 const CALL_DISPOSITIONS = {
@@ -974,15 +1021,18 @@ const LeadDetails = () => {
             )}
 
             {/* Feature importance drivers */}
-            {lead?.feature_importance && (
+            {parseFeatureImportance(lead?.feature_importance) && (
               <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 11, color: '#8c8c8c', fontWeight: 600, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>Score Drivers</div>
-                {Object.entries(lead.feature_importance)
+                <div style={{ fontSize: 11, color: '#8c8c8c', fontWeight: 600, marginBottom: 2, textTransform: 'uppercase', letterSpacing: 0.5 }}>Score Drivers</div>
+                <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 8 }}>
+                  What the AI model weighs most heavily across all leads, not specific to this one
+                </div>
+                {Object.entries(parseFeatureImportance(lead.feature_importance))
                   .sort(([, a], [, b]) => b - a)
                   .map(([key, val]) => (
                     <div key={key} style={{ marginBottom: 4 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 1 }}>
-                        <span style={{ textTransform: 'capitalize' }}>{key.replace(/_/g, ' ')}</span>
+                        <span>{scoreDriverLabel(key)}</span>
                         <span style={{ fontWeight: 600 }}>{(val * 100).toFixed(0)}%</span>
                       </div>
                       <Progress percent={val * 100} strokeColor="#52c41a" showInfo={false} size="small" />
