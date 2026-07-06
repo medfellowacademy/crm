@@ -133,6 +133,7 @@ import ActivityTimeline from '../features/activity/ActivityTimeline';
 import AIAssistantPanel from '../features/ai/AIAssistantPanel';
 import CallTimeWidget from '../components/leads/CallTimeWidget';
 import WhatsAppTemplateDrawer from '../components/whatsapp/WhatsAppTemplateDrawer';
+import EnrollmentModal from '../components/leads/EnrollmentModal';
 import { isFeatureEnabled } from '../config/featureFlags';
 
 const { TextArea } = Input;
@@ -150,6 +151,7 @@ const LeadDetails = () => {
   const [templateDrawer, setTemplateDrawer] = useState(false);
   const [lossModal, setLossModal] = useState(false);
   const [pendingStatus, setPendingStatus] = useState(null);
+  const [enrollmentModal, setEnrollmentModal] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editingRevField, setEditingRevField] = useState(null); // 'expected' | 'actual' | null
   const [revInputVal, setRevInputVal]         = useState(null);
@@ -233,13 +235,22 @@ const LeadDetails = () => {
     // Check if status changed to loss status
     const statusChanged = values.status !== lead.status;
     const isLossStatus = values.status === 'Not Interested' || values.status === 'Junk';
-    
+
     if (statusChanged && isLossStatus) {
       setPendingStatus(values.status);
       setLossModal(true);
       return;
     }
-    
+
+    // Changing to Enrolled should prompt for payment plan details (fee,
+    // registration amount, EMI schedule) right here — previously the only
+    // way to enter these was a separate, undiscoverable Payments page, so
+    // ~90% of enrolled leads had no registration fee or receipt recorded.
+    if (statusChanged && values.status === 'Enrolled') {
+      setEnrollmentModal(true);
+      return;
+    }
+
     // Convert DatePicker value to ISO string and numeric fields to numbers
     const updateData = {
       ...values,
@@ -331,6 +342,11 @@ const LeadDetails = () => {
       lossForm.resetFields();
       setPendingStatus(null);
     });
+  };
+
+  const handleEnrollmentSave = (data) => {
+    updateLeadMutation.mutate(data);
+    setEnrollmentModal(false);
   };
 
   if (isLoading) {
@@ -1434,6 +1450,15 @@ const LeadDetails = () => {
           </Form.Item>
         </Form>
       </Modal>
+
+      {/* Enrollment / Payment Plan Modal — shown when status changes to Enrolled */}
+      <EnrollmentModal
+        open={enrollmentModal}
+        lead={lead}
+        loading={updateLeadMutation.isPending}
+        onCancel={() => setEnrollmentModal(false)}
+        onSave={handleEnrollmentSave}
+      />
     </div>
   );
 };
