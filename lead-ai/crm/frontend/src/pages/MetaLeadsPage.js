@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Table, Card, Button, Tag, Statistic, Row, Col, Space, Typography,
   Tooltip, Badge, Alert, Spin, Modal, message, Divider, Tabs,
@@ -135,10 +135,16 @@ const MetaLeadsPage = () => {
   );
   const [selectedAdset, setSelectedAdset] = useState(null);
 
+  // Syncing a large sheet (many tabs x rows, each needing a dedup lookup)
+  // can take several minutes — far longer than any HTTP client should hold
+  // a connection open for, which is what caused the 60s timeout errors.
+  // The backend now runs the sync in the background and reports progress
+  // via sync_status, so poll while it's running.
   const { data: status, isLoading: statusLoading } = useQuery({
     queryKey: ['sheets-status'],
     queryFn: () => sheetsAPI.status().then(r => r.data),
     staleTime: 30 * 1000,
+    refetchInterval: (query) => query.state.data?.sync_status === 'running' ? 4000 : false,
   });
 
   const { data: adsets = [], isLoading: adsetsLoading } = useQuery({
@@ -149,20 +155,41 @@ const MetaLeadsPage = () => {
 
   const syncMutation = useMutation({
     mutationFn: () => sheetsAPI.sync(),
-    onSuccess: (res) => {
-      const d = res.data;
+    onSuccess: () => {
+      message.info('Sync started in the background — this can take a few minutes for a large sheet.');
+      queryClient.invalidateQueries({ queryKey: ['sheets-status'] });
+    },
+    onError: (e) => {
+      if (e?.response?.status === 409) {
+        message.warning('A sync is already in progress. Please wait for it to finish.');
+      } else {
+        message.error(`Sync failed to start: ${e?.response?.data?.detail || e.message}`);
+      }
+    },
+  });
+
+  // Detect the running → completed/error transition (via polling above) and
+  // surface the final result, since the sync response itself no longer
+  // carries the final counts.
+  const prevSyncStatus = useRef(status?.sync_status);
+  useEffect(() => {
+    const prev = prevSyncStatus.current;
+    const curr = status?.sync_status;
+    if (prev === 'running' && curr === 'completed') {
+      const d = status.last_sync_stats || {};
       const parts = [];
       if (d.new_leads > 0)     parts.push(`${d.new_leads} new leads created`);
       if (d.updated_leads > 0) parts.push(`${d.updated_leads} existing leads updated`);
       if (parts.length === 0)  parts.push('no new leads');
-      message.success(`Sync complete — ${parts.join(', ')} (${d.skipped} skipped)`);
-      queryClient.invalidateQueries({ queryKey: ['sheets-status'] });
+      message.success(`Sync complete — ${parts.join(', ')} (${d.skipped || 0} skipped)`);
       queryClient.invalidateQueries({ queryKey: ['sheets-adsets'] });
       queryClient.invalidateQueries({ queryKey: ['leads'] });
       queryClient.invalidateQueries({ queryKey: ['all-meta-leads'] });
-    },
-    onError: (e) => message.error(`Sync failed: ${e?.response?.data?.detail || e.message}`),
-  });
+    } else if (prev === 'running' && curr === 'error') {
+      message.error(`Sync failed: ${status.last_sync_error || 'Unknown error'}`);
+    }
+    prevSyncStatus.current = curr;
+  }, [status, queryClient]);
 
   const cleanupMutation = useMutation({
     mutationFn: () => duplicatesAPI.cleanup(),
@@ -308,12 +335,13 @@ const MetaLeadsPage = () => {
           )}
           <Button
             type="primary"
-            icon={<SyncOutlined spin={syncMutation.isPending} />}
+            icon={<SyncOutlined spin={syncMutation.isPending || status?.sync_status === 'running'} />}
             loading={syncMutation.isPending}
+            disabled={status?.sync_status === 'running'}
             onClick={() => syncMutation.mutate()}
             style={{ background: '#1877f2', borderColor: '#1877f2' }}
           >
-            Sync Now
+            {status?.sync_status === 'running' ? 'Syncing…' : 'Sync Now'}
           </Button>
         </Space>
       </div>
@@ -325,16 +353,33 @@ const MetaLeadsPage = () => {
             <Col flex="auto">
               <Space direction="vertical" size={2}>
                 <Space>
-                  {status?.enabled
-                    ? <CheckCircleOutlined style={{ color: '#10b981' }} />
-                    : <ExclamationCircleOutlined style={{ color: '#f59e0b' }} />}
+                  {status?.sync_status === 'running'
+                    ? <SyncOutlined spin style={{ color: '#1877f2' }} />
+                    : status?.enabled
+                      ? <CheckCircleOutlined style={{ color: '#10b981' }} />
+                      : <ExclamationCircleOutlined style={{ color: '#f59e0b' }} />}
                   <Text strong>
-                    {status?.enabled ? 'Sync active' : 'Not yet synced'}
+                    {status?.sync_status === 'running'
+                      ? 'Sync in progress…'
+                      : status?.enabled ? 'Sync active' : 'Not yet synced'}
                   </Text>
                 </Space>
                 <Text type="secondary" style={{ fontSize: 12 }}>
                   Sheet ID: {status?.sheet_id || '—'}
                 </Text>
+                {status?.sync_status === 'completed' && status?.last_sync_stats && (
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    Last result: {status.last_sync_stats.new_leads || 0} new,{' '}
+                    {status.last_sync_stats.updated_leads || 0} updated,{' '}
+                    {status.last_sync_stats.skipped || 0} skipped
+                    {status.last_sync_stats.errors > 0 ? `, ${status.last_sync_stats.errors} errors` : ''}
+                  </Text>
+                )}
+                {status?.sync_status === 'error' && status?.last_sync_error && (
+                  <Text type="danger" style={{ fontSize: 12 }}>
+                    Last sync failed: {status.last_sync_error}
+                  </Text>
+                )}
               </Space>
             </Col>
             <Col>

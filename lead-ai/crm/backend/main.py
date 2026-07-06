@@ -8143,23 +8143,35 @@ async def mark_whatsapp_read(
 # ============================================================================
 
 @app.post("/api/sheets/sync")
-async def trigger_sheet_sync(current_user: dict = Depends(get_current_user)):
-    """Manually trigger a Google Sheets → CRM sync."""
+async def trigger_sheet_sync(background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
+    """Kick off a Google Sheets → CRM sync in the background.
+
+    Syncing every tab row-by-row (dedup lookup + insert/update per row) can
+    take several minutes for a large sheet — far longer than any HTTP client
+    is willing to wait, which is what caused the 60s timeout errors. This
+    now returns immediately; poll /api/sheets/status for progress/result."""
     role = (current_user.get("role") or "").lower()
     if role not in ("super admin", "manager", "admin", "team leader"):
         raise HTTPException(status_code=403, detail="Admin or Manager required")
+
     try:
-        from google_sheets_sync import sync_sheet_to_crm
-        result = sync_sheet_to_crm()
-        return result
+        client = supabase_manager.get_client()
+        existing = client.table("sheet_sync_config").select("sync_status").eq("id", 1).execute()
+        if existing.data and existing.data[0].get("sync_status") == "running":
+            raise HTTPException(status_code=409, detail="A sync is already in progress. Please wait for it to finish.")
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Sheet sync error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.warning(f"Could not check sync status before starting: {e}")
+
+    from google_sheets_sync import run_sync_background
+    background_tasks.add_task(run_sync_background)
+    return {"status": "started", "message": "Sync started in the background. Check /api/sheets/status for progress."}
 
 
 @app.get("/api/sheets/status")
 async def get_sheet_sync_status(current_user: dict = Depends(get_current_user)):
-    """Return last sync time and config."""
+    """Return last sync time, in-progress status, and config."""
     try:
         client = supabase_manager.get_client()
         result = client.table("sheet_sync_config").select("*").eq("id", 1).execute()
@@ -8173,10 +8185,14 @@ async def get_sheet_sync_status(current_user: dict = Depends(get_current_user)):
             "last_synced_at": config.get("last_synced_at"),
             "tabs_count": config.get("tabs_count", 0),
             "api_key_configured": bool(os.getenv("GOOGLE_SHEETS_API_KEY")),
+            "sync_status": config.get("sync_status", "idle"),
+            "sync_started_at": config.get("sync_started_at"),
+            "last_sync_stats": config.get("last_sync_stats"),
+            "last_sync_error": config.get("last_sync_error"),
         }
     except Exception as e:
         logger.error(f"Sheet status error: {e}")
-        return {"enabled": False, "last_synced_at": None, "error": str(e)}
+        return {"enabled": False, "last_synced_at": None, "sync_status": "idle", "error": str(e)}
 
 
 @app.get("/api/sheets/adsets")

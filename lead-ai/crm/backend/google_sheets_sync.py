@@ -342,17 +342,34 @@ def row_to_lead(row: Dict, tab_name: str) -> Optional[Dict]:
 # ── sync ───────────────────────────────────────────────────────────────────────
 
 def get_synced_meta_ids() -> set:
-    """Return the set of meta_lead_id values already in the CRM."""
+    """Return the set of meta_lead_id values already in the CRM.
+
+    Paginates past Supabase's 1000-row response cap - without this, any
+    account with more than 1000 synced leads would fail to recognize
+    already-synced rows past the 1000th as synced, causing every sync to
+    needlessly re-process them (slower syncs, and undercounted "skipped"
+    stats) instead of skipping them via the fast synced_ids check.
+    """
     from supabase_client import supabase_manager
     try:
         client = supabase_manager.get_client()
-        result = (
-            client.table("leads")
-            .select("meta_lead_id")
-            .not_.is_("meta_lead_id", "null")
-            .execute()
-        )
-        return {r["meta_lead_id"] for r in (result.data or []) if r.get("meta_lead_id")}
+        ids = set()
+        page_size = 1000
+        offset = 0
+        while True:
+            batch = (
+                client.table("leads")
+                .select("meta_lead_id")
+                .not_.is_("meta_lead_id", "null")
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            page = batch.data or []
+            ids.update(r["meta_lead_id"] for r in page if r.get("meta_lead_id"))
+            if len(page) < page_size:
+                break
+            offset += page_size
+        return ids
     except Exception as e:
         logger.error(f"Failed to fetch synced meta IDs: {e}")
         return set()
@@ -367,6 +384,20 @@ def _normalize(lead: Dict) -> Dict:
         return lead
 
 
+def _mark_sync_status(status: str, **fields) -> None:
+    """Update sheet_sync_config's progress fields. Never raises — sync
+    progress tracking must not be able to crash the sync itself."""
+    from supabase_client import supabase_manager
+    try:
+        client = supabase_manager.get_client()
+        client.table("sheet_sync_config").upsert(
+            {"id": 1, "sheet_id": SHEET_ID, "sync_status": status, **fields},
+            on_conflict="id",
+        ).execute()
+    except Exception as e:
+        logger.warning(f"Could not update sync_status to '{status}': {e}")
+
+
 def sync_sheet_to_crm() -> Dict:
     """
     Main sync entry point — Salesforce-style deduplication.
@@ -377,9 +408,17 @@ def sync_sheet_to_crm() -> Dict:
          YES → update meta fields on existing lead + add system note (no new row).
          NO  → insert as a fresh lead.
 
+    Runs as a background task (see /api/sheets/sync) since syncing every tab
+    can take several minutes for a large sheet - far longer than an HTTP
+    client is willing to wait, which is what caused the 60s timeout errors.
+    Progress is tracked in sheet_sync_config so the frontend can poll it
+    instead of holding a request open.
+
     Returns a stats dict with new_leads, updated_leads, skipped, errors.
     """
     from supabase_client import supabase_manager
+
+    _mark_sync_status("running", sync_started_at=datetime.utcnow().isoformat(), last_sync_error=None)
 
     synced_ids = get_synced_meta_ids()
     tabs = get_sheet_tabs()
@@ -506,7 +545,20 @@ def sync_sheet_to_crm() -> Dict:
         "synced_at":     datetime.utcnow().isoformat(),
     }
     logger.info(f"Sheet sync complete: {stats}")
+    _mark_sync_status("completed", last_sync_stats=stats)
     return stats
+
+
+def run_sync_background() -> None:
+    """Wrapper for BackgroundTasks — sync_sheet_to_crm() already handles
+    per-row errors internally, but a catastrophic failure (e.g. Google
+    Sheets auth error, Supabase outage) would otherwise leave sync_status
+    stuck on 'running' forever with no way for the frontend to know it died."""
+    try:
+        sync_sheet_to_crm()
+    except Exception as e:
+        logger.error(f"Sheet sync crashed: {e}")
+        _mark_sync_status("error", last_sync_error=str(e))
 
 
 # ── ad-set stats ───────────────────────────────────────────────────────────────
@@ -518,17 +570,31 @@ def get_adset_stats() -> List[Dict]:
     from supabase_client import supabase_manager
     try:
         client = supabase_manager.get_client()
-        result = (
-            client.table("leads")
-            .select("adset_name,campaign_name,source,status,created_at,meta_lead_id")
-            .not_.is_("meta_lead_id", "null")
-            .execute()
-        )
+        # Supabase/PostgREST caps a single response at 1000 rows regardless
+        # of how many match the filter - without paginating via .range(),
+        # this silently dropped every meta lead past the first 1000, making
+        # ad-set totals (and the "Total Meta Leads" stat derived from them)
+        # wrong for any account with more than 1000 synced leads.
+        rows = []
+        page_size = 1000
+        offset = 0
+        while True:
+            batch = (
+                client.table("leads")
+                .select("adset_name,campaign_name,source,status,created_at,meta_lead_id")
+                .not_.is_("meta_lead_id", "null")
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            page = batch.data or []
+            rows.extend(page)
+            if len(page) < page_size:
+                break
+            offset += page_size
     except Exception as e:
         logger.error(f"get_adset_stats failed: {e}")
         return []
 
-    rows = result.data or []
     stats: Dict[str, Dict] = defaultdict(lambda: {
         "adset_name": "Unknown",
         "campaign_name": "",
