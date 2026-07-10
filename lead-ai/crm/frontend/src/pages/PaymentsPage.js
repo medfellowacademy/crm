@@ -7,7 +7,7 @@ import {
 } from 'antd';
 import {
   DollarSign, Users, TrendingUp, FileText, Upload as UploadIcon,
-  Eye, CheckCircle, Clock, AlertCircle,
+  Eye, CheckCircle, Clock, AlertCircle, AlertTriangle,
 } from 'lucide-react';
 import {
   UploadOutlined, FilePdfOutlined, FileImageOutlined,
@@ -18,18 +18,11 @@ import isBetween from 'dayjs/plugin/isBetween';
 import { leadsAPI, uploadAPI } from '../api/api';
 import EnrollmentModal from '../components/leads/EnrollmentModal';
 import { useAuth } from '../context/AuthContext';
+import { fmt, safeParse, financeFor, PAYMENT_STATUS_CONFIG } from '../utils/finance';
 
 dayjs.extend(isBetween);
 
 const { Text, Title } = Typography;
-const fmt = v => `₹${Number(v || 0).toLocaleString('en-IN')}`;
-
-// Safe JSON parse — emi_details / lms_modules may arrive as string from Supabase JSONB
-const safeParse = (val, fallback = []) => {
-  if (!val) return fallback;
-  if (Array.isArray(val)) return val;
-  try { return JSON.parse(val); } catch { return fallback; }
-};
 
 const LMS_STATUS_COLOR = {
   'Not Started': 'default',
@@ -50,15 +43,10 @@ const EmiStatus = ({ status }) => {
 
 // ── Expanded Row ─────────────────────────────────────────────────────────────
 const ExpandedRow = ({ lead, onUpload, uploading }) => {
-  const emis       = safeParse(lead.emi_details, []);
-  const lmsModules = safeParse(lead.lms_modules, []);
-  // Supabase may return NUMERIC columns as strings — always coerce to number
-  const total      = Number(lead.actual_revenue)     || 0;
-  const reg        = Number(lead.registration_fees)  || 0;
-  const emiPaid    = emis.filter(e => e.status === 'paid').reduce((s, e) => s + (Number(e.amount) || 0), 0);
-  const collected  = reg + emiPaid;
-  const remaining  = Math.max(0, total - collected);
-  const pct = total > 0 ? Math.round((collected / total) * 100) : 0;
+  const regPayments = safeParse(lead.registration_payments, []);
+  const lmsModules  = safeParse(lead.lms_modules, []);
+  const { total, reg, emis, emiPaid, collected, balance: remaining, pct, overdueAmount } = financeFor(lead);
+  const today = dayjs().startOf('day');
 
   return (
     <div style={{ padding: '12px 24px', background: '#f9fafb' }}>
@@ -70,7 +58,14 @@ const ExpandedRow = ({ lead, onUpload, uploading }) => {
           <Descriptions size="small" column={1} bordered
             labelStyle={{ width: 160, background: '#f3f4f6' }}>
             <Descriptions.Item label="Total Course Fee">{fmt(total)}</Descriptions.Item>
-            <Descriptions.Item label="Registration / Advance">{fmt(reg)}</Descriptions.Item>
+            <Descriptions.Item label="Registration / Advance">
+              {fmt(reg)}
+              {regPayments.length > 1 && (
+                <span style={{ marginLeft: 8, fontSize: 12, color: '#6b7280' }}>
+                  ({regPayments.length} payments)
+                </span>
+              )}
+            </Descriptions.Item>
             <Descriptions.Item label="EMI Collected">{fmt(emiPaid)}</Descriptions.Item>
             <Descriptions.Item label="Total Collected">
               <Text strong style={{ color: '#2563eb' }}>{fmt(collected)}</Text>
@@ -78,12 +73,33 @@ const ExpandedRow = ({ lead, onUpload, uploading }) => {
             <Descriptions.Item label="Balance Due">
               <Text strong style={{ color: remaining > 0 ? '#dc2626' : '#059669' }}>{fmt(remaining)}</Text>
             </Descriptions.Item>
+            {overdueAmount > 0 && (
+              <Descriptions.Item label="Overdue">
+                <Text strong style={{ color: '#dc2626' }}>
+                  {fmt(overdueAmount)} <AlertTriangle size={13} style={{ verticalAlign: -2 }} />
+                </Text>
+              </Descriptions.Item>
+            )}
           </Descriptions>
           <Progress
             percent={pct} strokeColor={pct === 100 ? '#10b981' : '#3b82f6'}
             style={{ marginTop: 12 }}
             format={p => `${p}% collected`}
           />
+          {regPayments.length > 1 && (
+            <div style={{ marginTop: 12 }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>Registration Payments</Text>
+              {regPayments.map((p, i) => (
+                <div key={i} style={{
+                  display: 'flex', justifyContent: 'space-between',
+                  padding: '4px 0', borderBottom: '1px solid #e5e7eb', fontSize: 13,
+                }}>
+                  <span>{p.date ? dayjs(p.date).format('DD MMM YYYY') : `Payment ${i + 1}`}</span>
+                  <Text strong>{fmt(p.amount)}</Text>
+                </div>
+              ))}
+            </div>
+          )}
         </Col>
 
         {/* EMI Schedule */}
@@ -91,18 +107,25 @@ const ExpandedRow = ({ lead, onUpload, uploading }) => {
           <Title level={5} style={{ marginBottom: 12 }}>EMI Schedule ({emis.length})</Title>
           {emis.length === 0
             ? <Text type="secondary">No EMIs — full payment</Text>
-            : emis.map((emi, i) => (
-              <div key={i} style={{
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                padding: '6px 0', borderBottom: '1px solid #e5e7eb',
-              }}>
-                <span style={{ fontSize: 13 }}>
-                  {emi.date ? dayjs(emi.date).format('DD MMM YYYY') : `EMI ${i + 1}`}
-                </span>
-                <Text strong style={{ fontSize: 13 }}>{fmt(emi.amount)}</Text>
-                <EmiStatus status={emi.status} />
-              </div>
-            ))
+            : emis.map((emi, i) => {
+              const isOverdue = emi.status !== 'paid' && emi.date && dayjs(emi.date).isBefore(today);
+              return (
+                <div key={i} style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: '6px 8px', borderBottom: '1px solid #e5e7eb',
+                  background: isOverdue ? '#fef2f2' : 'transparent',
+                  borderRadius: 4,
+                }}>
+                  <span style={{ fontSize: 13 }}>
+                    {emi.date ? dayjs(emi.date).format('DD MMM YYYY') : `EMI ${i + 1}`}
+                  </span>
+                  <Text strong style={{ fontSize: 13 }}>{fmt(emi.amount)}</Text>
+                  {isOverdue
+                    ? <Badge status="error" text={<Text type="danger" style={{ fontSize: 12 }}>Overdue</Text>} />
+                    : <EmiStatus status={emi.status} />}
+                </div>
+              );
+            })
           }
         </Col>
 
@@ -195,6 +218,7 @@ const PaymentsPage = () => {
   const [searchText,      setSearchText]      = useState('');
   const [filterCounselor, setFilterCounselor] = useState(null);
   const [filterCourse,    setFilterCourse]    = useState(null);
+  const [filterStatus,    setFilterStatus]    = useState(null);
   const [dateRange,       setDateRange]       = useState([null, null]);
   const [uploading,       setUploading]       = useState(null);
   const [editLead,        setEditLead]        = useState(null);
@@ -230,6 +254,7 @@ const PaymentsPage = () => {
         !l.phone?.includes(searchText)) return false;
     if (filterCounselor && l.assigned_to !== filterCounselor) return false;
     if (filterCourse    && l.course_interested !== filterCourse) return false;
+    if (filterStatus    && financeFor(l).paymentStatus !== filterStatus) return false;
     if (dateRange[0] && dateRange[1]) {
       const d = dayjs(l.updated_at || l.created_at);
       if (!d.isBetween(dateRange[0], dateRange[1], 'day', '[]')) return false;
@@ -237,14 +262,15 @@ const PaymentsPage = () => {
     return true;
   });
 
-  // Summary stats
-  const totalRevenue  = filtered.reduce((s, l) => s + (Number(l.actual_revenue)    || 0), 0);
-  const totalRegFees  = filtered.reduce((s, l) => s + (Number(l.registration_fees) || 0), 0);
-  const totalBalance  = filtered.reduce((s, l) => {
-    const emPaid = (Array.isArray(l.emi_details) ? l.emi_details : [])
-      .filter(e => e.status === 'paid').reduce((a, e) => a + (Number(e.amount) || 0), 0);
-    return s + Math.max(0, (Number(l.actual_revenue) || 0) - ((Number(l.registration_fees) || 0) + emPaid));
-  }, 0);
+  // Summary stats — every card below is derived from the same financeFor()
+  // helper the table/expanded-row use, so the top-line numbers can never
+  // disagree with what a counselor sees when they expand an individual lead.
+  const finances       = filtered.map(financeFor);
+  const totalRevenue   = finances.reduce((s, f) => s + f.total,     0);
+  const totalCollected = finances.reduce((s, f) => s + f.collected, 0);
+  const totalBalance   = finances.reduce((s, f) => s + f.balance,   0);
+  const totalOverdue   = finances.reduce((s, f) => s + f.overdueAmount, 0);
+  const overdueCount   = finances.filter(f => f.overdueAmount > 0).length;
 
   const counselors = [...new Set(leads.map(l => l.assigned_to).filter(Boolean))];
   const courses    = [...new Set(leads.map(l => l.course_interested).filter(Boolean))];
@@ -305,19 +331,34 @@ const PaymentsPage = () => {
       title: 'Balance Due',
       key: 'balance',
       render: (_, r) => {
-        const emiPaid = safeParse(r.emi_details, [])
-          .filter(e => e.status === 'paid').reduce((s, e) => s + (Number(e.amount) || 0), 0);
-        const bal = Math.max(0, (Number(r.actual_revenue) || 0) - ((Number(r.registration_fees) || 0) + emiPaid));
-        return bal > 0
-          ? <Text strong style={{ color: '#dc2626' }}>{fmt(bal)}</Text>
-          : <Tag color="green">Cleared</Tag>;
+        const { balance, overdueAmount } = financeFor(r);
+        if (balance <= 0) return <Tag color="green">Cleared</Tag>;
+        return (
+          <div>
+            <Text strong style={{ color: '#dc2626' }}>{fmt(balance)}</Text>
+            {overdueAmount > 0 && (
+              <div style={{ fontSize: 11, color: '#dc2626' }}>
+                {fmt(overdueAmount)} overdue
+              </div>
+            )}
+          </div>
+        );
+      },
+      sorter: (a, b) => financeFor(a).balance - financeFor(b).balance,
+    },
+    {
+      title: 'Status',
+      key: 'payment_status',
+      render: (_, r) => {
+        const { label, color } = PAYMENT_STATUS_CONFIG[financeFor(r).paymentStatus];
+        return <Badge status={color} text={label} />;
       },
     },
     {
       title: 'EMIs',
       key: 'emis',
       render: (_, r) => {
-        const emis = Array.isArray(r.emi_details) ? r.emi_details : [];
+        const emis = safeParse(r.emi_details, []);
         if (!emis.length) return <Text type="secondary">—</Text>;
         const paid = emis.filter(e => e.status === 'paid').length;
         return <Text>{paid}/{emis.length} paid</Text>;
@@ -328,7 +369,7 @@ const PaymentsPage = () => {
       key: 'docs',
       render: (_, r) => {
         const hasReceipt = !!r.payment_receipt_url;
-        const docCount   = (Array.isArray(r.documents) ? r.documents : []).length;
+        const docCount   = safeParse(r.documents, []).length;
         return (
           <Space size={4}>
             <Tooltip title={hasReceipt ? 'Receipt uploaded' : 'No receipt'}>
@@ -396,27 +437,39 @@ const PaymentsPage = () => {
         </p>
       </div>
 
-      {/* Summary Cards */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+      {/* Summary Cards — Total Revenue is what's owed across all enrollments,
+          Collected + Balance Pending always add back up to it, and Overdue
+          is the subset of Balance Pending that's actually late (a due EMI
+          date has already passed), so at a glance you can tell "how much
+          money is coming" apart from "how much is late right now". */}
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))',
+        gap: 16, marginBottom: 24,
+      }}>
         {[
           { label: 'Total Revenue',     value: `₹${(totalRevenue/100000).toFixed(1)}L`,   bg: 'linear-gradient(135deg,#10b981,#059669)', Icon: DollarSign },
+          { label: 'Collected',         value: `₹${(totalCollected/100000).toFixed(1)}L`, bg: 'linear-gradient(135deg,#8b5cf6,#7c3aed)', Icon: TrendingUp },
+          { label: 'Balance Pending',   value: `₹${(totalBalance/100000).toFixed(1)}L`,   bg: 'linear-gradient(135deg,#f59e0b,#d97706)', Icon: FileText },
+          {
+            label: 'Overdue', value: `₹${(totalOverdue/100000).toFixed(1)}L`,
+            sub: overdueCount > 0 ? `${overdueCount} lead${overdueCount > 1 ? 's' : ''}` : null,
+            bg: totalOverdue > 0 ? 'linear-gradient(135deg,#ef4444,#dc2626)' : 'linear-gradient(135deg,#9ca3af,#6b7280)',
+            Icon: AlertTriangle,
+          },
           { label: 'Total Enrolled',    value: filtered.length,                           bg: 'linear-gradient(135deg,#3b82f6,#2563eb)', Icon: Users },
-          { label: 'Collected',         value: `₹${((totalRevenue-totalBalance)/100000).toFixed(1)}L`, bg: 'linear-gradient(135deg,#8b5cf6,#7c3aed)', Icon: TrendingUp },
-          { label: 'Balance Pending',   value: `₹${(totalBalance/100000).toFixed(1)}L`,  bg: 'linear-gradient(135deg,#f59e0b,#d97706)', Icon: FileText },
-        ].map(({ label, value, bg, Icon }) => (
-          <Col xs={24} sm={12} lg={6} key={label}>
-            <Card style={{ background: bg, color: 'white', borderRadius: 12, border: 'none' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                <div>
-                  <div style={{ fontSize: 12, opacity: 0.9, marginBottom: 8 }}>{label}</div>
-                  <div style={{ fontSize: 26, fontWeight: 700 }}>{value}</div>
-                </div>
-                <Icon size={32} opacity={0.3} />
+        ].map(({ label, value, sub, bg, Icon }) => (
+          <Card key={label} style={{ background: bg, color: 'white', borderRadius: 12, border: 'none' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+              <div>
+                <div style={{ fontSize: 12, opacity: 0.9, marginBottom: 8 }}>{label}</div>
+                <div style={{ fontSize: 26, fontWeight: 700 }}>{value}</div>
+                {sub && <div style={{ fontSize: 12, opacity: 0.9, marginTop: 4 }}>{sub}</div>}
               </div>
-            </Card>
-          </Col>
+              <Icon size={32} opacity={0.3} />
+            </div>
+          </Card>
         ))}
-      </Row>
+      </div>
 
       {/* Filters */}
       <Card style={{ marginBottom: 20, borderRadius: 12 }}>
@@ -429,6 +482,8 @@ const PaymentsPage = () => {
           )}
           <Select placeholder="Course" value={filterCourse} onChange={setFilterCourse}
             allowClear showSearch options={courses.map(c => ({ label: c, value: c }))} />
+          <Select placeholder="Payment Status" value={filterStatus} onChange={setFilterStatus}
+            allowClear options={Object.entries(PAYMENT_STATUS_CONFIG).map(([value, { label }]) => ({ label, value }))} />
           <DatePicker.RangePicker value={dateRange} onChange={setDateRange} />
         </div>
       </Card>
@@ -444,7 +499,8 @@ const PaymentsPage = () => {
                 columns={columns}
                 dataSource={filtered.map(l => ({ ...l, key: l.lead_id || l.id }))}
                 pagination={{ pageSize: 15, showSizeChanger: true }}
-                scroll={{ x: 1100 }}
+                scroll={{ x: 1200 }}
+                rowClassName={r => financeFor(r).overdueAmount > 0 ? 'payments-row-overdue' : ''}
                 expandable={{
                   expandedRowRender: r => (
                     <ExpandedRow lead={r} onUpload={handleUpload} uploading={uploading} />
@@ -463,6 +519,9 @@ const PaymentsPage = () => {
         onCancel={() => setEditLead(null)}
         onSave={data => updateMutation.mutate({ leadId: editLead.lead_id, data })}
       />
+
+      <style>{`.payments-row-overdue { background: #fff1f0 !important; }
+        .payments-row-overdue:hover > td { background: #ffe4e2 !important; }`}</style>
     </div>
   );
 };

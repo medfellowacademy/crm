@@ -9,9 +9,14 @@ import dayjs from 'dayjs';
 const { Text } = Typography;
 const { Option } = Select;
 
-const fmtNum = v => v != null ? `₹ ${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',') : '';
-const parseNum = v => {
-  const n = Number(String(v ?? '').replace(/₹\s?|,/g, '').trim());
+// All monetary values are stored in INR - if entered in USD, everything is
+// converted at this fixed rate before saving, so revenue analytics never
+// have to deal with a mix of currencies/scales.
+const USD_TO_INR = 94;
+
+const fmtNum = (symbol) => (v) => v != null ? `${symbol} ${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',') : '';
+const parseNum = (symbol) => (v) => {
+  const n = Number(String(v ?? '').replace(new RegExp(`\\${symbol}\\s?|,`, 'g'), '').trim());
   return isNaN(n) ? 0 : n;
 };
 
@@ -31,19 +36,21 @@ const safeParse = (val, fallback = []) => {
 
 const EnrollmentModal = ({ open, lead, onSave, onCancel, loading }) => {
   const [form] = Form.useForm();
-  const [remaining,  setRemaining]  = useState(0);
   const [lmsModules, setLmsModules] = useState([]);
-
-  // Recalculate remaining from current form values on every change
-  const recalcFromForm = (allValues) => {
-    const total    = allValues.actual_revenue    || 0;
-    const reg      = allValues.registration_fees || 0;
-    const emiTotal = (allValues.emis || []).reduce((s, e) => s + (Number(e?.amount) || 0), 0);
-    setRemaining(Math.max(0, total - reg - emiTotal));
-  };
+  // Forces a re-render on every field change so the summary bar (computed
+  // straight from form.getFieldsValue in the render body below) stays live.
+  const [, forceUpdate] = useState(0);
+  // Input currency for this session only - values are always stored in INR
+  // (converted at save time), so reopening an already-saved enrollment
+  // always starts back on INR, showing the true stored value.
+  const [currency, setCurrency] = useState('INR');
+  const symbol = currency === 'USD' ? '$' : '₹';
+  const fmt = fmtNum(symbol);
+  const parse = parseNum(symbol);
 
   useEffect(() => {
     if (!open) return;
+    setCurrency('INR');
     const existing  = lead || {};
     const savedEmis = safeParse(existing.emi_details, []).map(e => ({
       amount: e.amount ?? null,
@@ -53,46 +60,82 @@ const EnrollmentModal = ({ open, lead, onSave, onCancel, loading }) => {
     const savedModules = safeParse(existing.lms_modules, []);
     setLmsModules(savedModules);
 
-    form.setFieldsValue({
-      actual_revenue:    existing.actual_revenue    ? Number(existing.actual_revenue)    : null,
-      registration_fees: existing.registration_fees ? Number(existing.registration_fees) : null,
-      lms_status:        existing.lms_status        || 'Not Started',
-      emis:              savedEmis,
-    });
+    // registration_payments is the source of truth going forward; if a lead
+    // only has the legacy single registration_fees total (no payments list
+    // yet), seed the list with that one value so it displays and re-saves
+    // correctly without losing data.
+    const savedRegPayments = safeParse(existing.registration_payments, []);
+    const regPayments = savedRegPayments.length > 0
+      ? savedRegPayments.map(p => ({ amount: p.amount ?? null, date: p.date ? dayjs(p.date) : null }))
+      : (existing.registration_fees ? [{ amount: Number(existing.registration_fees), date: null }] : []);
 
-    recalcFromForm({
-      actual_revenue:    existing.actual_revenue    || 0,
-      registration_fees: existing.registration_fees || 0,
-      emis:              savedEmis,
+    form.setFieldsValue({
+      actual_revenue:         existing.actual_revenue ? Number(existing.actual_revenue) : null,
+      lms_status:             existing.lms_status     || 'Not Started',
+      emis:                   savedEmis,
+      registration_payments:  regPayments,
     });
+    forceUpdate(n => n + 1);
   }, [open, lead]);
 
-  const handleValuesChange = (_, allValues) => recalcFromForm(allValues);
+  const handleValuesChange = () => forceUpdate(n => n + 1);
+
+  // Switching currency reinterprets whatever is currently typed in the
+  // fields as the new currency's amount (converting the displayed number),
+  // rather than silently changing what a same-looking number means.
+  const handleCurrencyChange = (next) => {
+    if (next === currency) return;
+    const factor = next === 'USD' ? (1 / USD_TO_INR) : USD_TO_INR;
+    const vals = form.getFieldsValue(true);
+    form.setFieldsValue({
+      actual_revenue: vals.actual_revenue != null ? Math.round(vals.actual_revenue * factor) : null,
+      emis: (vals.emis || []).map(e => ({
+        ...e,
+        amount: e?.amount != null ? Math.round(e.amount * factor) : null,
+      })),
+      registration_payments: (vals.registration_payments || []).map(p => ({
+        ...p,
+        amount: p?.amount != null ? Math.round(p.amount * factor) : null,
+      })),
+    });
+    setCurrency(next);
+    forceUpdate(n => n + 1);
+  };
 
   const handleSave = () => {
     form.validateFields().then(vals => {
+      const toINR = (n) => currency === 'USD' ? Math.round(n * USD_TO_INR) : n;
       const serializedEmis = (vals.emis || []).map(e => ({
-        amount: Number(e?.amount) || 0,
+        amount: toINR(Number(e?.amount) || 0),
         date:   e?.date ? dayjs(e.date).format('YYYY-MM-DD') : null,
         status: e?.status || 'pending',
       }));
+      const serializedRegPayments = (vals.registration_payments || []).map(p => ({
+        amount: toINR(Number(p?.amount) || 0),
+        date:   p?.date ? dayjs(p.date).format('YYYY-MM-DD') : null,
+      }));
+      const registrationTotal = serializedRegPayments.reduce((s, p) => s + p.amount, 0);
       onSave({
-        status:            'Enrolled',
-        actual_revenue:    vals.actual_revenue    || null,
-        registration_fees: vals.registration_fees || null,
-        emi_details:       serializedEmis,
-        lms_status:        vals.lms_status        || 'Not Started',
-        lms_modules:       lmsModules,
+        status:                'Enrolled',
+        actual_revenue:        vals.actual_revenue != null ? toINR(vals.actual_revenue) : null,
+        registration_fees:     registrationTotal,
+        registration_payments: serializedRegPayments,
+        emi_details:           serializedEmis,
+        lms_status:            vals.lms_status || 'Not Started',
+        lms_modules:           lmsModules,
       });
     }).catch(() => message.warning('Please fill in Total Course Fee and Registration Fees'));
   };
 
-  // Live summary values — read from form
+  // Live summary values — always shown in INR regardless of input currency,
+  // so the totals stay meaningful even mid-conversion.
   const allVals  = form.getFieldsValue(true);
-  const total    = allVals.actual_revenue    || 0;
-  const reg      = allVals.registration_fees || 0;
-  const emiTotal = (allVals.emis || []).reduce((s, e) => s + (Number(e?.amount) || 0), 0);
+  const toINRPreview = (n) => (n || 0) * (currency === 'USD' ? USD_TO_INR : 1);
+  const total    = toINRPreview(allVals.actual_revenue);
+  const reg      = (allVals.registration_payments || []).reduce((s, p) => s + toINRPreview(Number(p?.amount) || 0), 0);
+  const emiTotal = (allVals.emis || []).reduce((s, e) => s + toINRPreview(Number(e?.amount) || 0), 0);
   const collected = reg + emiTotal;
+  const remaining = Math.max(0, total - collected);
 
   return (
     <Modal
@@ -140,28 +183,81 @@ const EnrollmentModal = ({ open, lead, onSave, onCancel, loading }) => {
         </div>
 
         {/* ── Revenue ────────────────────────────────────────────────── */}
-        <Row gutter={16}>
-          <Col span={12}>
-            <Form.Item name="actual_revenue" label="Total Course Fee (₹)"
-              rules={[{ required: true, message: 'Enter total fee' }]}>
-              <InputNumber
-                style={{ width: '100%' }} min={0}
-                formatter={fmtNum} parser={parseNum}
-                placeholder="e.g. 150000"
-              />
-            </Form.Item>
-          </Col>
-          <Col span={12}>
-            <Form.Item name="registration_fees" label="Registration / Advance Paid (₹)"
-              rules={[{ required: true, message: 'Enter registration fees' }]}>
-              <InputNumber
-                style={{ width: '100%' }} min={0}
-                formatter={fmtNum} parser={parseNum}
-                placeholder="e.g. 50000"
-              />
-            </Form.Item>
-          </Col>
-        </Row>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            Enter fees in either currency — USD is converted to INR (× {USD_TO_INR}) on save,
+            so everything is stored in one currency for accurate reporting.
+          </Text>
+          <Select
+            value={currency}
+            onChange={handleCurrencyChange}
+            style={{ width: 100 }}
+            options={[{ value: 'INR', label: '₹ INR' }, { value: 'USD', label: '$ USD' }]}
+          />
+        </div>
+        <Form.Item name="actual_revenue" label={`Total Course Fee (${symbol})`}
+          rules={[{ required: true, message: 'Enter total fee' }]}>
+          <InputNumber
+            style={{ width: '100%' }} min={0}
+            formatter={fmt} parser={parse}
+            placeholder={currency === 'USD' ? 'e.g. 1600' : 'e.g. 150000'}
+          />
+        </Form.Item>
+
+        {/* ── Registration / Advance Paid (Form.List) ──────────────────
+            Some doctors pay their advance across 2-3 installments rather
+            than one lump sum, so this mirrors the EMI list below. The
+            individual entries sum into registration_fees on save. */}
+        <Divider orientation="left" style={{ fontSize: 13, marginBottom: 12 }}>
+          Registration / Advance Paid
+        </Divider>
+
+        <Form.List name="registration_payments">
+          {(fields, { add, remove }) => (
+            <>
+              {fields.length === 0 && (
+                <div style={{ textAlign: 'center', color: '#9ca3af', padding: '4px 0 12px', fontSize: 13 }}>
+                  No registration payments added yet
+                </div>
+              )}
+
+              {fields.map(({ key, name }) => (
+                <Row key={key} gutter={10} align="middle" style={{ marginBottom: 8 }}>
+                  <Col span={10}>
+                    <Form.Item name={[name, 'amount']} noStyle
+                      rules={[{ required: true, message: 'Enter amount' }]}>
+                      <InputNumber
+                        style={{ width: '100%' }} min={0}
+                        formatter={fmt} parser={parse}
+                        placeholder={`Amount (${symbol})`}
+                      />
+                    </Form.Item>
+                  </Col>
+
+                  <Col span={11}>
+                    <Form.Item name={[name, 'date']} noStyle>
+                      <DatePicker style={{ width: '100%' }} placeholder="Payment date" />
+                    </Form.Item>
+                  </Col>
+
+                  <Col span={3}>
+                    <Button danger type="text" icon={<DeleteOutlined />}
+                      onClick={() => remove(name)} />
+                  </Col>
+                </Row>
+              ))}
+
+              <Button
+                icon={<PlusOutlined />}
+                onClick={() => add({ amount: null, date: null })}
+                type="dashed"
+                style={{ width: '100%', marginBottom: 4 }}
+              >
+                Add Payment
+              </Button>
+            </>
+          )}
+        </Form.List>
 
         {/* ── EMI Schedule (Form.List) ───────────────────────────────── */}
         <Divider orientation="left" style={{ fontSize: 13, marginBottom: 12 }}>
@@ -184,8 +280,8 @@ const EnrollmentModal = ({ open, lead, onSave, onCancel, loading }) => {
                     <Form.Item name={[name, 'amount']} noStyle>
                       <InputNumber
                         style={{ width: '100%' }} min={0}
-                        formatter={fmtNum} parser={parseNum}
-                        placeholder="Amount (₹)"
+                        formatter={fmt} parser={parse}
+                        placeholder={`Amount (${symbol})`}
                       />
                     </Form.Item>
                   </Col>

@@ -27,7 +27,8 @@ const { TextArea } = Input;
 const segmentColor = { Hot: '#f5222d', Warm: '#fa8c16', Cold: '#1890ff', Junk: '#8c8c8c' };
 const statusColor  = {
   Fresh: 'blue', 'Follow Up': 'orange', Warm: 'volcano', Hot: 'red',
-  Enrolled: 'green', 'Not Interested': 'default', Junk: 'default', 'Not Answering': 'warning',
+  Enrolled: 'green', 'Will Enroll Later': 'gold', 'Not Interested': 'default',
+  Dropped: 'volcano', Junk: 'default', 'Not Answering': 'warning',
 };
 
 // ── Quick-action modal ────────────────────────────────────────────────────────
@@ -127,7 +128,7 @@ function QuickActionModal({ lead, open, onClose, onDone }) {
         <div>
           <Text type="secondary">Update Status</Text>
           <Select value={status} onChange={setStatus} style={{ width: '100%', marginTop: 4 }}>
-            {['Fresh','Follow Up','Warm','Hot','Not Answering','Not Interested','Enrolled','Junk'].map(s => (
+            {['Fresh','Follow Up','Warm','Hot','Will Enroll Later','Not Answering','Not Interested','Dropped','Enrolled','Junk'].map(s => (
               <Option key={s} value={s}>{s}</Option>
             ))}
           </Select>

@@ -234,7 +234,7 @@ const LeadDetails = () => {
   const handleSaveChanges = (values) => {
     // Check if status changed to loss status
     const statusChanged = values.status !== lead.status;
-    const isLossStatus = values.status === 'Not Interested' || values.status === 'Junk';
+    const isLossStatus = values.status === 'Not Interested' || values.status === 'Junk' || values.status === 'Dropped';
 
     if (statusChanged && isLossStatus) {
       setPendingStatus(values.status);
@@ -652,7 +652,9 @@ const LeadDetails = () => {
                       lead?.status === 'Enrolled' ? 'green' :
                       lead?.status === 'Hot' ? 'red' :
                       lead?.status === 'Warm' ? 'orange' :
+                      lead?.status === 'Will Enroll Later' ? 'gold' :
                       lead?.status === 'Not Interested' ? 'red' :
+                      lead?.status === 'Dropped' ? 'volcano' :
                       lead?.status === 'Junk' ? 'red' : 'blue'
                     }>
                       {lead?.status}
@@ -664,7 +666,9 @@ const LeadDetails = () => {
                         <Option value="Follow Up">Follow Up</Option>
                         <Option value="Warm">Warm</Option>
                         <Option value="Hot">Hot</Option>
+                        <Option value="Will Enroll Later">Will Enroll Later</Option>
                         <Option value="Not Interested">Not Interested</Option>
+                        <Option value="Dropped">Dropped</Option>
                         <Option value="Junk">Junk</Option>
                         <Option value="Not Answering">Not Answering</Option>
                         <Option value="Enrolled">Enrolled</Option>
@@ -906,7 +910,10 @@ const LeadDetails = () => {
             <Divider />
 
             <Timeline style={{ marginTop: '24px' }}>
-              {lead?.notes?.map((note) => {
+              {/* Hide auto-generated Sheet Sync re-submission notes — they're
+                  audit noise (one per Meta re-submission) rather than a real
+                  counselor interaction, and clutter the conversation history. */}
+              {lead?.notes?.filter((note) => note.channel !== 'system').map((note) => {
                 // Detect structured call notes: [Nth Call] | outcome | → sub
                 const lines = (note.content || '').split('\n');
                 const callMatch = lines[0]?.match(/^\[(\d*(?:1st|2nd|3rd|\d+th) Call)\]\s*\|?\s*(.*)/);
