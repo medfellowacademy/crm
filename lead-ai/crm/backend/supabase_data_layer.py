@@ -119,7 +119,7 @@ class SupabaseDataLayer:
             "lead_id,full_name,email,phone,whatsapp,country,source,"
             "course_interested,status,ai_score,ai_segment,"
             "conversion_probability,expected_revenue,actual_revenue,"
-            "registration_fees,emi_details,payment_receipt_url,documents,"
+            "registration_fees,registration_payments,emi_details,payment_receipt_url,documents,"
             "lms_status,lms_modules,"
             "follow_up_date,assigned_to,created_at,updated_at,"
             "last_contact_date,buying_signal_strength,churn_risk,"
@@ -418,12 +418,13 @@ class SupabaseDataLayer:
         # Keep empty lists/dicts (falsy but not None) so JSONB columns can be cleared.
         cleaned_data = {k: v for k, v in data.items() if v is not None}
 
-        # Explicitly JSON-serialize list/dict values for JSONB columns.
-        # Some versions of postgrest-py expect JSONB fields as serialized strings.
-        JSONB_COLUMNS = {'emi_details', 'documents', 'lms_modules'}
-        for col in JSONB_COLUMNS:
-            if col in cleaned_data and isinstance(cleaned_data[col], (list, dict)):
-                cleaned_data[col] = json.dumps(cleaned_data[col])
+        # NOTE: emi_details/documents/lms_modules are jsonb columns and must be
+        # sent as plain Python lists/dicts, NOT pre-serialized with json.dumps().
+        # This used to double-encode them (verified against postgrest 0.17.2:
+        # a raw list stores as a real jsonb array; json.dumps()'d first stores
+        # as a jsonb string scalar containing escaped JSON text instead) - that
+        # silently broke any frontend code checking Array.isArray() on the
+        # read side, e.g. EMI-paid totals on the Payments page undercounting.
 
         # Only the OLD optional columns (added before the current migration) are in
         # NEW_COLUMNS so the fallback silently drops them when they don't exist yet.

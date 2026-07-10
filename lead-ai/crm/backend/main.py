@@ -19,7 +19,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
 from typing import List, Dict, Optional, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone as _timezone
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text, ForeignKey, JSON, Enum as SQLEnum, text, case
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship, joinedload
 from sqlalchemy.sql import func
@@ -37,6 +37,13 @@ import statistics
 import threading
 from collections import defaultdict
 import asyncio as _asyncio
+
+# The business runs on IST (see attendance.py's office coordinates). Using
+# datetime.utcnow().date() for "today" boundaries is wrong for ~5.5 hours
+# around midnight IST (UTC 18:30-23:59) - during that window the UTC
+# calendar date is still "yesterday" while it's already a new day in IST,
+# which silently misclassified overdue/due-today leads at that time of day.
+_IST = _timezone(timedelta(hours=5, minutes=30))
 
 # Import logging and error handling
 from logger_config import logger
@@ -443,6 +450,7 @@ class LeadStatus(str, enum.Enum):
     NOT_ANSWERING = "Not Answering"
     ENROLLED = "Enrolled"
     WILL_ENROLL_LATER = "Will Enroll Later"
+    DROPPED = "Dropped"
 
 class LeadSegment(str, enum.Enum):
     HOT = "Hot"
@@ -772,7 +780,7 @@ _STATUS_NORMALISE_MAP: dict[str, str] = {
 }
 
 # Valid enum values set for fast lookup
-_VALID_STATUSES = {"Fresh", "Follow Up", "Warm", "Hot", "Not Interested", "Junk", "Not Answering", "Enrolled", "Will Enroll Later"}
+_VALID_STATUSES = {"Fresh", "Follow Up", "Warm", "Hot", "Not Interested", "Junk", "Not Answering", "Enrolled", "Will Enroll Later", "Dropped"}
 
 def _normalise_status(v):
     if not v:
@@ -886,6 +894,7 @@ class LeadUpdate(BaseModel):
     actual_revenue: Optional[float] = None
     expected_revenue: Optional[float] = None
     registration_fees: Optional[float] = None
+    registration_payments: Optional[list] = None  # [{amount, date}] - some doctors pay advance in installments
     emi_details: Optional[list] = None          # [{amount, date, status}]
     payment_receipt_url: Optional[str] = None
     documents: Optional[list] = None            # [{name, url, type, uploaded_at}]
@@ -1133,6 +1142,7 @@ class DashboardStats(BaseModel):
     leads_this_week: int
     leads_this_month: int
     avg_ai_score: float
+    trends: Optional[dict] = None
 
 # ============================================================================
 # COUNTRY DIAL CODES
@@ -3225,24 +3235,31 @@ async def get_courses(
 
 _NOTIFICATION_PRIORITY = {"error": "high", "warning": "medium", "info": "low", "success": "low"}
 
-def _compute_raw_notifications() -> list:
+def _compute_raw_notifications(counselor_name: Optional[str] = None) -> list:
     """Compute the current notification candidates: overdue follow-ups, stale hot
     leads, follow-ups due today, new leads. Shared by GET /api/notifications and
-    the read-all endpoint so both agree on what "all" means."""
-    today = datetime.utcnow().date()
+    the read-all endpoint so both agree on what "all" means.
+
+    When counselor_name is given, overdue/stale-hot/due-today are scoped to that
+    counselor's own leads - previously this was always unscoped (top 20 most
+    overdue company-wide), so a counselor with dozens of overdue leads of their
+    own might see none of them if other counselors' leads were more overdue.
+    New-lead notifications stay unscoped since Fresh leads may not be assigned
+    yet and are relevant to whoever might claim them."""
+    today = datetime.now(_IST).date()
     now_iso = datetime.utcnow().isoformat()
     notifications = []
 
     # Overdue follow-ups
-    overdue_resp = (
+    overdue_q = (
         supabase_data.client.table('leads')
         .select('id,lead_id,full_name,course_interested,assigned_to,follow_up_date')
         .lt('follow_up_date', now_iso)
-        .not_.in_('status', ['Enrolled', 'Not Interested', 'Junk'])
-        .order('follow_up_date', desc=False)
-        .limit(20)
-        .execute()
+        .not_.in_('status', ['Enrolled', 'Not Interested', 'Junk', 'Dropped'])
     )
+    if counselor_name:
+        overdue_q = overdue_q.eq('assigned_to', counselor_name)
+    overdue_resp = overdue_q.order('follow_up_date', desc=False).limit(50).execute()
     for lead in overdue_resp.data or []:
         if lead.get('follow_up_date'):
             follow_up_dt = datetime.fromisoformat(lead['follow_up_date'].replace('Z', '+00:00'))
@@ -3260,15 +3277,16 @@ def _compute_raw_notifications() -> list:
 
     # Hot leads not contacted in 3+ days
     three_days_ago = (datetime.utcnow() - timedelta(days=3)).isoformat()
-    stale_hot_resp = (
+    stale_hot_q = (
         supabase_data.client.table('leads')
         .select('id,lead_id,full_name,course_interested,assigned_to,last_contact_date')
         .eq('ai_segment', 'Hot')
         .not_.in_('status', ['Enrolled', 'Not Interested'])
         .or_(f'last_contact_date.lt.{three_days_ago},last_contact_date.is.null')
-        .limit(10)
-        .execute()
     )
+    if counselor_name:
+        stale_hot_q = stale_hot_q.eq('assigned_to', counselor_name)
+    stale_hot_resp = stale_hot_q.limit(10).execute()
     for lead in stale_hot_resp.data or []:
         notifications.append({
             "type": "stale_hot_lead",
@@ -3281,18 +3299,22 @@ def _compute_raw_notifications() -> list:
             "event_time": lead.get('last_contact_date'),
         })
 
-    # Follow-ups due today
-    today_start = f"{today.isoformat()}T00:00:00"
-    today_end = f"{today.isoformat()}T23:59:59"
-    due_today_resp = (
+    # Follow-ups due today (IST calendar day, converted to UTC instants for
+    # the query since follow_up_date is stored in UTC)
+    today_start_ist = datetime.combine(today, datetime.min.time(), tzinfo=_IST)
+    today_end_ist = datetime.combine(today, datetime.max.time(), tzinfo=_IST)
+    today_start = today_start_ist.astimezone(_timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
+    today_end = today_end_ist.astimezone(_timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
+    due_today_q = (
         supabase_data.client.table('leads')
         .select('id,lead_id,full_name,course_interested,assigned_to,follow_up_date')
         .gte('follow_up_date', today_start)
         .lte('follow_up_date', today_end)
-        .not_.in_('status', ['Enrolled', 'Not Interested', 'Junk'])
-        .limit(20)
-        .execute()
+        .not_.in_('status', ['Enrolled', 'Not Interested', 'Junk', 'Dropped'])
     )
+    if counselor_name:
+        due_today_q = due_today_q.eq('assigned_to', counselor_name)
+    due_today_resp = due_today_q.limit(20).execute()
     for lead in due_today_resp.data or []:
         notifications.append({
             "type": "followup_today",
@@ -3333,9 +3355,11 @@ def _compute_raw_notifications() -> list:
 
 @app.get("/api/notifications")
 async def get_notifications(current_user: dict = Depends(get_current_user)):
-    """Real notifications, enriched with per-user read/snooze state."""
+    """Real notifications, enriched with per-user read/snooze state.
+    Counselors only see notifications about their own leads."""
     try:
-        notifications = _compute_raw_notifications()
+        counselor_scope = current_user.get('full_name') if current_user.get('role') == 'Counselor' else None
+        notifications = _compute_raw_notifications(counselor_scope)
         user_email = (current_user.get('email') or '').lower()
 
         state_by_key = {}
@@ -3663,34 +3687,60 @@ async def get_followups_today(request: Request, assigned_to: Optional[str] = Non
             logger.error("Counselor scope check failed in get_followups_today - failing closed: {}", e)
             raise
 
-        today = datetime.utcnow().date()
-        today_start = f"{today.isoformat()}T00:00:00"
-        today_end = f"{today.isoformat()}T23:59:59"
-        active_statuses = ["Enrolled", "Not Interested", "Junk"]
+        # "Today" means the IST calendar day (the business runs on IST) -
+        # datetime.utcnow().date() was wrong for ~5.5 hours around midnight
+        # IST (UTC 18:30-23:59), silently shifting the overdue/due-today
+        # split by up to a day during that window.
+        today = datetime.now(_IST).date()
+        today_start_ist = datetime.combine(today, datetime.min.time(), tzinfo=_IST)
+        today_end_ist = datetime.combine(today, datetime.max.time(), tzinfo=_IST)
+        today_start = today_start_ist.astimezone(_timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
+        today_end = today_end_ist.astimezone(_timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
+        active_statuses = ["Enrolled", "Not Interested", "Junk", "Dropped"]
+        _LIST_COLS = ('id,lead_id,full_name,phone,whatsapp,course_interested,status,ai_segment,'
+                      'ai_score,assigned_to,follow_up_date,last_contact_date,country,next_action,'
+                      'primary_objection,churn_risk')
 
-        # Overdue follow-ups
-        overdue_query = (
-            supabase_data.client.table('leads')
-            .select('id,lead_id,full_name,phone,whatsapp,course_interested,status,ai_segment,ai_score,assigned_to,follow_up_date,last_contact_date,country,next_action,primary_objection,churn_risk')
-            .not_.in_('status', active_statuses)
-            .not_.is_('follow_up_date', 'null')
-            .lt('follow_up_date', today_start)
-        )
-        if assigned_to:
-            overdue_query = overdue_query.eq('assigned_to', assigned_to)
-        overdue_resp = overdue_query.order('follow_up_date', desc=False).execute()
+        def _paginate(build_query):
+            """Collect every matching row past Supabase's 1000-row response cap.
+            build_query must return a fresh, unexecuted query builder each call -
+            supabase-py's builder can't be reused for a second .range() call."""
+            rows = []
+            offset = 0
+            page_size = 1000
+            while True:
+                batch = build_query().range(offset, offset + page_size - 1).execute()
+                page = batch.data or []
+                rows.extend(page)
+                if len(page) < page_size:
+                    break
+                offset += page_size
+            return rows
 
-        # Due today
-        today_query = (
-            supabase_data.client.table('leads')
-            .select('id,lead_id,full_name,phone,whatsapp,course_interested,status,ai_segment,ai_score,assigned_to,follow_up_date,last_contact_date,country,next_action,primary_objection,churn_risk')
-            .not_.in_('status', active_statuses)
-            .gte('follow_up_date', today_start)
-            .lte('follow_up_date', today_end)
-        )
-        if assigned_to:
-            today_query = today_query.eq('assigned_to', assigned_to)
-        today_resp = today_query.order('follow_up_date', desc=False).execute()
+        def _build_overdue():
+            q = (
+                supabase_data.client.table('leads')
+                .select(_LIST_COLS)
+                .not_.in_('status', active_statuses)
+                .not_.is_('follow_up_date', 'null')
+                .lt('follow_up_date', today_start)
+                .order('follow_up_date', desc=False)
+            )
+            return q.eq('assigned_to', assigned_to) if assigned_to else q
+
+        def _build_today():
+            q = (
+                supabase_data.client.table('leads')
+                .select(_LIST_COLS)
+                .not_.in_('status', active_statuses)
+                .gte('follow_up_date', today_start)
+                .lte('follow_up_date', today_end)
+                .order('follow_up_date', desc=False)
+            )
+            return q.eq('assigned_to', assigned_to) if assigned_to else q
+
+        overdue_rows = _paginate(_build_overdue)
+        today_rows = _paginate(_build_today)
 
         def _priority_score(lead):
             """Higher = call this lead first. Blends conversion likelihood (ai_score),
@@ -3730,8 +3780,8 @@ async def get_followups_today(request: Request, assigned_to: Optional[str] = Non
                 "priority_score": _priority_score(lead),
             }
 
-        overdue_list = sorted((fmt(l) for l in (overdue_resp.data or [])), key=lambda l: -l['priority_score'])
-        today_list = sorted((fmt(l) for l in (today_resp.data or [])), key=lambda l: -l['priority_score'])
+        overdue_list = sorted((fmt(l) for l in overdue_rows), key=lambda l: -l['priority_score'])
+        today_list = sorted((fmt(l) for l in today_rows), key=lambda l: -l['priority_score'])
 
         return {
             "overdue": overdue_list,
@@ -3744,11 +3794,17 @@ async def get_followups_today(request: Request, assigned_to: Optional[str] = Non
         return {"overdue": [], "today": [], "overdue_count": 0, "today_count": 0}
 
 
-def _fetch_all_leads(columns: str, filters: dict = None) -> list:
+def _fetch_all_leads(columns: str, filters: dict = None, date_from: str = None,
+                      date_to: str = None, date_column: str = 'created_at') -> list:
     """Fetch ALL leads from Supabase by paginating through 1000-row pages.
     Supabase default limit is 1000 rows; without explicit pagination, queries
     silently truncate results. Use this helper for any analytics/stats query
     that needs the full dataset.
+
+    date_from/date_to (ISO date or datetime strings) optionally scope the
+    query to a date range on date_column — every analytics/admin endpoint
+    that calls this shares the same "created_from"/"created_to" naming as
+    the main /api/leads filters for consistency.
     """
     results = []
     offset = 0
@@ -3758,6 +3814,10 @@ def _fetch_all_leads(columns: str, filters: dict = None) -> list:
         if filters:
             for col, val in filters.items():
                 q = q.eq(col, val)
+        if date_from:
+            q = q.gte(date_column, date_from)
+        if date_to:
+            q = q.lte(date_column, date_to)
         batch = (q.range(offset, offset + page_size - 1).execute().data or [])
         results.extend(batch)
         if len(batch) < page_size:
@@ -3768,18 +3828,91 @@ def _fetch_all_leads(columns: str, filters: dict = None) -> list:
 
 @app.get("/api/dashboard/stats", response_model=DashboardStats)
 @cache_async_result(STATS_CACHE, "dashboard_stats")
-async def get_dashboard_stats(request: Request):
-    """Get dashboard statistics (cached for 1 minute). Counselors see only their stats."""
-    
+async def get_dashboard_stats(request: Request, created_from: Optional[str] = None, created_to: Optional[str] = None):
+    """Get dashboard statistics (cached for 1 minute). Counselors see only their stats.
+
+    created_from/created_to optionally scope total_leads/hot_leads/etc. to a
+    date range instead of all-time. Either way, `trends` is always computed
+    as a real period-over-period comparison (the selected range vs. the
+    immediately preceding range of equal length, or last-30-days vs. the
+    30 days before that when no range is given) — this replaces what used
+    to be hardcoded placeholder percentages on the frontend.
+    """
+
     # Check if user is a counselor and restrict to their leads
     _counselor_name = _get_counselor_name(request)
-    
+
     try:
-        # Get basic stats from Supabase (filtered for counselors)
-        basic_stats = supabase_data.get_dashboard_stats(assigned_to=_counselor_name)
-        
-        # Get time-based stats (filtered for counselors)
         now = datetime.utcnow()
+
+        # ── Period-over-period trends ──────────────────────────────────
+        if created_from and created_to:
+            period_start = datetime.fromisoformat(str(created_from).replace('Z', '+00:00')).replace(tzinfo=None)
+            period_end   = datetime.fromisoformat(str(created_to).replace('Z', '+00:00')).replace(tzinfo=None)
+        else:
+            period_end   = now
+            period_start = now - timedelta(days=30)
+        period_len = period_end - period_start
+        prev_start = period_start - period_len
+        prev_end   = period_start
+
+        def _window_stats(gte_dt, lt_dt):
+            q = supabase_data.client.table('leads').select('status,actual_revenue,ai_segment') \
+                .gte('created_at', gte_dt.isoformat()).lt('created_at', lt_dt.isoformat())
+            if _counselor_name:
+                q = q.ilike('assigned_to', _counselor_name)
+            rows = []
+            offset = 0
+            while True:
+                batch = q.range(offset, offset + 999).execute().data or []
+                rows.extend(batch)
+                if len(batch) < 1000:
+                    break
+                offset += 1000
+            total = len(rows)
+            hot  = sum(1 for r in rows if str(r.get('ai_segment', '')).lower() == 'hot')
+            warm = sum(1 for r in rows if str(r.get('ai_segment', '')).lower() == 'warm')
+            cold = sum(1 for r in rows if str(r.get('ai_segment', '')).lower() == 'cold')
+            junk = sum(1 for r in rows if str(r.get('ai_segment', '')).lower() == 'junk')
+            enrolled = sum(1 for r in rows if r.get('status') == 'Enrolled')
+            revenue = sum(r.get('actual_revenue') or 0 for r in rows)
+            return {'total': total, 'hot': hot, 'warm': warm, 'cold': cold, 'junk': junk,
+                    'enrolled': enrolled, 'revenue': revenue}
+
+        current_window  = _window_stats(period_start, period_end)
+        previous_window = _window_stats(prev_start, prev_end)
+
+        def _trend(curr_val, prev_val):
+            if not prev_val:
+                return None
+            pct = round((curr_val - prev_val) / prev_val * 100, 1)
+            return {"value": abs(pct), "isUp": pct >= 0}
+
+        current_conv_rate  = (current_window['enrolled'] / current_window['total'] * 100) if current_window['total'] else 0
+        previous_conv_rate = (previous_window['enrolled'] / previous_window['total'] * 100) if previous_window['total'] else 0
+
+        trends = {
+            "total_leads":     _trend(current_window['total'], previous_window['total']),
+            "hot_leads":       _trend(current_window['hot'], previous_window['hot']),
+            "conversion_rate": _trend(current_conv_rate, previous_conv_rate),
+            "total_revenue":   _trend(current_window['revenue'], previous_window['revenue']),
+        }
+
+        # Get basic stats from Supabase (filtered for counselors) — all-time
+        # by default, or scoped to the requested range when one is given.
+        if created_from and created_to:
+            basic_stats = {
+                'total': current_window['total'],
+                'hot': current_window['hot'],
+                'warm': current_window['warm'],
+                'cold': current_window['cold'],
+                'junk': current_window['junk'],
+                'conversions': current_window['enrolled'],
+                'conversion_rate': round(current_conv_rate, 2),
+                'revenue': current_window['revenue'],
+            }
+        else:
+            basic_stats = supabase_data.get_dashboard_stats(assigned_to=_counselor_name)
         today_start = f"{now.date().isoformat()}T00:00:00"
         week_start = (now - timedelta(days=7)).isoformat()
         month_start = (now - timedelta(days=30)).isoformat()
@@ -3841,7 +3974,8 @@ async def get_dashboard_stats(request: Request):
             leads_today=today_resp.count if hasattr(today_resp, 'count') else 0,
             leads_this_week=week_resp.count if hasattr(week_resp, 'count') else 0,
             leads_this_month=month_resp.count if hasattr(month_resp, 'count') else 0,
-            avg_ai_score=avg_score
+            avg_ai_score=avg_score,
+            trends=trends
         )
     except Exception as e:
         logger.error(f"Error getting dashboard stats: {e}")
@@ -3961,7 +4095,7 @@ async def get_counselor_performance():
 
 @app.get("/api/counselors/performance-comparison")
 @cache_async_result(STATS_CACHE, "counselor_performance_comparison")
-async def get_counselor_performance_comparison():
+async def get_counselor_performance_comparison(created_from: Optional[str] = None, created_to: Optional[str] = None):
     """Deeper counselor performance: response time, follow-up cadence, and
     objection-mix, benchmarked against the team average. Cached 1 minute —
     this scans the full notes/activities tables, which is too expensive to
@@ -3973,7 +4107,8 @@ async def get_counselor_performance_comparison():
     the rare conversion event) are the more statistically stable signals here."""
 
     try:
-        leads = _fetch_all_leads('id,assigned_to,status,primary_objection,created_at')
+        leads = _fetch_all_leads('id,assigned_to,status,primary_objection,created_at',
+                                  date_from=created_from, date_to=created_to)
 
         def _fetch_all_table(table, columns, page_size=1000):
             rows, start = [], 0
@@ -4164,11 +4299,12 @@ async def delete_user(user_id: int):
     return {"message": "User deleted successfully"}
 
 @app.get("/api/analytics/revenue-by-country")
-async def revenue_by_country():
+async def revenue_by_country(created_from: Optional[str] = None, created_to: Optional[str] = None):
     """Get revenue breakdown by country - SUPABASE ONLY"""
-    
+
     try:
-        leads = _fetch_all_leads('country,actual_revenue,expected_revenue')
+        leads = _fetch_all_leads('country,actual_revenue,expected_revenue',
+                                  date_from=created_from, date_to=created_to)
 
         # Group by country
         country_stats = {}
@@ -4200,11 +4336,12 @@ async def revenue_by_country():
         return []
 
 @app.get("/api/analytics/conversion-funnel")
-async def conversion_funnel():
+async def conversion_funnel(created_from: Optional[str] = None, created_to: Optional[str] = None):
     """Get conversion funnel metrics - SUPABASE ONLY"""
-    
+
     try:
-        leads = _fetch_all_leads('last_contact_date,ai_score,status')
+        leads = _fetch_all_leads('last_contact_date,ai_score,status',
+                                  date_from=created_from, date_to=created_to)
         
         total = len(leads)
         contacted = sum(1 for l in leads if l.get('last_contact_date'))
@@ -6032,9 +6169,12 @@ async def snooze_notification(notification_id: str, payload: SnoozeRequest, curr
 
 @app.post("/api/notifications/read-all")
 async def mark_all_notifications_read(current_user: dict = Depends(get_current_user)):
-    """Mark every currently-visible notification as read for this user."""
+    """Mark every currently-visible notification as read for this user.
+    Must use the same scoping as GET /api/notifications or this would mark
+    notifications as read that the user never actually saw."""
     user_email = (current_user.get('email') or '').lower()
-    notifications = _compute_raw_notifications()
+    counselor_scope = current_user.get('full_name') if current_user.get('role') == 'Counselor' else None
+    notifications = _compute_raw_notifications(counselor_scope)
     now_iso = datetime.utcnow().isoformat()
     rows = [
         {'user_email': user_email, 'notification_key': n['id'], 'read_at': now_iso}
@@ -6704,7 +6844,7 @@ async def get_cohort_analysis():
 # ============================================================
 
 @app.get("/api/admin/conversion-time")
-async def get_conversion_time():
+async def get_conversion_time(created_from: Optional[str] = None, created_to: Optional[str] = None):
     """Compute days from creation to enrollment, with histogram + breakdowns - SUPABASE ONLY"""
 
     empty_response = {"overall": {"count": 0}, "distribution": [], "by_counselor": [], "by_course": [], "by_country": []}
@@ -6737,7 +6877,8 @@ async def get_conversion_time():
         }
 
     try:
-        enrolled = _fetch_all_leads('created_at,updated_at,assigned_to,course_interested,country', {'status': 'Enrolled'})
+        enrolled = _fetch_all_leads('created_at,updated_at,assigned_to,course_interested,country',
+                                     {'status': 'Enrolled'}, date_from=created_from, date_to=created_to)
 
         all_days = [d for lead in enrolled if (d := days_to_convert(lead)) is not None]
         if not all_days:
@@ -6788,7 +6929,7 @@ async def get_conversion_time():
 # ============================================================
 
 @app.get("/api/admin/source-analytics")
-async def get_source_analytics():
+async def get_source_analytics(created_from: Optional[str] = None, created_to: Optional[str] = None):
     """Per-source and per-campaign attribution metrics - SUPABASE ONLY"""
 
     def _aggregate(leads, group_key):
@@ -6830,7 +6971,8 @@ async def get_source_analytics():
 
     try:
         all_leads = _fetch_all_leads(
-            "source,status,ai_segment,expected_revenue,ai_score,utm_source,utm_medium,utm_campaign"
+            "source,status,ai_segment,expected_revenue,ai_score,utm_source,utm_medium,utm_campaign",
+            date_from=created_from, date_to=created_to
         )
 
         sources_raw = _aggregate(all_leads, "source")
