@@ -29,6 +29,7 @@ const WebsiteLeadsPage          = lazy(() => import('./pages/WebsiteLeadsPage'))
 const AIChatPage                = lazy(() => import('./pages/AIChatPage'));
 const TeamPerformancePage       = lazy(() => import('./pages/TeamPerformancePage'));
 const AttendancePage            = lazy(() => import('./pages/AttendancePage'));
+const DepartmentsPage           = lazy(() => import('./pages/DepartmentsPage'));
 import { isFeatureEnabled } from './config/featureFlags';
 import ErrorBoundary from './components/ErrorBoundary';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -87,6 +88,7 @@ function AppRoutes() {
                   <Routes>
                     <Route path="/" element={<Navigate to="/dashboard" replace />} />
                     <Route path="/dashboard" element={<RoleBasedDashboard />} />
+                    <Route path="/departments" element={<DepartmentsPage />} />
                     <Route path="/ai-chat" element={<AIChatPage />} />
                     <Route path="/attendance" element={<AttendancePage />} />
                     <Route path="/followups" element={<FollowupTodayPage />} />

@@ -30,6 +30,7 @@ import {
   Bot,
   Trophy,
   MapPin,
+  Building2,
 } from 'lucide-react';
 import SmartNotifications from '../../features/notifications/SmartNotifications';
 import { isFeatureEnabled } from '../../config/featureFlags';
@@ -218,6 +219,7 @@ const ProfessionalLayout = ({ children }) => {
 
   const menuItems = [
     { key: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+    { key: '/departments', icon: Building2, label: 'Departments' },
     { key: '/ai-chat', icon: Bot, label: 'MedFellow AI Chat' },
     { key: '/attendance', icon: MapPin, label: 'Attendance' },
     { key: '/followups', icon: CalendarClock, label: "Today's Follow-ups" },
@@ -243,19 +245,29 @@ const ProfessionalLayout = ({ children }) => {
   ];
 
   // Filter menu items based on user role
-  // ROLES values are lowercase: 'admin', 'manager', 'finance', 'counselor'
   const roleMenuItems = menuItems.filter(item => {
     const visibleToAllRoles = ['/dashboard', '/ai-chat', '/attendance', '/followups', '/leads', '/pipeline', '/settings', '/payments'];
+    // Cross-department overview hub — relevant to anyone who oversees or
+    // reports on more than their own single-team slice of the business.
+    const deptOverseers = ['/departments'];
     const adminManagerFinance = ['/lead-analysis', '/analytics', '/conversion-time', '/cohort-analysis', '/sla', '/score-decay'];
-    const adminManager = ['/hospitals', '/courses', '/user-activity', '/lead-update-activity', '/meta-leads', '/website-leads'];
+    const adminManager = ['/hospitals', '/courses', '/user-activity', '/lead-update-activity'];
+    // Lead-generation / channel pages — Marketing owns these day-to-day.
+    const adminManagerMarketing = ['/meta-leads', '/website-leads'];
     const adminOnly = ['/users', '/audit-logs', '/team-performance'];
 
     if (visibleToAllRoles.includes(item.key)) return true;
+    if (deptOverseers.includes(item.key)) {
+      return [ROLES.ADMIN, ROLES.MANAGER, ROLES.TEAM_LEADER, ROLES.FINANCE, ROLES.MARKETING].includes(userRole);
+    }
     if (adminManagerFinance.includes(item.key)) {
-      return [ROLES.ADMIN, ROLES.MANAGER, ROLES.TEAM_LEADER, ROLES.FINANCE].includes(userRole);
+      return [ROLES.ADMIN, ROLES.MANAGER, ROLES.TEAM_LEADER, ROLES.FINANCE, ROLES.MARKETING].includes(userRole);
     }
     if (adminManager.includes(item.key)) {
       return [ROLES.ADMIN, ROLES.MANAGER, ROLES.TEAM_LEADER].includes(userRole);
+    }
+    if (adminManagerMarketing.includes(item.key)) {
+      return [ROLES.ADMIN, ROLES.MANAGER, ROLES.TEAM_LEADER, ROLES.MARKETING].includes(userRole);
     }
     if (adminOnly.includes(item.key)) {
       return userRole === ROLES.ADMIN;

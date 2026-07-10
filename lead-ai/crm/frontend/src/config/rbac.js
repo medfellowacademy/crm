@@ -5,7 +5,12 @@ export const ROLES = {
   COUNSELLOR: 'Counselor',
   MANAGER: 'Manager',
   TEAM_LEADER: 'Team Leader',
-  FINANCE: 'finance',
+  // Was 'finance' (lowercase) — never matched any value UsersPage could
+  // actually assign ('Finance' wasn't even an option there), so the Finance
+  // dashboard route was dead code. Fixed casing to match every other role
+  // string, and Finance/Marketing are now real, assignable roles.
+  FINANCE: 'Finance',
+  MARKETING: 'Marketing',
 };
 
 export const PERMISSIONS = {
@@ -118,6 +123,15 @@ export const rolePermissions = {
     PERMISSIONS.MANAGE_PAYMENTS,
     PERMISSIONS.EXPORT_FINANCIAL_DATA,
     PERMISSIONS.VIEW_ANALYTICS,
+  ],
+
+  [ROLES.MARKETING]: [
+    // Lead-generation focus — source/campaign attribution, no revenue
+    // management and no per-lead editing (that's Sales' job).
+    PERMISSIONS.VIEW_ALL_LEADS,
+    PERMISSIONS.VIEW_ANALYTICS,
+    PERMISSIONS.VIEW_TEAM_ANALYTICS,
+    PERMISSIONS.EXPORT_REPORTS,
   ],
 };
 

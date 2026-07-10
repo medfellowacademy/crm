@@ -1,221 +1,173 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Card, Row, Col, Table, Spin, Empty, Tag } from 'antd';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { DollarSign, Users, TrendingUp, Award } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Card, Row, Col, Table, Tag, Space, Typography, Button, DatePicker, Empty } from 'antd';
+import { ArrowRightOutlined } from '@ant-design/icons';
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+} from 'recharts';
+import { DollarSign, TrendingUp, AlertTriangle, FileText } from 'lucide-react';
 import dayjs from 'dayjs';
-import { adminAPI, leadsAPI } from '../../api/api';
+import isBetween from 'dayjs/plugin/isBetween';
+import { leadsAPI, analyticsAPI } from '../../api/api';
+import { fmt, financeFor } from '../../utils/finance';
+
+dayjs.extend(isBetween);
+
+const { Text, Title } = Typography;
+
+const KpiCard = ({ title, value, sub, icon: Icon, color }) => (
+  <Card style={{ borderRadius: 12 }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+      <div>
+        <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>{title}</div>
+        <div style={{ fontSize: 24, fontWeight: 700 }}>{value}</div>
+        {sub && <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 4 }}>{sub}</div>}
+      </div>
+      <div style={{
+        width: 44, height: 44, borderRadius: 10, background: `${color}18`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        <Icon size={22} color={color} />
+      </div>
+    </div>
+  </Card>
+);
 
 const FinanceDashboard = () => {
-  // Fetch admin stats
-  const { data: stats } = useQuery({
-    queryKey: ['finance-stats'],
-    queryFn: () => adminAPI.getStats().then(res => res.data),
+  const navigate = useNavigate();
+  const [dateRange, setDateRange] = useState([null, null]);
+
+  // Same source of truth as the Payments page: fetch every enrolled lead
+  // and derive all numbers via financeFor(), so this dashboard's totals can
+  // never disagree with what Finance sees when they open Payments. The date
+  // filter scopes by enrollment date (updated_at), not creation date — a
+  // lead created months ago that just enrolled this week should count as
+  // "this week's" revenue, matching how Payments filters.
+  const { data: leadsResponse } = useQuery({
+    queryKey: ['finance-dashboard-leads'],
+    queryFn: () => leadsAPI.getAll({ status: 'Enrolled', limit: 10000 }).then(r => r.data),
+  });
+  const allLeads = leadsResponse?.leads || (Array.isArray(leadsResponse) ? leadsResponse : []);
+  const leads = allLeads.filter(l => {
+    if (!dateRange[0] || !dateRange[1]) return true;
+    const d = dayjs(l.updated_at || l.created_at);
+    return d.isBetween(dateRange[0], dateRange[1], 'day', '[]');
   });
 
-  // Fetch revenue trend
-  const { data: revenueTrend = [] } = useQuery({
-    queryKey: ['finance-revenue-trend'],
-    queryFn: () => adminAPI.getRevenueTrend(30).then(res => Array.isArray(res.data) ? res.data : []),
+  const dateParams = dateRange[0] && dateRange[1] ? {
+    created_from: dateRange[0].startOf('day').toISOString(),
+    created_to: dateRange[1].endOf('day').toISOString(),
+  } : {};
+  const { data: revenueByCountry = [] } = useQuery({
+    queryKey: ['finance-revenue-by-country', dateParams.created_from, dateParams.created_to],
+    queryFn: () => analyticsAPI.getRevenueByCountry(dateParams).then(res => res.data || []),
   });
 
-  // Fetch recent enrolled leads. /api/leads returns {leads, total, skip, limit,
-  // has_more} - not a bare array and not keyed "data".
-  const { data: recentLeads = [] } = useQuery({
-    queryKey: ['finance-recent-leads'],
-    queryFn: () => leadsAPI.getAll({ status: 'Enrolled', limit: 10 }).then(res => {
-      const data = Array.isArray(res.data) ? res.data : res.data?.leads || [];
-      return data.slice(0, 10);
-    }),
-  });
+  const finances = leads.map(financeFor);
+  const totalRevenue   = finances.reduce((s, f) => s + f.total,     0);
+  const totalCollected = finances.reduce((s, f) => s + f.collected, 0);
+  const totalBalance   = finances.reduce((s, f) => s + f.balance,   0);
+  const totalOverdue   = finances.reduce((s, f) => s + f.overdueAmount, 0);
 
-  const statCards = [
-    {
-      title: 'Total Revenue',
-      value: `₹${((stats?.total_revenue || 0) / 100000).toFixed(1)}L`,
-      icon: DollarSign,
-      color: '#10b981',
-      subtitle: 'This month',
-    },
-    {
-      title: 'Enrolled Count',
-      value: stats?.enrolled || 0,
-      icon: Users,
-      color: '#3b82f6',
-      subtitle: 'Active enrollments',
-    },
-    {
-      title: 'Avg Revenue per Lead',
-      value: `₹${(((stats?.total_revenue || 0) / Math.max(stats?.enrolled || 0, 1)) / 1000).toFixed(1)}K`,
-      icon: TrendingUp,
-      color: '#8b5cf6',
-      subtitle: 'Per conversion',
-    },
-    {
-      title: 'Revenue Growth',
-      value: `${stats?.revenue_trend || 0}%`,
-      icon: Award,
-      color: '#f59e0b',
-      subtitle: 'vs last month',
-    },
-  ];
+  const recentLeads = [...leads]
+    .sort((a, b) => dayjs(b.updated_at || b.created_at).unix() - dayjs(a.updated_at || a.created_at).unix())
+    .slice(0, 8);
 
   const columns = [
+    { title: 'Name', dataIndex: 'full_name', key: 'full_name', render: t => <Text strong>{t}</Text> },
+    { title: 'Course', dataIndex: 'course_interested', key: 'course', render: t => t ? <Tag color="blue">{t}</Tag> : '—' },
     {
-      title: 'Name',
-      dataIndex: 'full_name',
-      key: 'full_name',
-      render: (text) => <span style={{ fontWeight: 500 }}>{text}</span>,
+      title: 'Revenue', key: 'revenue',
+      render: (_, r) => <Text style={{ color: '#10b981', fontWeight: 600 }}>{fmt(financeFor(r).total)}</Text>,
     },
     {
-      title: 'Course',
-      dataIndex: 'course_interested',
-      key: 'course_interested',
-      render: (text) => <Tag color="blue">{text}</Tag>,
+      title: 'Balance', key: 'balance',
+      render: (_, r) => {
+        const bal = financeFor(r).balance;
+        return bal > 0 ? <Text style={{ color: '#dc2626' }}>{fmt(bal)}</Text> : <Tag color="green">Cleared</Tag>;
+      },
     },
-    {
-      title: 'Country',
-      dataIndex: 'country',
-      key: 'country',
-    },
-    {
-      title: 'Revenue',
-      dataIndex: 'actual_revenue',
-      key: 'revenue',
-      render: (value) => (
-        <span style={{ color: '#10b981', fontWeight: 500 }}>
-          ₹{value?.toLocaleString() || 0}
-        </span>
-      ),
-    },
-    {
-      title: 'Enrolled Date',
-      dataIndex: 'updated_at',
-      key: 'updated_at',
-      render: (date) => date ? dayjs(date).format('DD MMM YYYY') : '—',
-    },
-    {
-      title: 'Counselor',
-      dataIndex: 'assigned_to',
-      key: 'assigned_to',
-      render: (text) => text || 'Unassigned',
-    },
+    { title: 'Enrolled', dataIndex: 'updated_at', key: 'updated_at', render: d => d ? dayjs(d).format('DD MMM YYYY') : '—' },
   ];
 
   return (
-    <div style={{ padding: '24px' }}>
-      <div style={{ marginBottom: '24px' }}>
-        <h1 style={{ fontSize: '28px', fontWeight: '600', marginBottom: '8px' }}>
-          Finance Dashboard
-        </h1>
-        <p style={{ color: 'var(--text-secondary)' }}>
-          Revenue and enrollment tracking
-        </p>
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12, marginBottom: 20 }}>
+        <div>
+          <Title level={4} style={{ margin: 0 }}>Finance Overview</Title>
+          <Text type="secondary">Revenue, collections, and outstanding balances across enrolled leads</Text>
+        </div>
+        <Space direction="vertical" size={2}>
+          <Text type="secondary" style={{ fontSize: 12 }}>Filter by enrollment date</Text>
+          <DatePicker.RangePicker value={dateRange} onChange={v => setDateRange(v || [null, null])} allowClear />
+        </Space>
       </div>
 
-      {/* Stat Cards */}
-      <Row gutter={[16, 16]} style={{ marginBottom: '24px' }}>
-        {statCards.map((stat, index) => (
-          <Col xs={24} sm={12} lg={6} key={stat.title}>
-            <Card
-              style={{
-                background: 'var(--bg-secondary)',
-                borderRadius: '12px',
-                border: '1px solid var(--border-color)',
-                padding: '20px',
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                <div>
-                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
-                    {stat.title}
-                  </div>
-                  <div style={{ fontSize: '24px', fontWeight: '700', color: 'var(--text-primary)' }}>
-                    {stat.value}
-                  </div>
-                  <div style={{ fontSize: '12px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
-                    {stat.subtitle}
-                  </div>
-                </div>
-                <div
-                  style={{
-                    width: '48px',
-                    height: '48px',
-                    borderRadius: '12px',
-                    background: `${stat.color}15`,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  <stat.icon size={24} color={stat.color} />
-                </div>
-              </div>
-            </Card>
-          </Col>
-        ))}
+      <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
+        <Col xs={24} sm={12} lg={6}>
+          <KpiCard title="Total Revenue" value={fmt(totalRevenue)} icon={DollarSign} color="#10b981" />
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <KpiCard title="Collected" value={fmt(totalCollected)} icon={TrendingUp} color="#3b82f6" />
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <KpiCard title="Balance Pending" value={fmt(totalBalance)} icon={FileText} color="#f59e0b" />
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <KpiCard
+            title="Overdue" value={fmt(totalOverdue)}
+            sub={finances.filter(f => f.overdueAmount > 0).length > 0 ? `${finances.filter(f => f.overdueAmount > 0).length} leads` : null}
+            icon={AlertTriangle} color={totalOverdue > 0 ? '#ef4444' : '#9ca3af'}
+          />
+        </Col>
       </Row>
 
-      {/* Revenue Trend Chart */}
-      <Card
-        style={{
-          borderRadius: '12px',
-          border: '1px solid var(--border-color)',
-          marginBottom: '24px',
-        }}
-      >
-        <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '16px' }}>
-          Revenue Trend (Last 30 Days)
-        </h3>
-        {revenueTrend && revenueTrend.length > 0 ? (
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={revenueTrend}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" />
-              <XAxis dataKey="date" stroke="var(--text-tertiary)" style={{ fontSize: '12px' }} />
-              <YAxis stroke="var(--text-tertiary)" style={{ fontSize: '12px' }} />
-              <Tooltip
-                contentStyle={{
-                  background: 'var(--bg-primary)',
-                  border: '1px solid var(--border-color)',
-                  borderRadius: '8px',
-                }}
-              />
-              <Legend />
-              <Line
-                type="monotone"
-                dataKey="revenue"
-                stroke="#10b981"
-                strokeWidth={2}
-                dot={{ fill: '#10b981', r: 4 }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        ) : (
-          <Empty description="No revenue data available" />
-        )}
-      </Card>
+      <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
+        <Col xs={24} lg={12}>
+          <Card
+            title="Revenue by Country"
+            bordered={false}
+            style={{ borderRadius: 12, height: '100%' }}
+            extra={<Button size="small" type="link" icon={<ArrowRightOutlined />} onClick={() => navigate('/analytics')}>Full Breakdown</Button>}
+          >
+            <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 8 }}>
+              Scoped by lead creation date (backend limitation) — may differ slightly from the KPI cards above, which are scoped by enrollment date.
+            </Text>
+            {revenueByCountry.length === 0 ? <Empty description="No revenue data" /> : (
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart data={revenueByCountry}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="country" tick={{ fontSize: 11 }} />
+                  <YAxis />
+                  <Tooltip formatter={v => fmt(v)} />
+                  <Legend />
+                  <Bar dataKey="total_revenue" name="Actual Revenue" fill="#10b981" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="expected_revenue" name="Expected Revenue" fill="#fbbf24" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </Card>
+        </Col>
 
-      {/* Recent Enrolled Leads */}
-      <Card
-        style={{
-          borderRadius: '12px',
-          border: '1px solid var(--border-color)',
-        }}
-      >
-        <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '16px' }}>
-          Recent Enrolled Leads
-        </h3>
-        {recentLeads.length === 0 ? (
-          <Empty description="No enrolled leads found" />
-        ) : (
-          <Table
-            columns={columns}
-            dataSource={recentLeads.map(lead => ({ ...lead, key: lead.id }))}
-            pagination={false}
-            scroll={{ x: 800 }}
-          />
-        )}
-      </Card>
+        <Col xs={24} lg={12}>
+          <Card
+            title="Recently Enrolled"
+            bordered={false}
+            style={{ borderRadius: 12, height: '100%' }}
+            extra={<Button size="small" type="link" icon={<ArrowRightOutlined />} onClick={() => navigate('/payments')}>Open Payments</Button>}
+          >
+            {recentLeads.length === 0 ? <Empty description="No enrolled leads" /> : (
+              <Table
+                dataSource={recentLeads.map(l => ({ ...l, key: l.lead_id }))}
+                columns={columns}
+                pagination={false}
+                size="small"
+              />
+            )}
+          </Card>
+        </Col>
+      </Row>
     </div>
   );
 };

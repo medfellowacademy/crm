@@ -40,6 +40,8 @@ import {
   UsergroupAddOutlined,
   ApartmentOutlined,
   StarOutlined,
+  DollarOutlined,
+  BulbOutlined,
 } from '@ant-design/icons';
 import { leadsAPI, usersAPI } from '../api/api';
 
@@ -148,6 +150,8 @@ const UsersPage = () => {
     manager: users.filter(u => u.role === 'Manager').length,
     teamLeader: users.filter(u => u.role === 'Team Leader').length,
     counselor: users.filter(u => u.role === 'Counselor').length,
+    finance: users.filter(u => u.role === 'Finance').length,
+    marketing: users.filter(u => u.role === 'Marketing').length,
   };
 
   // Get role color
@@ -157,6 +161,8 @@ const UsersPage = () => {
       'Manager': '#722ed1',
       'Team Leader': '#1890ff',
       'Counselor': '#52c41a',
+      'Finance': '#13c2c2',
+      'Marketing': '#fa8c16',
     };
     return colors[role] || '#1890ff';
   };
@@ -168,6 +174,8 @@ const UsersPage = () => {
       'Manager': <SafetyCertificateOutlined />,
       'Team Leader': <TeamOutlined />,
       'Counselor': <UserOutlined />,
+      'Finance': <DollarOutlined />,
+      'Marketing': <BulbOutlined />,
     };
     return icons[role] || <UserOutlined />;
   };
@@ -179,13 +187,15 @@ const UsersPage = () => {
       'Manager': 3,
       'Team Leader': 2,
       'Counselor': 1,
+      'Finance': 1,
+      'Marketing': 1,
     };
     return levels[role] || 0;
   };
 
   // Get subordinate roles
   const getSubordinateRoles = (role) => {
-    if (role === 'Super Admin') return ['Manager', 'Team Leader', 'Counselor'];
+    if (role === 'Super Admin') return ['Manager', 'Team Leader', 'Counselor', 'Finance', 'Marketing'];
     if (role === 'Manager') return ['Team Leader', 'Counselor'];
     if (role === 'Team Leader') return ['Counselor'];
     return [];
@@ -329,6 +339,8 @@ const UsersPage = () => {
         { text: 'Manager', value: 'Manager' },
         { text: 'Team Leader', value: 'Team Leader' },
         { text: 'Counselor', value: 'Counselor' },
+        { text: 'Finance', value: 'Finance' },
+        { text: 'Marketing', value: 'Marketing' },
       ],
       onFilter: (value, record) => value === 'all' || record.role === value,
       render: (role) => (
@@ -711,6 +723,14 @@ const UsersPage = () => {
               <Option value="Counselor">
                 <UserOutlined style={{ color: '#52c41a', marginRight: 8 }} />
                 Counselor
+              </Option>
+              <Option value="Finance">
+                <DollarOutlined style={{ color: '#13c2c2', marginRight: 8 }} />
+                Finance
+              </Option>
+              <Option value="Marketing">
+                <BulbOutlined style={{ color: '#fa8c16', marginRight: 8 }} />
+                Marketing
               </Option>
             </Select>
           </Form.Item>

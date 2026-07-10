@@ -4,6 +4,7 @@ import AdminDashboard from '../features/dashboards/AdminDashboard';
 import CounselorDashboard from '../features/dashboards/CounselorDashboard';
 import ProfessionalDashboard from '../pages/ProfessionalDashboard';
 import FinanceDashboard from '../features/dashboards/FinanceDashboard';
+import MarketingDashboard from '../features/dashboards/MarketingDashboard';
 
 const RoleBasedDashboard = () => {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
@@ -28,7 +29,11 @@ const RoleBasedDashboard = () => {
     case ROLES.FINANCE:
       // Finance gets specialized revenue dashboard
       return <FinanceDashboard />;
-    
+
+    case ROLES.MARKETING:
+      // Marketing gets a source-attribution / campaign-focused dashboard
+      return <MarketingDashboard />;
+
     default:
       // Fallback to professional dashboard
       return <ProfessionalDashboard />;
