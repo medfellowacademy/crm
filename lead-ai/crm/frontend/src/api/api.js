@@ -108,7 +108,7 @@ export const uploadAPI = {
 
 // Dashboard API
 export const dashboardAPI = {
-  getStats: () => api.get('/api/dashboard/stats'),
+  getStats: (params) => api.get('/api/dashboard/stats', { params }),
   getFollowupsToday: (assignedTo) =>
     api.get('/api/leads/followups/today', assignedTo ? { params: { assigned_to: assignedTo } } : {}),
   getNotifications: () => api.get('/api/notifications'),
@@ -116,8 +116,8 @@ export const dashboardAPI = {
 
 // Analytics API
 export const analyticsAPI = {
-  getRevenueByCountry: () => api.get('/api/analytics/revenue-by-country'),
-  getConversionFunnel: () => api.get('/api/analytics/conversion-funnel'),
+  getRevenueByCountry: (params) => api.get('/api/analytics/revenue-by-country', { params }),
+  getConversionFunnel: (params) => api.get('/api/analytics/conversion-funnel', { params }),
 };
 
 // Hospitals API
@@ -140,7 +140,7 @@ export const coursesAPI = {
 export const counselorsAPI = {
   getAll: () => api.get('/api/counselors'),
   getPerformance: () => api.get('/api/counselors/performance'),
-  getPerformanceComparison: () => api.get('/api/counselors/performance-comparison'),
+  getPerformanceComparison: (params) => api.get('/api/counselors/performance-comparison', { params }),
   getWorkload: () => api.get('/api/counselors/workload'),
 };
 
@@ -228,12 +228,12 @@ export const mlAPI = {
 
 // Source Attribution API
 export const sourceAnalyticsAPI = {
-  getSourceAnalytics: () => api.get('/api/admin/source-analytics'),
+  getSourceAnalytics: (params) => api.get('/api/admin/source-analytics', { params }),
 };
 
 // Conversion Time API
 export const conversionTimeAPI = {
-  getConversionTime: () => api.get('/api/admin/conversion-time'),
+  getConversionTime: (params) => api.get('/api/admin/conversion-time', { params }),
 };
 
 // Cohort Analysis API

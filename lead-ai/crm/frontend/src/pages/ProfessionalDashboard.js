@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Spin } from 'antd';
+import { Spin, DatePicker, Space, Typography as AntTypography } from 'antd';
 import { motion } from 'framer-motion';
 import {
   TrendingUp,
@@ -17,7 +17,7 @@ import CounselorPerformanceWidget from '../components/CounselorPerformanceWidget
 
 const SEGMENT_COLORS = ['#ef4444', '#f59e0b', '#10b981', '#6b7280'];
 
-const StatCard = ({ title, value, icon: Icon, trend, color }) => (
+const StatCard = ({ title, value, icon: Icon, trend, color, trendLabel = 'vs last period' }) => (
   <motion.div
     whileHover={{ y: -2, boxShadow: '0 8px 24px var(--shadow)' }}
     style={{
@@ -63,7 +63,7 @@ const StatCard = ({ title, value, icon: Icon, trend, color }) => (
           {trend.value}%
         </span>
         <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)' }}>
-          vs last month
+          {trendLabel}
         </span>
       </div>
     )}
@@ -105,19 +105,26 @@ const ChartCard = ({ title, children, action }) => (
 );
 
 const ProfessionalDashboard = () => {
+  const [dateRange, setDateRange] = useState([null, null]);
+  const dateParams = dateRange[0] && dateRange[1] ? {
+    created_from: dateRange[0].startOf('day').toISOString(),
+    created_to: dateRange[1].endOf('day').toISOString(),
+  } : {};
+  const dateKey = [dateParams.created_from, dateParams.created_to];
+
   const { data: stats, isLoading } = useQuery({
-    queryKey: ['dashboardStats'],
-    queryFn: () => dashboardAPI.getStats().then(res => res.data)
+    queryKey: ['dashboardStats', ...dateKey],
+    queryFn: () => dashboardAPI.getStats(dateParams).then(res => res.data)
   });
 
   const { data: revenueByCountry } = useQuery({
-    queryKey: ['revenueByCountry'],
-    queryFn: () => analyticsAPI.getRevenueByCountry().then(res => res.data).catch(() => [])
+    queryKey: ['revenueByCountry', ...dateKey],
+    queryFn: () => analyticsAPI.getRevenueByCountry(dateParams).then(res => res.data).catch(() => [])
   });
 
   const { data: conversionFunnel } = useQuery({
-    queryKey: ['conversionFunnel'],
-    queryFn: () => analyticsAPI.getConversionFunnel().then(res => res.data?.stages || []).catch(() => [])
+    queryKey: ['conversionFunnel', ...dateKey],
+    queryFn: () => analyticsAPI.getConversionFunnel(dateParams).then(res => res.data?.stages || []).catch(() => [])
   });
 
   const { data: recentLeads } = useQuery({
@@ -133,34 +140,36 @@ const ProfessionalDashboard = () => {
     );
   }
 
+  const trends = stats?.trends || {};
+  const trendLabel = dateRange[0] && dateRange[1] ? 'vs prior equal period' : 'vs previous 30 days';
   const statCards = [
     {
       title: 'Total Leads',
       value: stats?.total_leads?.toLocaleString() || '0',
       icon: Users,
       color: '#3b82f6',
-      trend: { value: 12.5, isUp: true },
+      trend: trends.total_leads,
     },
     {
       title: 'Hot Leads',
       value: stats?.hot_leads?.toLocaleString() || '0',
       icon: Flame,
       color: '#ef4444',
-      trend: { value: 8.3, isUp: true },
+      trend: trends.hot_leads,
     },
     {
       title: 'Conversion Rate',
       value: `${stats?.conversion_rate || 0}%`,
       icon: TrendingUp,
       color: '#10b981',
-      trend: { value: 2.1, isUp: false },
+      trend: trends.conversion_rate,
     },
     {
       title: 'Revenue',
       value: `$${(stats?.total_revenue || 0).toLocaleString()}`,
       icon: DollarSign,
       color: '#f59e0b',
-      trend: { value: 15.7, isUp: true },
+      trend: trends.total_revenue,
     },
   ];
 
@@ -178,10 +187,24 @@ const ProfessionalDashboard = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+      {/* Date filter */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <Space direction="vertical" size={2}>
+          <AntTypography.Text type="secondary" style={{ fontSize: 12 }}>
+            Filter by lead creation date (default: last 30 days)
+          </AntTypography.Text>
+          <DatePicker.RangePicker
+            value={dateRange}
+            onChange={v => setDateRange(v || [null, null])}
+            allowClear
+          />
+        </Space>
+      </div>
+
       {/* Stats Grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 24 }}>
         {statCards.map((stat, idx) => (
-          <StatCard key={idx} {...stat} />
+          <StatCard key={idx} {...stat} trendLabel={trendLabel} />
         ))}
       </div>
 

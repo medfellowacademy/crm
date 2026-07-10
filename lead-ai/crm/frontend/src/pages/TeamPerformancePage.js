@@ -1,6 +1,6 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Card, Table, Tag, Avatar, Space, Typography, Alert, Tooltip, Spin } from 'antd';
+import { Card, Table, Tag, Avatar, Space, Typography, Alert, Tooltip, Spin, DatePicker } from 'antd';
 import {
   TrophyOutlined, ClockCircleOutlined, CalendarOutlined,
   WarningOutlined, InfoCircleOutlined,
@@ -30,9 +30,15 @@ function DeltaCell({ value, teamAvg, suffix = '', lowerIsBetter = false }) {
 }
 
 export default function TeamPerformancePage() {
+  const [dateRange, setDateRange] = React.useState([null, null]);
+  const dateParams = dateRange[0] && dateRange[1] ? {
+    created_from: dateRange[0].startOf('day').toISOString(),
+    created_to: dateRange[1].endOf('day').toISOString(),
+  } : {};
+
   const { data, isLoading } = useQuery({
-    queryKey: ['counselor-performance-comparison'],
-    queryFn: () => counselorsAPI.getPerformanceComparison().then(r => r.data),
+    queryKey: ['counselor-performance-comparison', dateParams.created_from, dateParams.created_to],
+    queryFn: () => counselorsAPI.getPerformanceComparison(dateParams).then(r => r.data),
     staleTime: 60000,
   });
 
@@ -123,14 +129,24 @@ export default function TeamPerformancePage() {
 
   return (
     <div>
-      <div style={{ marginBottom: 16 }}>
-        <Title level={3} style={{ margin: 0 }}>
-          <TrophyOutlined style={{ color: '#ffd700', marginRight: 8 }} />
-          Team Performance Comparison
-        </Title>
-        <Text type="secondary">
-          Response time and follow-up cadence, benchmarked against the team average.
-        </Text>
+      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <Title level={3} style={{ margin: 0 }}>
+            <TrophyOutlined style={{ color: '#ffd700', marginRight: 8 }} />
+            Team Performance Comparison
+          </Title>
+          <Text type="secondary">
+            Response time and follow-up cadence, benchmarked against the team average.
+          </Text>
+        </div>
+        <Space direction="vertical" size={2}>
+          <Text type="secondary" style={{ fontSize: 12 }}>Filter by lead creation date</Text>
+          <DatePicker.RangePicker
+            value={dateRange}
+            onChange={v => setDateRange(v || [null, null])}
+            allowClear
+          />
+        </Space>
       </div>
 
       <Alert
@@ -139,7 +155,11 @@ export default function TeamPerformancePage() {
         icon={<WarningOutlined />}
         style={{ marginBottom: 16 }}
         message="Read conversion rate with caution"
-        description="With very few total conversions company-wide, a single counselor's conversion rate is a small-sample statistic that can swing a lot from one enrollment. Response time and follow-up cadence are computed from thousands of notes/activities and are the more statistically stable signals here."
+        description={
+          dateRange[0] && dateRange[1]
+            ? "A date filter is active — with fewer leads in this window, per-counselor conversion rate and cadence are even smaller-sample statistics than usual. Widen the range for more stable comparisons."
+            : "With very few total conversions company-wide, a single counselor's conversion rate is a small-sample statistic that can swing a lot from one enrollment. Response time and follow-up cadence are computed from thousands of notes/activities and are the more statistically stable signals here."
+        }
       />
 
       <Card bodyStyle={{ padding: 0 }}>

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Table, Card, Button, Tag, Statistic, Row, Col, Space, Typography,
-  Tooltip, Badge, Alert, Spin, Modal, message, Divider, Tabs,
+  Tooltip, Badge, Alert, Spin, Modal, message, Divider, Tabs, DatePicker,
 } from 'antd';
 import {
   SyncOutlined, CheckCircleOutlined, ClockCircleOutlined,
@@ -88,9 +88,17 @@ const AdSetLeadsModal = ({ adset, open, onClose }) => {
 
 // ── All Meta Leads table ───────────────────────────────────────────────────────
 const AllMetaLeadsTable = () => {
+  const [dateRange, setDateRange] = useState([null, null]);
+
   const { data, isLoading } = useQuery({
-    queryKey: ['all-meta-leads'],
-    queryFn: () => leadsAPI.getAll({ limit: 2000, meta_only: true }).then(r => r.data?.leads || []),
+    queryKey: ['all-meta-leads', dateRange[0]?.toISOString(), dateRange[1]?.toISOString()],
+    queryFn: () => leadsAPI.getAll({
+      limit: 2000, meta_only: true,
+      ...(dateRange[0] && dateRange[1] ? {
+        created_from: dateRange[0].startOf('day').toISOString(),
+        created_to: dateRange[1].endOf('day').toISOString(),
+      } : {}),
+    }).then(r => r.data?.leads || []),
     staleTime: 2 * 60 * 1000,
   });
 
@@ -113,16 +121,26 @@ const AllMetaLeadsTable = () => {
   ];
 
   return (
-    <Table
-      dataSource={data || []}
-      columns={cols}
-      rowKey="lead_id"
-      loading={isLoading}
-      size="small"
-      pagination={{ pageSize: 50, showSizeChanger: true }}
-      scroll={{ x: 1100 }}
-      locale={{ emptyText: 'No Meta leads synced yet. Click "Sync Now" to import.' }}
-    />
+    <>
+      <div style={{ marginBottom: 12 }}>
+        <DatePicker.RangePicker
+          value={dateRange}
+          onChange={v => setDateRange(v || [null, null])}
+          allowClear
+          placeholder={['Received from', 'to']}
+        />
+      </div>
+      <Table
+        dataSource={data || []}
+        columns={cols}
+        rowKey="lead_id"
+        loading={isLoading}
+        size="small"
+        pagination={{ pageSize: 50, showSizeChanger: true }}
+        scroll={{ x: 1100 }}
+        locale={{ emptyText: 'No Meta leads synced yet. Click "Sync Now" to import.' }}
+      />
+    </>
   );
 };
 

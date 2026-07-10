@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   Table, Card, Button, Tag, Statistic, Row, Col, Space, Typography,
-  Select, message, Modal, Tooltip,
+  Select, message, Modal, Tooltip, DatePicker,
 } from 'antd';
 import {
   GlobalOutlined, ClockCircleOutlined, TeamOutlined,
@@ -32,11 +32,18 @@ const WebsiteLeadsPage = () => {
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
   const [assignTarget, setAssignTarget] = useState(null); // { leadIds: [...] } when modal open
   const [assignCounselor, setAssignCounselor] = useState(null);
+  const [dateRange, setDateRange] = useState([null, null]);
 
   const { data: leads = [], isLoading } = useQuery({
-    queryKey: ['website-leads'],
+    queryKey: ['website-leads', dateRange[0]?.toISOString(), dateRange[1]?.toISOString()],
     queryFn: () =>
-      leadsAPI.getAll({ source: 'Website', limit: 2000 }).then(r => r.data?.leads || []),
+      leadsAPI.getAll({
+        source: 'Website', limit: 2000,
+        ...(dateRange[0] && dateRange[1] ? {
+          created_from: dateRange[0].startOf('day').toISOString(),
+          created_to: dateRange[1].endOf('day').toISOString(),
+        } : {}),
+      }).then(r => r.data?.leads || []),
     staleTime: 30 * 1000,
     refetchInterval: 60 * 1000,
   });
@@ -121,6 +128,12 @@ const WebsiteLeadsPage = () => {
           </Text>
         </div>
         <Space>
+          <DatePicker.RangePicker
+            value={dateRange}
+            onChange={v => setDateRange(v || [null, null])}
+            allowClear
+            placeholder={['Received from', 'to']}
+          />
           <Button
             type="primary"
             disabled={selectedRowKeys.length === 0}

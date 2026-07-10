@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Tabs, Spin, Empty, Table, Tag } from 'antd';
+import { Tabs, Spin, Empty, Table, Tag, DatePicker, Space, Typography } from 'antd';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell, ReferenceLine, LabelList,
@@ -230,10 +230,15 @@ const BreakdownPanel = ({ rows, globalAvg, nameLabel }) => {
 /* ─── Page ─────────────────────────────────────────────── */
 const ConversionTimePage = () => {
   const [tab, setTab] = useState('counselor');
+  const [dateRange, setDateRange] = useState([null, null]);
+  const dateParams = dateRange[0] && dateRange[1] ? {
+    created_from: dateRange[0].startOf('day').toISOString(),
+    created_to: dateRange[1].endOf('day').toISOString(),
+  } : {};
 
   const { data, isLoading } = useQuery({
-    queryKey: ['conversion-time'],
-    queryFn: () => conversionTimeAPI.getConversionTime().then(r => r.data),
+    queryKey: ['conversion-time', dateParams.created_from, dateParams.created_to],
+    queryFn: () => conversionTimeAPI.getConversionTime(dateParams).then(r => r.data),
     staleTime: 5 * 60 * 1000,
   });
 
@@ -278,14 +283,26 @@ const ConversionTimePage = () => {
     <div style={{ padding: '0 0 48px' }}>
 
       {/* Header */}
-      <div style={{ marginBottom: 28 }}>
-        <h1 style={{ fontSize: 28, fontWeight: 800, margin: 0 }}>
-          Time-to-Conversion Funnel
-        </h1>
-        <p style={{ color: 'var(--text-secondary,#6b7280)', marginTop: 6, marginBottom: 0, fontSize: 14 }}>
-          How long does it take a lead to move from <strong>Fresh → Enrolled</strong>?
-          Broken down by counselor, course, and country.
-        </p>
+      <div style={{ marginBottom: 28, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <h1 style={{ fontSize: 28, fontWeight: 800, margin: 0 }}>
+            Time-to-Conversion Funnel
+          </h1>
+          <p style={{ color: 'var(--text-secondary,#6b7280)', marginTop: 6, marginBottom: 0, fontSize: 14 }}>
+            How long does it take a lead to move from <strong>Fresh → Enrolled</strong>?
+            Broken down by counselor, course, and country.
+          </p>
+        </div>
+        <Space direction="vertical" size={2}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            Filter by lead creation date
+          </Typography.Text>
+          <DatePicker.RangePicker
+            value={dateRange}
+            onChange={v => setDateRange(v || [null, null])}
+            allowClear
+          />
+        </Space>
       </div>
 
       {/* KPI strip */}

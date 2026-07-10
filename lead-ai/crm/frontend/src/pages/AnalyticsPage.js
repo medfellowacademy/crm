@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Row, Col, Card, Table, Spin, Tag } from 'antd';
+import { Row, Col, Card, Table, Spin, Tag, DatePicker, Space, Typography } from 'antd';
 import {
   BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
@@ -75,22 +75,28 @@ const Rank = ({ n }) => {
 /* ── main ─────────────────────────────────────────────── */
 const AnalyticsPage = () => {
   const [sourceSort, setSourceSort] = useState('conversion_rate');
+  const [dateRange, setDateRange] = useState([null, null]);
+  const dateParams = dateRange[0] && dateRange[1] ? {
+    created_from: dateRange[0].startOf('day').toISOString(),
+    created_to: dateRange[1].endOf('day').toISOString(),
+  } : {};
+  const dateKey = [dateParams.created_from, dateParams.created_to];
 
   const { data: revenueByCountry, isLoading: revenueLoading } = useQuery({
-    queryKey: ['revenueByCountry'],
-    queryFn: () => analyticsAPI.getRevenueByCountry().then(res => res.data),
+    queryKey: ['revenueByCountry', ...dateKey],
+    queryFn: () => analyticsAPI.getRevenueByCountry(dateParams).then(res => res.data),
   });
 
   const { data: conversionFunnel } = useQuery({
-    queryKey: ['conversionFunnel'],
-    queryFn: () => analyticsAPI.getConversionFunnel().then(res => res.data),
+    queryKey: ['conversionFunnel', ...dateKey],
+    queryFn: () => analyticsAPI.getConversionFunnel(dateParams).then(res => res.data),
   });
 
   // Fetching up to 2000 leads for chart data (source & course distribution).
   // These are lightweight columns only — no heavy AI text fields.
   const { data: leads } = useQuery({
-    queryKey: ['analytics-leads-sample'],
-    queryFn: () => leadsAPI.getAll({ limit: 10000, skip: 0 }).then(res => res.data?.leads || []),
+    queryKey: ['analytics-leads-sample', ...dateKey],
+    queryFn: () => leadsAPI.getAll({ limit: 10000, skip: 0, ...dateParams }).then(res => res.data?.leads || []),
     staleTime: 5 * 60 * 1000,
   });
 
@@ -100,8 +106,8 @@ const AnalyticsPage = () => {
   });
 
   const { data: srcData, isLoading: srcLoading } = useQuery({
-    queryKey: ['source-analytics'],
-    queryFn: () => sourceAnalyticsAPI.getSourceAnalytics().then(res => res.data),
+    queryKey: ['source-analytics', ...dateKey],
+    queryFn: () => sourceAnalyticsAPI.getSourceAnalytics(dateParams).then(res => res.data),
     staleTime: 5 * 60 * 1000,
   });
 
@@ -225,11 +231,23 @@ const AnalyticsPage = () => {
 
   return (
     <div style={{ padding: '0 0 40px' }}>
-      <div style={{ marginBottom: 28 }}>
-        <h1 style={{ fontSize: 28, fontWeight: 700, margin: 0 }}>Analytics & Insights</h1>
-        <p style={{ color: 'var(--text-secondary)', marginTop: 4, marginBottom: 0 }}>
-          Revenue, conversion, and source attribution across the CRM
-        </p>
+      <div style={{ marginBottom: 28, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <h1 style={{ fontSize: 28, fontWeight: 700, margin: 0 }}>Analytics & Insights</h1>
+          <p style={{ color: 'var(--text-secondary)', marginTop: 4, marginBottom: 0 }}>
+            Revenue, conversion, and source attribution across the CRM
+          </p>
+        </div>
+        <Space direction="vertical" size={2}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            Filter by lead creation date
+          </Typography.Text>
+          <DatePicker.RangePicker
+            value={dateRange}
+            onChange={v => setDateRange(v || [null, null])}
+            allowClear
+          />
+        </Space>
       </div>
 
       {/* ── SOURCE ATTRIBUTION SECTION ────────────────────── */}
