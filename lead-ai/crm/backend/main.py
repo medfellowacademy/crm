@@ -5320,6 +5320,12 @@ async def upload_lead_document(
             docs.append(new_doc)
             supabase_data.update_lead(lead_id, {'documents': docs})
 
+        # Without this, /api/leads keeps serving its 90s-old cached response,
+        # so a just-uploaded receipt/document silently doesn't show up on the
+        # Payments page until the cache expires - looking like the upload
+        # failed even though it succeeded.
+        invalidate_cache(LEAD_CACHE)
+
         return {'url': url, 'name': file.filename, 'type': doc_type}
     except HTTPException:
         raise

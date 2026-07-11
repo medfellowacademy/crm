@@ -171,11 +171,11 @@ const ExpandedRow = ({ lead, onUpload, uploading }) => {
                 </Button>
               </div>
             ))}
-            <Upload showUploadList={false}
+            <Upload showUploadList={false} multiple
               customRequest={({ file }) => onUpload(lead.lead_id, file, 'document')}>
               <Button size="small" icon={<PlusOutlined />} type="dashed"
                 loading={uploading === `${lead.lead_id}-document`}>
-                Add Document
+                Add Document(s)
               </Button>
             </Upload>
           </div>
@@ -275,18 +275,40 @@ const PaymentsPage = () => {
   const counselors = [...new Set(leads.map(l => l.assigned_to).filter(Boolean))];
   const courses    = [...new Set(leads.map(l => l.course_interested).filter(Boolean))];
 
-  const handleUpload = async (leadId, file, docType) => {
+  // Uploads must run one-at-a-time per lead+docType: the backend appends to
+  // the `documents` array via read-modify-write (fetch lead -> push -> save
+  // whole array), so firing several uploads for the same lead concurrently
+  // races and silently drops all but the last one. AntD's Upload calls
+  // customRequest once per selected file but does NOT wait for the previous
+  // call to finish, so selecting multiple files at once would otherwise
+  // trigger exactly that race — this queue chains them per key instead.
+  const uploadChainRef = useRef({});
+  const uploadCountRef = useRef({});
+
+  const handleUpload = (leadId, file, docType) => {
     const key = `${leadId}-${docType}`;
+    uploadCountRef.current[key] = (uploadCountRef.current[key] || 0) + 1;
     setUploading(key);
-    try {
-      await uploadAPI.uploadLeadDocument(leadId, file, docType);
-      queryClient.invalidateQueries({ queryKey: ['enrolled-leads'] });
-      message.success(`${docType === 'receipt' ? 'Receipt' : 'Document'} uploaded`);
-    } catch {
-      message.error('Upload failed');
-    } finally {
-      setUploading(null);
-    }
+
+    const prevChain = uploadChainRef.current[key] || Promise.resolve();
+    const thisChain = prevChain
+      .catch(() => {}) // a prior failure shouldn't block the rest of the queue
+      .then(() => uploadAPI.uploadLeadDocument(leadId, file, docType))
+      .then(() => {
+        queryClient.invalidateQueries({ queryKey: ['enrolled-leads'] });
+      })
+      .catch(() => {
+        message.error(`Failed to upload ${file.name}`);
+      })
+      .finally(() => {
+        uploadCountRef.current[key] -= 1;
+        if (uploadCountRef.current[key] <= 0) {
+          setUploading(null);
+          message.success(docType === 'receipt' ? 'Receipt uploaded' : 'Document(s) uploaded');
+        }
+      });
+
+    uploadChainRef.current[key] = thisChain;
   };
 
   const columns = [

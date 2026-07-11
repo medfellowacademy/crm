@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -214,10 +214,29 @@ const LeadDetails = () => {
   });
   const allUsers = Array.isArray(usersData) ? usersData : (usersData?.users || []);
 
+  // Set right before mutate() in handleEnrollmentSave so onSuccess below can
+  // tell "just enrolled" apart from any other field edit, without changing
+  // the mutation's shared signature.
+  const justEnrolledRef = useRef(false);
+
   // Update lead mutation
   const updateLeadMutation = useMutation({
     mutationFn: (data) => leadsAPI.update(leadId, data),
     onSuccess: () => {
+      // Enrolling is the moment a counselor finishes entering fee/EMI
+      // details — send them straight to Payments, where every enrolled
+      // lead (theirs, if they're a counselor) lives for uploading receipts
+      // and editing EMIs/amounts later, instead of leaving them on the
+      // lead page with no obvious next step.
+      if (justEnrolledRef.current) {
+        justEnrolledRef.current = false;
+        message.success('Lead enrolled! Taking you to Payments to upload the receipt…');
+        queryClient.invalidateQueries({ queryKey: ['lead', leadId] });
+        queryClient.invalidateQueries({ queryKey: ['leads'] });
+        navigate('/payments');
+        return;
+      }
+
       message.success('Lead updated successfully!');
       setIsEditing(false);
       // Invalidate and refetch to ensure UI updates
@@ -226,6 +245,7 @@ const LeadDetails = () => {
       refetch();
     },
     onError: (error) => {
+      justEnrolledRef.current = false;
       message.error(`Failed to update lead: ${error.message}`);
     },
   });
@@ -345,6 +365,7 @@ const LeadDetails = () => {
   };
 
   const handleEnrollmentSave = (data) => {
+    justEnrolledRef.current = true;
     updateLeadMutation.mutate(data);
     setEnrollmentModal(false);
   };
