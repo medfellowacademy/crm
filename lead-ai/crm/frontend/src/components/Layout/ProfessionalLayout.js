@@ -4,38 +4,22 @@ import { useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { Drawer } from 'antd';
 import {
-  LayoutDashboard,
   Users,
-  Hospital,
-  BookOpen,
-  BarChart3,
   ChevronLeft,
-  TrendingUp,
-  GitBranch,
-  UserPlus,
-  Activity,
-  Search,
-  Shield,
-  LogOut,
+  ChevronDown,
   CalendarClock,
+  GitBranch,
   DollarSign,
-  Settings,
-  Timer,
-  Users2,
-  ShieldCheck,
-  TrendingDown,
-  ClipboardList,
-  Share2,
-  Globe,
-  Bot,
-  Trophy,
   MapPin,
-  Building2,
+  Search,
+  LogOut,
 } from 'lucide-react';
 import SmartNotifications from '../../features/notifications/SmartNotifications';
 import { isFeatureEnabled } from '../../config/featureFlags';
 import { authAPI, aiSearchAPI, leadsAPI, usersAPI, dashboardAPI, coursesAPI, systemAPI } from '../../api/api';
-import { hasPermission, ROLES } from '../../config/rbac';
+import {
+  DEPARTMENTS, GENERAL_PAGES, COUNSELOR_PAGES, ADMIN_ONLY_PAGES, userDepartments,
+} from '../../config/departments';
 
 
 // Global Search Component
@@ -217,63 +201,92 @@ const ProfessionalLayout = ({ children }) => {
     }
   }, [queryClient]);
 
-  const menuItems = [
-    { key: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-    { key: '/departments', icon: Building2, label: 'Departments' },
-    { key: '/ai-chat', icon: Bot, label: 'MedFellow AI Chat' },
+  // ── Department-grouped navigation ──────────────────────────────────────────
+  // The sidebar used to be one flat ~24-item list filtered by role, which made
+  // "which page do I need?" a scavenger hunt. Now it renders the GENERAL pages
+  // flat, then one collapsible group per department the user can access
+  // (explicit per-user grants from the Team page, falling back to role
+  // defaults) — the same config that drives the Departments hub.
+  const accessibleDepts = userDepartments(currentUser);
+
+  // Counselors keep their day-to-day pages flat (no groups to dig through).
+  const counselorItems = userRole === 'Counselor' ? [
     { key: '/attendance', icon: MapPin, label: 'Attendance' },
     { key: '/followups', icon: CalendarClock, label: "Today's Follow-ups" },
     { key: '/leads', icon: Users, label: 'Leads' },
     { key: '/pipeline', icon: GitBranch, label: 'Pipeline' },
-    { key: '/lead-analysis', icon: TrendingUp, label: 'Lead Analysis' },
-    { key: '/hospitals', icon: Hospital, label: 'Hospitals' },
-    { key: '/courses', icon: BookOpen, label: 'Courses' },
-    { key: '/users', icon: UserPlus, label: 'Team' },
-    { key: '/team-performance', icon: Trophy, label: 'Team Performance' },
-    { key: '/user-activity', icon: Activity, label: 'User Activity' },
-    { key: '/lead-update-activity', icon: ClipboardList, label: 'Lead Updates' },
-    { key: '/analytics', icon: BarChart3, label: 'Analytics' },
-    { key: '/conversion-time', icon: Timer, label: 'Conversion Time' },
-    { key: '/cohort-analysis', icon: Users2, label: 'Cohort Analysis' },
-    { key: '/sla', icon: ShieldCheck, label: 'SLA Tracker' },
-    { key: '/score-decay', icon: TrendingDown, label: 'Score Decay' },
-    { key: '/audit-logs', icon: Shield, label: 'Audit Logs' },
-    { key: '/meta-leads', icon: Share2, label: 'Meta Leads' },
-    { key: '/website-leads', icon: Globe, label: 'Website Leads' },
     { key: '/payments', icon: DollarSign, label: 'Payments' },
-    { key: '/settings', icon: Settings, label: 'Settings' },
-  ];
+  ] : [];
 
-  // Filter menu items based on user role
-  const roleMenuItems = menuItems.filter(item => {
-    const visibleToAllRoles = ['/dashboard', '/ai-chat', '/attendance', '/followups', '/leads', '/pipeline', '/settings', '/payments'];
-    // Cross-department overview hub — relevant to anyone who oversees or
-    // reports on more than their own single-team slice of the business.
-    const deptOverseers = ['/departments'];
-    const adminManagerFinance = ['/lead-analysis', '/analytics', '/conversion-time', '/cohort-analysis', '/sla', '/score-decay'];
-    const adminManager = ['/hospitals', '/courses', '/user-activity', '/lead-update-activity'];
-    // Lead-generation / channel pages — Marketing owns these day-to-day.
-    const adminManagerMarketing = ['/meta-leads', '/website-leads'];
-    const adminOnly = ['/users', '/audit-logs', '/team-performance'];
+  const generalItems = [...GENERAL_PAGES.slice(0, 3), ...counselorItems, ...GENERAL_PAGES.slice(3)];
 
-    if (visibleToAllRoles.includes(item.key)) return true;
-    if (deptOverseers.includes(item.key)) {
-      return [ROLES.ADMIN, ROLES.MANAGER, ROLES.TEAM_LEADER, ROLES.FINANCE, ROLES.MARKETING].includes(userRole);
-    }
-    if (adminManagerFinance.includes(item.key)) {
-      return [ROLES.ADMIN, ROLES.MANAGER, ROLES.TEAM_LEADER, ROLES.FINANCE, ROLES.MARKETING].includes(userRole);
-    }
-    if (adminManager.includes(item.key)) {
-      return [ROLES.ADMIN, ROLES.MANAGER, ROLES.TEAM_LEADER].includes(userRole);
-    }
-    if (adminManagerMarketing.includes(item.key)) {
-      return [ROLES.ADMIN, ROLES.MANAGER, ROLES.TEAM_LEADER, ROLES.MARKETING].includes(userRole);
-    }
-    if (adminOnly.includes(item.key)) {
-      return userRole === ROLES.ADMIN;
-    }
-    return false;
+  const deptGroups = accessibleDepts.map(key => {
+    const dept = DEPARTMENTS[key];
+    return {
+      ...dept,
+      pages: dept.pages.filter(p =>
+        userRole === 'Super Admin' || !ADMIN_ONLY_PAGES.includes(p.key)
+      ),
+    };
+  }).filter(g => g.pages.length > 0);
+
+  // Flat list of everything visible — used for the header title lookup and
+  // for icon-only rendering when the sidebar is collapsed.
+  const allVisibleItems = [
+    ...generalItems,
+    ...deptGroups.flatMap(g => g.pages),
+  ].filter((item, i, arr) => arr.findIndex(x => x.key === item.key) === i);
+
+  // Expand the group containing the current page by default.
+  const [expandedDepts, setExpandedDepts] = useState(() => {
+    const initial = new Set();
+    deptGroups.forEach(g => {
+      if (g.pages.some(p => p.key === location.pathname)) initial.add(g.key);
+    });
+    return initial;
   });
+
+  const toggleDept = (key) => {
+    setExpandedDepts(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+
+  const navButtonStyle = (isActive) => ({
+    width: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+    padding: collapsed ? '12px' : '10px 16px',
+    marginBottom: 2,
+    borderRadius: 8,
+    border: 'none',
+    background: isActive ? 'var(--bg-tertiary)' : 'transparent',
+    color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
+    cursor: 'pointer',
+    fontSize: 'var(--text-sm)',
+    fontWeight: isActive ? 500 : 400,
+    justifyContent: collapsed ? 'center' : 'flex-start',
+  });
+
+  const NavItem = ({ item, indent = false }) => {
+    const Icon = item.icon;
+    const isActive = location.pathname === item.key;
+    return (
+      <motion.button
+        onClick={() => navigate(item.key)}
+        onMouseEnter={() => prefetchRoute(item.key)}
+        whileHover={{ x: 2 }}
+        whileTap={{ scale: 0.98 }}
+        style={{ ...navButtonStyle(isActive), paddingLeft: !collapsed && indent ? 28 : undefined }}
+      >
+        <Icon size={indent ? 17 : 20} />
+        {!collapsed && <span>{item.label}</span>}
+      </motion.button>
+    );
+  };
 
   return (
     <div style={{ display: 'flex', height: '100vh', background: 'var(--bg-secondary)' }}>
@@ -328,39 +341,45 @@ const ProfessionalLayout = ({ children }) => {
 
         {/* Navigation */}
         <nav style={{ flex: 1, padding: '16px 8px', overflowY: 'auto' }}>
-          {roleMenuItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = location.pathname === item.key;
-            
-            return (
-              <motion.button
-                key={item.key}
-                onClick={() => navigate(item.key)}
-                onMouseEnter={() => prefetchRoute(item.key)}
-                whileHover={{ x: 2 }}
-                whileTap={{ scale: 0.98 }}
-                style={{
-                  width: '100%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 12,
-                  padding: collapsed ? '12px' : '12px 16px',
-                  marginBottom: 4,
-                  borderRadius: 8,
-                  border: 'none',
-                  background: isActive ? 'var(--bg-tertiary)' : 'transparent',
-                  color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
-                  cursor: 'pointer',
-                  fontSize: 'var(--text-sm)',
-                  fontWeight: isActive ? 500 : 400,
-                  justifyContent: collapsed ? 'center' : 'flex-start',
-                }}
-              >
-                <Icon size={20} />
-                {!collapsed && <span>{item.label}</span>}
-              </motion.button>
-            );
-          })}
+          {collapsed ? (
+            // Icon-only mode: group headers make no sense, show everything flat
+            allVisibleItems.map(item => <NavItem key={item.key} item={item} />)
+          ) : (
+            <>
+              {generalItems.map(item => <NavItem key={item.key} item={item} />)}
+
+              {deptGroups.map(group => {
+                const GroupIcon = group.icon;
+                const isOpen = expandedDepts.has(group.key);
+                const hasActivePage = group.pages.some(p => p.key === location.pathname);
+                return (
+                  <div key={group.key} style={{ marginTop: 6 }}>
+                    <button
+                      onClick={() => toggleDept(group.key)}
+                      style={{
+                        width: '100%', display: 'flex', alignItems: 'center', gap: 10,
+                        padding: '9px 16px', borderRadius: 8, border: 'none',
+                        background: 'transparent', cursor: 'pointer',
+                        color: hasActivePage ? group.color : 'var(--text-tertiary)',
+                        fontSize: 11, fontWeight: 700, letterSpacing: '0.06em',
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      <GroupIcon size={15} color={group.color} />
+                      <span style={{ flex: 1, textAlign: 'left' }}>{group.name}</span>
+                      <motion.span animate={{ rotate: isOpen ? 0 : -90 }} transition={{ duration: 0.15 }}
+                        style={{ display: 'flex' }}>
+                        <ChevronDown size={14} />
+                      </motion.span>
+                    </button>
+                    {isOpen && group.pages.map(page => (
+                      <NavItem key={`${group.key}-${page.key}`} item={page} indent />
+                    ))}
+                  </div>
+                );
+              })}
+            </>
+          )}
         </nav>
 
         {/* Collapse Toggle */}
@@ -403,7 +422,7 @@ const ProfessionalLayout = ({ children }) => {
           padding: '0 24px',
         }}>
           <h1 style={{ fontSize: 'var(--text-xl)', fontWeight: 600, color: 'var(--text-primary)' }}>
-            {roleMenuItems.find(item => item.key === location.pathname)?.label || 'Dashboard'}
+            {allVisibleItems.find(item => item.key === location.pathname)?.label || 'Dashboard'}
           </h1>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>

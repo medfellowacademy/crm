@@ -106,6 +106,11 @@ export const uploadAPI = {
   },
 };
 
+// Departments KPI API
+export const departmentsAPI = {
+  getKpis: () => api.get('/api/departments/kpis'),
+};
+
 // Dashboard API
 export const dashboardAPI = {
   getStats: (params) => api.get('/api/dashboard/stats', { params }),

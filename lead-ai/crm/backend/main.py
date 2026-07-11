@@ -1074,16 +1074,62 @@ class CounselorResponse(BaseModel):
     
     model_config = ConfigDict(from_attributes=True)
 
-VALID_ROLES = {"Super Admin", "Manager", "Team Leader", "Counselor"}
+# Finance/Marketing were selectable in the frontend role dropdown but this
+# set silently rejected them at create/update time — keep the two in sync.
+VALID_ROLES = {"Super Admin", "Manager", "Team Leader", "Counselor", "Finance", "Marketing"}
+
+# Department keys a user can be granted access to (see frontend
+# config/departments.js for the page groupings each key unlocks).
+VALID_DEPARTMENTS = {"sales", "marketing", "finance", "operations", "administration"}
+
+# All page routes that can be individually granted to a user.
+VALID_PAGE_KEYS = {
+    '/leads', '/pipeline', '/followups', '/lead-analysis', '/team-performance',
+    '/conversion-time', '/cohort-analysis',
+    '/meta-leads', '/website-leads', '/analytics',
+    '/payments',
+    '/hospitals', '/courses', '/attendance', '/user-activity',
+    '/lead-update-activity', '/sla', '/score-decay',
+    '/users', '/audit-logs',
+}
+
+def _validate_page_grants_value(v):
+    """page_grants is a list of page route keys ('/leads', '/payments', ...)
+    that restricts which pages the user can access within their departments.
+    Empty / None = no restriction, full department access."""
+    if not v:
+        return v
+    if not isinstance(v, list):
+        raise ValueError('page_grants must be a list of page route keys')
+    bad = [p for p in v if p not in VALID_PAGE_KEYS]
+    if bad:
+        raise ValueError(f'invalid page keys: {bad}. Valid: {", ".join(sorted(VALID_PAGE_KEYS))}')
+    return v
+
+def _validate_departments_value(v):
+    """departments is a list of department keys ('sales', 'finance', ...)
+    granting a user access to those sections of the app. None/[] means
+    'no explicit grants — fall back to role defaults' on the frontend."""
+    if v is None:
+        return None
+    if not isinstance(v, list):
+        raise ValueError('departments must be a list of department keys')
+    bad = [d for d in v if d not in VALID_DEPARTMENTS]
+    if bad:
+        raise ValueError(f'invalid departments: {bad}. Valid: {", ".join(sorted(VALID_DEPARTMENTS))}')
+    return v
+
 
 class UserCreate(BaseModel):
     full_name: str
     email: EmailStr
     phone: Optional[str] = None
     password: str
-    role: str  # Super Admin, Manager, Team Leader, Counselor
+    role: str  # Super Admin, Manager, Team Leader, Counselor, Finance, Marketing
     reports_to: Optional[int] = None
     is_active: Optional[bool] = True
+    departments: Optional[list] = None  # e.g. ["sales","finance"]
+    page_grants: Optional[list] = None  # e.g. ["/leads","/payments"] — restricts pages within departments
 
     @field_validator('phone', mode='before')
     @classmethod
@@ -1099,6 +1145,16 @@ class UserCreate(BaseModel):
             raise ValueError(f'role must be one of: {", ".join(sorted(VALID_ROLES))}')
         return v
 
+    @field_validator('departments')
+    @classmethod
+    def _validate_departments(cls, v):
+        return _validate_departments_value(v)
+
+    @field_validator('page_grants')
+    @classmethod
+    def _validate_page_grants(cls, v):
+        return _validate_page_grants_value(v)
+
 class UserUpdate(BaseModel):
     full_name: Optional[str] = None
     email: Optional[EmailStr] = None
@@ -1107,6 +1163,8 @@ class UserUpdate(BaseModel):
     role: Optional[str] = None
     reports_to: Optional[int] = None
     is_active: Optional[bool] = None
+    departments: Optional[list] = None
+    page_grants: Optional[list] = None
 
     @field_validator('phone', mode='before')
     @classmethod
@@ -1114,6 +1172,16 @@ class UserUpdate(BaseModel):
         if isinstance(v, str) and v.strip() == '':
             return None
         return v
+
+    @field_validator('departments')
+    @classmethod
+    def _validate_departments(cls, v):
+        return _validate_departments_value(v)
+
+    @field_validator('page_grants')
+    @classmethod
+    def _validate_page_grants(cls, v):
+        return _validate_page_grants_value(v)
 
 class UserResponse(BaseModel):
     id: int
@@ -1123,6 +1191,8 @@ class UserResponse(BaseModel):
     role: str
     reports_to: Optional[int] = None
     is_active: bool
+    departments: Optional[list] = None
+    page_grants: Optional[list] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -2045,6 +2115,8 @@ async def login(request: Request, body: LoginRequest):
             "role": user.get('role'),
             "phone": user.get('phone'),
             "is_active": user.get('is_active', True),
+            "departments": user.get('departments') or [],
+            "page_grants": user.get('page_grants') or [],
         }
     }
 
@@ -3985,6 +4057,87 @@ async def get_dashboard_stats(request: Request, created_from: Optional[str] = No
             leads_today=0, leads_this_week=0, leads_this_month=0, avg_ai_score=0
         )
 
+@app.get("/api/departments/kpis")
+async def get_department_kpis(current_user: dict = Depends(get_current_user)):
+    """Real-time KPI scoreboard for each department card on the hub page."""
+    now = datetime.now(_IST)
+    today_str = now.date().isoformat()
+    week_start = (now - timedelta(days=now.weekday())).date().isoformat()
+    month_start = now.date().replace(day=1).isoformat()
+
+    try:
+        # ── Sales ───────────────────────────────────────────────────────────────
+        today_q   = supabase_data.client.table('leads').select('id', count='exact').gte('created_at', today_str).execute()
+        week_q    = supabase_data.client.table('leads').select('id', count='exact').gte('created_at', week_start).execute()
+        total_q   = supabase_data.client.table('leads').select('id', count='exact').execute()
+        enrolled_q= supabase_data.client.table('leads').select('id', count='exact').eq('status', 'Enrolled').execute()
+
+        total_leads    = total_q.count   or 0
+        enrolled_count = enrolled_q.count or 0
+        conv_rate      = round(enrolled_count / max(total_leads, 1) * 100, 1)
+
+        # ── Marketing ───────────────────────────────────────────────────────────
+        meta_q    = supabase_data.client.table('leads').select('id', count='exact').ilike('source', '%meta%').gte('created_at', week_start).execute()
+        website_q = supabase_data.client.table('leads').select('id', count='exact').ilike('source', '%website%').gte('created_at', week_start).execute()
+
+        # ── Finance ─────────────────────────────────────────────────────────────
+        # Sum actual_revenue across all enrolled leads (paginated)
+        collected = 0.0
+        _off = 0
+        while True:
+            _batch = supabase_data.client.table('leads').select('actual_revenue') \
+                .eq('status', 'Enrolled').range(_off, _off + 999).execute()
+            if not _batch.data:
+                break
+            collected += sum(r.get('actual_revenue') or 0 for r in _batch.data)
+            if len(_batch.data) < 1000:
+                break
+            _off += 1000
+
+        month_rev_q = supabase_data.client.table('leads').select('actual_revenue') \
+            .eq('status', 'Enrolled').gte('updated_at', month_start).execute()
+        month_collected = sum(r.get('actual_revenue') or 0 for r in (month_rev_q.data or []))
+
+        # ── Operations ──────────────────────────────────────────────────────────
+        att_q = supabase_data.client.table('attendance').select('status').eq('date', today_str).execute()
+        present_today = sum(1 for r in (att_q.data or []) if r.get('status') in ('present', 'late'))
+
+        # ── Administration ──────────────────────────────────────────────────────
+        users_q     = supabase_data.client.table('users').select('is_active').execute()
+        total_users = len(users_q.data or [])
+        active_users= sum(1 for u in (users_q.data or []) if u.get('is_active'))
+
+        return {
+            "sales": {
+                "leads_today":      today_q.count  or 0,
+                "leads_this_week":  week_q.count   or 0,
+                "total_enrolled":   enrolled_count,
+                "conversion_rate":  conv_rate,
+            },
+            "marketing": {
+                "meta_leads_this_week":    meta_q.count    or 0,
+                "website_leads_this_week": website_q.count or 0,
+                "new_leads_this_week":     week_q.count    or 0,
+            },
+            "finance": {
+                "total_collected":     round(collected, 2),
+                "collected_this_month": round(month_collected, 2),
+                "enrolled_count":      enrolled_count,
+            },
+            "operations": {
+                "present_today": present_today,
+                "total_staff":   total_users,
+            },
+            "administration": {
+                "total_users":  total_users,
+                "active_users": active_users,
+            },
+        }
+    except Exception as e:
+        logger.error(f"Department KPIs error: {e}")
+        return {}
+
+
 @app.get("/api/counselors", response_model=List[CounselorResponse])
 async def get_counselors():
     """Get all counselors from users table"""
@@ -4253,6 +4406,8 @@ async def create_user(user: UserCreate):
         "role": user.role,
         "reports_to": user.reports_to,
         "is_active": user.is_active,
+        "departments": user.departments,
+        "page_grants": user.page_grants,
         "created_at": datetime.utcnow().isoformat(),
         "updated_at": datetime.utcnow().isoformat(),
     }

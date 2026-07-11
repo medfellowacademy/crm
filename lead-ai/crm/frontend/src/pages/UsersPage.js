@@ -24,6 +24,7 @@ import {
   Divider,
   Modal,
   Alert,
+  Checkbox,
 } from 'antd';
 import {
   UserOutlined,
@@ -44,6 +45,7 @@ import {
   BulbOutlined,
 } from '@ant-design/icons';
 import { leadsAPI, usersAPI } from '../api/api';
+import { DEPARTMENT_OPTIONS, DEPARTMENTS } from '../config/departments';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -60,6 +62,8 @@ const UsersPage = () => {
   const [passwordTargetUser, setPasswordTargetUser] = useState(null);
   const [form] = Form.useForm();
   const [passwordResetForm] = Form.useForm();
+  // Watch selected departments to show/hide the page-level grant checkboxes
+  const watchedDepts = Form.useWatch('departments', form) || [];
 
   // Fetch users
   const { data: usersData, isLoading } = useQuery({
@@ -348,6 +352,38 @@ const UsersPage = () => {
           {role}
         </Tag>
       ),
+    },
+    {
+      title: 'Departments / Pages',
+      dataIndex: 'departments',
+      key: 'departments',
+      width: 200,
+      render: (departments, record) => {
+        if (record.role === 'Super Admin') return <Tag color="gold">All</Tag>;
+        const deps = Array.isArray(departments) ? departments.filter(d => DEPARTMENTS[d]) : [];
+        const grants = Array.isArray(record.page_grants) ? record.page_grants : [];
+        return (
+          <div>
+            {deps.length === 0
+              ? <Text type="secondary" style={{ fontSize: 12 }}>Role defaults</Text>
+              : <Space size={2} wrap>
+                  {deps.map(d => (
+                    <Tag key={d} color={DEPARTMENTS[d].color} style={{ marginBottom: 2 }}>
+                      {DEPARTMENTS[d].name}
+                    </Tag>
+                  ))}
+                </Space>
+            }
+            {grants.length > 0 && (
+              <Tooltip title={grants.join(', ')}>
+                <Tag style={{ marginTop: 3, fontSize: 11, cursor: 'default' }} color="blue">
+                  {grants.length} page{grants.length !== 1 ? 's' : ''} restricted
+                </Tag>
+              </Tooltip>
+            )}
+          </div>
+        );
+      },
     },
     {
       title: 'Contact',
@@ -734,6 +770,53 @@ const UsersPage = () => {
               </Option>
             </Select>
           </Form.Item>
+
+          <Form.Item
+            name="departments"
+            label="Department Access"
+            help="Which sections of the CRM this user can open. Leave empty to use the role's defaults. Super Admins always see everything."
+          >
+            <Select
+              size="large"
+              mode="multiple"
+              allowClear
+              placeholder="Role defaults (leave empty) or pick departments"
+              options={DEPARTMENT_OPTIONS}
+            />
+          </Form.Item>
+
+          {watchedDepts.length > 0 && (
+            <Form.Item
+              name="page_grants"
+              label="Page Restrictions"
+              help="Leave empty to grant all pages in the departments above. Check specific pages to restrict access to only those."
+            >
+              <Checkbox.Group style={{ width: '100%' }}>
+                {watchedDepts.map(deptKey => {
+                  const dept = DEPARTMENTS[deptKey];
+                  if (!dept) return null;
+                  const Icon = dept.icon;
+                  return (
+                    <div key={deptKey} style={{ marginBottom: 12 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                        <Icon size={14} color={dept.color} />
+                        <Text strong style={{ fontSize: 13, color: dept.color }}>{dept.name}</Text>
+                      </div>
+                      <Row gutter={[8, 4]}>
+                        {dept.pages.map(page => (
+                          <Col span={12} key={page.key}>
+                            <Checkbox value={page.key}>
+                              <Text style={{ fontSize: 12 }}>{page.label}</Text>
+                            </Checkbox>
+                          </Col>
+                        ))}
+                      </Row>
+                    </div>
+                  );
+                })}
+              </Checkbox.Group>
+            </Form.Item>
+          )}
 
           <Form.Item
             name="reports_to"
