@@ -107,7 +107,7 @@ export const GENERAL_PAGES = [
 
 // Pages counselors need day-to-day even though they belong to Sales/Finance
 // department groups — counselors keep them without any department grant.
-export const COUNSELOR_PAGES = ['/attendance', '/followups', '/leads', '/pipeline', '/payments'];
+export const COUNSELOR_PAGES = ['/attendance', '/followups', '/leads', '/pipeline', '/payments', '/lead-update-activity'];
 
 // Even inside a granted department, these remain Super Admin-only.
 export const ADMIN_ONLY_PAGES = ['/users', '/audit-logs'];

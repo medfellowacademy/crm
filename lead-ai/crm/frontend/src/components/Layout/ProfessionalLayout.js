@@ -13,6 +13,7 @@ import {
   MapPin,
   Search,
   LogOut,
+  ClipboardList,
 } from 'lucide-react';
 import SmartNotifications from '../../features/notifications/SmartNotifications';
 import { isFeatureEnabled } from '../../config/featureFlags';
@@ -216,6 +217,7 @@ const ProfessionalLayout = ({ children }) => {
     { key: '/leads', icon: Users, label: 'Leads' },
     { key: '/pipeline', icon: GitBranch, label: 'Pipeline' },
     { key: '/payments', icon: DollarSign, label: 'Payments' },
+    { key: '/lead-update-activity', icon: ClipboardList, label: 'Lead Updates' },
   ] : [];
 
   const generalItems = [...GENERAL_PAGES.slice(0, 3), ...counselorItems, ...GENERAL_PAGES.slice(3)];
