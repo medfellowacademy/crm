@@ -72,6 +72,9 @@ async function fetchActivity({ date, days }) {
 
 export default function LeadUpdateActivityPage() {
   const navigate = useNavigate();
+  const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+  const isCounselor = currentUser.role === 'Counselor';
+
   const [selectedDate, setSelectedDate] = useState(null);   // dayjs or null
   const [userFilter, setUserFilter]     = useState('');
   const [days, setDays]                 = useState(7);
@@ -134,7 +137,8 @@ export default function LeadUpdateActivityPage() {
         </Text>
       ),
     },
-    {
+    // Counselors only see their own data — hide the user column for them
+    ...(!isCounselor ? [{
       title: 'User / Counsellor',
       dataIndex: 'user',
       key: 'user',
@@ -150,7 +154,7 @@ export default function LeadUpdateActivityPage() {
           <Text strong>{u || 'Unknown'}</Text>
         </Space>
       ),
-    },
+    }] : []),
     {
       title: 'Leads Updated',
       dataIndex: 'leads_updated',
@@ -276,10 +280,12 @@ export default function LeadUpdateActivityPage() {
       <div style={{ marginBottom: 24 }}>
         <Title level={3} style={{ margin: 0, color: '#1e1b4b' }}>
           <EditOutlined style={{ color: '#6366f1', marginRight: 8 }} />
-          Lead Update Activity
+          {isCounselor ? 'My Lead Updates' : 'Lead Update Activity'}
         </Title>
         <Text type="secondary">
-          See how many leads each user updated, on which day, and what changed.
+          {isCounselor
+            ? 'Your lead update history — leads you updated and what changed.'
+            : 'See how many leads each user updated, on which day, and what changed.'}
         </Text>
       </div>
 
@@ -310,19 +316,21 @@ export default function LeadUpdateActivityPage() {
               ]}
             />
           )}
-          <Select
-            value={userFilter}
-            onChange={setUserFilter}
-            placeholder="All users"
-            allowClear
-            style={{ width: 200 }}
-            showSearch
-            options={[
-              { label: 'All users', value: '' },
-              ...allUsers.map(u => ({ label: u, value: u })),
-            ]}
-            suffixIcon={<UserOutlined />}
-          />
+          {!isCounselor && (
+            <Select
+              value={userFilter}
+              onChange={setUserFilter}
+              placeholder="All users"
+              allowClear
+              style={{ width: 200 }}
+              showSearch
+              options={[
+                { label: 'All users', value: '' },
+                ...allUsers.map(u => ({ label: u, value: u })),
+              ]}
+              suffixIcon={<UserOutlined />}
+            />
+          )}
           <Button
             icon={<ReloadOutlined spin={isFetching} />}
             onClick={() => refetch()}
@@ -335,13 +343,13 @@ export default function LeadUpdateActivityPage() {
       {/* ── Summary stat cards ── */}
       <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
         {[
-          { title: 'Unique Users Active',  value: uniqueUsers,  icon: <TeamOutlined />,     color: '#6366f1' },
+          !isCounselor && { title: 'Unique Users Active', value: uniqueUsers, icon: <TeamOutlined />, color: '#6366f1' },
           { title: 'Leads Updated',        value: totalLeads,   icon: <EditOutlined />,      color: '#10b981' },
           { title: 'Total Events Logged',  value: totalEvents,  icon: <FileTextOutlined />,  color: '#f59e0b' },
           { title: 'Days in Window',
             value: selectedDate ? 1 : days,
             icon: <CalendarOutlined />,  color: '#06b6d4' },
-        ].map(s => (
+        ].filter(Boolean).map(s => (
           <Col xs={24} sm={12} md={6} key={s.title}>
             <Card
               style={{ borderRadius: 12, border: `1px solid ${s.color}30`, background: '#fff' }}

@@ -3561,14 +3561,19 @@ async def get_audit_logs(
 @app.get("/api/admin/lead-update-activity")
 async def get_lead_update_activity(
     date: Optional[str] = None,        # YYYY-MM-DD — filter to specific day
-    user: Optional[str] = None,        # filter to specific user
+    user: Optional[str] = None,        # filter to specific user (admin/manager only)
     days: int = 7,                     # how many past days to include (ignored when date is set)
+    current_user: dict = Depends(get_current_user),
 ):
     """
     Per-user lead-update activity summary.
-    Returns counts of leads touched per day per user, with activity-type
-    breakdown and the list of leads so the caller can drill down.
+    Counselors are always scoped to their own name; admins/managers see all.
     """
+    # Counselors may only see their own activity regardless of what the
+    # `user` query param says — enforce server-side, not just on the UI.
+    counselor_roles = {"Counselor"}
+    if current_user.get("role") in counselor_roles:
+        user = current_user.get("full_name") or current_user.get("email")
     try:
         from datetime import timezone
 
