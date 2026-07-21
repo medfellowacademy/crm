@@ -2259,7 +2259,10 @@ async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, reque
         # Invalidate caches
         invalidate_cache(STATS_CACHE)
         invalidate_cache(LEAD_CACHE)
-        
+
+        # Push to MBG Conversation Cloud (non-blocking)
+        background_tasks.add_task(_push_lead_to_mbg, created)
+
         return created
     except HTTPException:
         raise
@@ -8153,6 +8156,40 @@ _META_WA_VERIFY_TOKEN = os.getenv("META_WHATSAPP_WEBHOOK_VERIFY_TOKEN", "crm_ver
 _META_WA_BUSINESS_NUMBER = os.getenv("META_WHATSAPP_BUSINESS_NUMBER", "")
 _META_WA_API = "https://graph.facebook.com/v18.0"
 
+# ============================================================================
+# MBG CONVERSATION CLOUD INTEGRATION
+# ============================================================================
+
+_MBG_API_KEY = os.getenv("MBG_API_KEY", "")
+_MBG_BASE_URL = os.getenv("MBG_BASE_URL", "https://chatbot.digitalmbg.com/v1")
+
+
+async def _push_lead_to_mbg(lead: dict) -> None:
+    """Push a newly created lead to MBG Conversation Cloud as a contact.
+    Fires as a background task — failures are logged but never raise."""
+    if not _MBG_API_KEY:
+        return
+    phone = _fmt_phone_mbg(lead.get('whatsapp') or lead.get('phone') or '')
+    if not phone:
+        logger.warning("MBG push skipped — no phone for lead %s", lead.get('lead_id'))
+        return
+    name = (lead.get('full_name') or '').strip() or phone
+    headers = {"x-api-key": _MBG_API_KEY, "Content-Type": "application/json"}
+    try:
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{_MBG_BASE_URL}/contacts",
+                json={"senderId": phone, "name": name},
+                headers=headers,
+            )
+            if resp.status_code not in (200, 201):
+                logger.warning("MBG push failed %s: %s", resp.status_code, resp.text[:200])
+            else:
+                logger.info("MBG contact synced: %s (%s)", name, phone)
+    except Exception as exc:
+        logger.warning("MBG push error for lead %s: %s", lead.get('lead_id'), exc)
+
 
 def _meta_wa_headers() -> dict:
     return {"Authorization": f"Bearer {_META_WA_TOKEN}", "Content-Type": "application/json"}
@@ -8543,6 +8580,41 @@ async def cleanup_duplicate_leads_endpoint(current_user: dict = Depends(get_curr
     except Exception as e:
         logger.error(f"cleanup_duplicate_leads error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/mbg/phonebooks")
+async def mbg_phonebooks(current_user: dict = Depends(get_current_user)):
+    """Return all MBG phonebooks (tags) so the UI can show their IDs."""
+    if not _MBG_API_KEY:
+        raise HTTPException(status_code=503, detail="MBG_API_KEY not configured")
+    try:
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{_MBG_BASE_URL}/phonebook/get_list",
+                headers={"x-api-key": _MBG_API_KEY},
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"MBG API error: {exc}")
+
+
+@app.get("/api/mbg/status")
+async def mbg_status(current_user: dict = Depends(get_current_user)):
+    """Check whether the MBG integration is configured and reachable."""
+    if not _MBG_API_KEY:
+        return {"connected": False, "reason": "MBG_API_KEY not set"}
+    try:
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=8) as client:
+            resp = await client.get(
+                f"{_MBG_BASE_URL}/phonebook/get_list",
+                headers={"x-api-key": _MBG_API_KEY},
+            )
+            return {"connected": resp.status_code == 200, "http_status": resp.status_code}
+    except Exception as exc:
+        return {"connected": False, "reason": str(exc)}
 
 
 def _fmt_phone_mbg(phone: str) -> str:
