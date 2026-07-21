@@ -23,7 +23,7 @@ import DuplicateDetectionModal from '../components/leads/DuplicateDetectionModal
 import FieldMappingModal from '../components/leads/FieldMappingModal';
 import WhatsAppTemplateDrawer from '../components/whatsapp/WhatsAppTemplateDrawer';
 import EnrollmentModal from '../components/leads/EnrollmentModal';
-import { leadsAPI, coursesAPI, counselorsAPI, usersAPI, duplicatesAPI, decayAPI } from '../api/api';
+import { leadsAPI, coursesAPI, counselorsAPI, usersAPI, duplicatesAPI, decayAPI, exportAPI } from '../api/api';
 import { useAuth } from '../context/AuthContext';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -950,6 +950,33 @@ const LeadsPageEnhanced = () => {
     }
   };
 
+  // ── MBG CSV export ────────────────────────────────────────────────────────
+  const [isMbgExporting, setIsMbgExporting] = React.useState(false);
+  const handleMbgExport = async () => {
+    if (isMbgExporting) return;
+    setIsMbgExporting(true);
+    const hide = message.loading('Preparing MBG contacts CSV…', 0);
+    try {
+      const params = {};
+      if (filters.status) params.status = filters.status;
+      if (filters.assigned_to) params.assigned_to = filters.assigned_to;
+      const res = await exportAPI.mbgContacts(params);
+      hide();
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'text/csv' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `mbg_contacts_${dayjs().format('YYYY-MM-DD')}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      message.success('MBG contacts CSV ready — import it on the MBG Contacts page');
+    } catch (err) {
+      hide();
+      message.error('MBG export failed: ' + (err.message || 'Unknown error'));
+    } finally {
+      setIsMbgExporting(false);
+    }
+  };
+
   // ── Download template ──────────────────────────────────────────────────────
   const downloadTemplate = () => {
     const csv = 'full_name,email,phone,whatsapp,country,source,course_interested,qualification,company,status,assigned_to,expected_revenue\nJohn Doe,john@email.com,+919876543210,+919876543210,India,Website,MBBS MD,MBBS,MED,Fresh,,150000';
@@ -1448,10 +1475,12 @@ const LeadsPageEnhanced = () => {
                 items: [
                   { key: 'page', label: `Export current page (${filteredLeads.length})`, icon: <ExportOutlined />, onClick: handleExport },
                   { key: 'all', label: `Export all ${totalLeads} leads`, icon: <DownloadOutlined />, onClick: handleExportAll },
+                  { type: 'divider' },
+                  { key: 'mbg', label: 'Export for MBG (WhatsApp import)', icon: <WhatsAppOutlined style={{ color: '#25D366' }} />, onClick: handleMbgExport },
                 ],
               }}
             >
-              <Button icon={<ExportOutlined />} loading={isExporting}>Export</Button>
+              <Button icon={<ExportOutlined />} loading={isExporting || isMbgExporting}>Export</Button>
             </Dropdown>
             <Button icon={<ReloadOutlined />} onClick={() => refetch()} />
             <Badge count={repeatedData?.total || 0} size="small" color="volcano">

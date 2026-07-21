@@ -111,6 +111,12 @@ export const departmentsAPI = {
   getKpis: () => api.get('/api/departments/kpis'),
 };
 
+// MBG / Export API
+export const exportAPI = {
+  mbgContacts: (params) =>
+    api.get('/api/export/mbg-contacts', { params, responseType: 'blob' }),
+};
+
 // Dashboard API
 export const dashboardAPI = {
   getStats: (params) => api.get('/api/dashboard/stats', { params }),

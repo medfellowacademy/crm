@@ -14,6 +14,7 @@ FEATURES:
 """
 
 from fastapi import FastAPI, HTTPException, Depends, Query, BackgroundTasks, UploadFile, File, Header
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -29,6 +30,8 @@ import pandas as pd
 import numpy as np
 import joblib
 from pathlib import Path
+import csv
+import io
 import json
 import os
 import re
@@ -8540,6 +8543,71 @@ async def cleanup_duplicate_leads_endpoint(current_user: dict = Depends(get_curr
     except Exception as e:
         logger.error(f"cleanup_duplicate_leads error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _fmt_phone_mbg(phone: str) -> str:
+    """Normalize a phone number to international format for MBG import."""
+    if not phone:
+        return ""
+    digits = re.sub(r'[^\d]', '', phone)
+    if len(digits) == 10 and digits[0] in '6789':
+        return f"+91{digits}"
+    if len(digits) == 11 and digits.startswith('0') and digits[1] in '6789':
+        return f"+91{digits[1:]}"
+    if len(digits) >= 11:
+        return f"+{digits}"
+    return phone
+
+
+@app.get("/api/export/mbg-contacts")
+async def export_mbg_contacts(
+    status: Optional[str] = None,
+    assigned_to: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """Export leads as a CSV ready to import into MBG Conversation Cloud."""
+    if not supabase_data.client:
+        raise HTTPException(status_code=500, detail="Database not configured")
+
+    query = supabase_data.client.table('leads').select(
+        'full_name,phone,whatsapp,email,status,course_interested,assigned_to,country,created_at'
+    )
+    if status:
+        query = query.eq('status', status)
+    if assigned_to:
+        query = query.eq('assigned_to', assigned_to)
+    if date_from:
+        query = query.gte('created_at', date_from)
+    if date_to:
+        query = query.lte('created_at', f"{date_to}T23:59:59")
+
+    result = query.order('created_at', desc=True).execute()
+    leads = result.data or []
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['First Name', 'Last Name', 'Phone Number', 'Email Address', 'Gender', 'Tag'])
+
+    for lead in leads:
+        name = (lead.get('full_name') or '').strip()
+        parts = name.split(' ', 1)
+        first_name = parts[0]
+        last_name = parts[1] if len(parts) > 1 else ''
+        phone = _fmt_phone_mbg(lead.get('whatsapp') or lead.get('phone') or '')
+        email = lead.get('email') or ''
+        tag = lead.get('assigned_to') or lead.get('status') or ''
+        writer.writerow([first_name, last_name, phone, email, '', tag])
+
+    date_str = datetime.now(_IST).strftime('%Y-%m-%d')
+    filename = f"mbg_contacts_{date_str}.csv"
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type='text/csv',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+    )
 
 
 if __name__ == "__main__":
