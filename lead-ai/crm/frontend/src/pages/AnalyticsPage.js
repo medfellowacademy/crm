@@ -114,53 +114,8 @@ const AnalyticsPage = () => {
     staleTime: 5 * 60 * 1000,
   });
 
-  if (revenueLoading) {
-    return <div style={{ textAlign: 'center', padding: '100px 0' }}><Spin size="large" /></div>;
-  }
-
-  /* ── existing charts data ───────────────────────────── */
-  const sourceDistData = {};
-  leads?.forEach(lead => { sourceDistData[lead.source] = (sourceDistData[lead.source] || 0) + 1; });
-  const sourceDistChartData = Object.entries(sourceDistData).map(([name, value]) => ({ name, value }));
-
-  const courseData = {};
-  leads?.forEach(lead => { courseData[lead.course_interested] = (courseData[lead.course_interested] || 0) + 1; });
-  const courseChartData = Object.entries(courseData).map(([name, value]) => ({
-    name: name?.length > 20 ? name.substring(0, 20) + '…' : name,
-    value,
-  }));
-
-  /* ── source analytics derived ───────────────────────── */
-  const sources   = srcData?.sources    || [];
-  const campaigns = srcData?.campaigns  || [];
-  const summary   = srcData?.summary    || {};
-
-  const sortedSources = [...sources].sort((a, b) => b[sourceSort] - a[sourceSort]);
-
-  // bar chart data for conversion rate (top 8)
-  const convRateData = sortedSources
-    .slice(0, 8)
-    .map(s => ({ name: s.source, 'Conversion Rate': s.conversion_rate, 'Total Leads': s.total_leads }));
-
-  // bar chart data for revenue (top 8 by revenue)
-  const revenueData = [...sources]
-    .sort((a, b) => b.total_revenue - a.total_revenue)
-    .slice(0, 8)
-    .map(s => ({ name: s.source, 'Total Revenue': s.total_revenue, 'Avg Revenue': s.avg_revenue }));
-
-  // radar chart for multi-dim comparison (top 5 sources by total leads)
-  const top5 = [...sources].sort((a, b) => b.total_leads - a.total_leads).slice(0, 5);
-  const maxLeads = Math.max(...top5.map(s => s.total_leads), 1);
-  const maxRev = Math.max(...top5.map(s => s.total_revenue), 1);
-  const maxConv = Math.max(...top5.map(s => s.conversion_rate), 1);
-  const radarData = [
-    { metric: 'Volume', ...Object.fromEntries(top5.map(s => [s.source, Math.round((s.total_leads / maxLeads) * 100)])) },
-    { metric: 'Conversion', ...Object.fromEntries(top5.map(s => [s.source, Math.round((s.conversion_rate / maxConv) * 100)])) },
-    { metric: 'Revenue', ...Object.fromEntries(top5.map(s => [s.source, Math.round((s.total_revenue / maxRev) * 100)])) },
-    { metric: 'Hot Leads', ...Object.fromEntries(top5.map(s => [s.source, s.total_leads > 0 ? Math.round((s.hot_leads / s.total_leads) * 100) : 0])) },
-  ];
-
   // Compute counselor performance from leads (date-filtered) grouped by assigned_to
+  // Must be before any early return to satisfy React hooks rules
   const users = Array.isArray(usersData) ? usersData : (usersData?.users || []);
   const counselorPerfRaw = useMemo(() => {
     const perf = {};
@@ -231,6 +186,49 @@ const AnalyticsPage = () => {
       align: 'right',
       render: v => <span style={{ color: '#10b981', fontWeight: 600 }}>₹{Number(v).toLocaleString('en-IN')}</span>,
     },
+  ];
+
+  if (revenueLoading) {
+    return <div style={{ textAlign: 'center', padding: '100px 0' }}><Spin size="large" /></div>;
+  }
+
+  /* ── existing charts data ───────────────────────────── */
+  const sourceDistData = {};
+  leads?.forEach(lead => { sourceDistData[lead.source] = (sourceDistData[lead.source] || 0) + 1; });
+  const sourceDistChartData = Object.entries(sourceDistData).map(([name, value]) => ({ name, value }));
+
+  const courseData = {};
+  leads?.forEach(lead => { courseData[lead.course_interested] = (courseData[lead.course_interested] || 0) + 1; });
+  const courseChartData = Object.entries(courseData).map(([name, value]) => ({
+    name: name?.length > 20 ? name.substring(0, 20) + '…' : name,
+    value,
+  }));
+
+  /* ── source analytics derived ───────────────────────── */
+  const sources   = srcData?.sources    || [];
+  const campaigns = srcData?.campaigns  || [];
+  const summary   = srcData?.summary    || {};
+
+  const sortedSources = [...sources].sort((a, b) => b[sourceSort] - a[sourceSort]);
+
+  const convRateData = sortedSources
+    .slice(0, 8)
+    .map(s => ({ name: s.source, 'Conversion Rate': s.conversion_rate, 'Total Leads': s.total_leads }));
+
+  const revenueData = [...sources]
+    .sort((a, b) => b.total_revenue - a.total_revenue)
+    .slice(0, 8)
+    .map(s => ({ name: s.source, 'Total Revenue': s.total_revenue, 'Avg Revenue': s.avg_revenue }));
+
+  const top5 = [...sources].sort((a, b) => b.total_leads - a.total_leads).slice(0, 5);
+  const maxLeads = Math.max(...top5.map(s => s.total_leads), 1);
+  const maxRev = Math.max(...top5.map(s => s.total_revenue), 1);
+  const maxConv = Math.max(...top5.map(s => s.conversion_rate), 1);
+  const radarData = [
+    { metric: 'Volume', ...Object.fromEntries(top5.map(s => [s.source, Math.round((s.total_leads / maxLeads) * 100)])) },
+    { metric: 'Conversion', ...Object.fromEntries(top5.map(s => [s.source, Math.round((s.conversion_rate / maxConv) * 100)])) },
+    { metric: 'Revenue', ...Object.fromEntries(top5.map(s => [s.source, Math.round((s.total_revenue / maxRev) * 100)])) },
+    { metric: 'Hot Leads', ...Object.fromEntries(top5.map(s => [s.source, s.total_leads > 0 ? Math.round((s.hot_leads / s.total_leads) * 100) : 0])) },
   ];
 
   const sourceColumns = [
