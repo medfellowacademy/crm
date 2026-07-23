@@ -316,6 +316,8 @@ export const attendanceAPI = {
   checkOut:   (lat, lng)     => api.post('/api/attendance/check-out', { lat, lng }),
   history:    (days = 30)    => api.get('/api/attendance/history', { params: { days } }),
   team:       (date)         => api.get('/api/attendance/team', date ? { params: { date } } : {}),
+  report:     (month, userEmail) => api.get('/api/attendance/report', { params: { month, ...(userEmail ? { user_email: userEmail } : {}) } }),
+  exportCsv:  (month, userEmail) => api.get('/api/attendance/export-csv', { params: { month, ...(userEmail ? { user_email: userEmail } : {}) }, responseType: 'blob' }),
 };
 
 // Audit Logs API

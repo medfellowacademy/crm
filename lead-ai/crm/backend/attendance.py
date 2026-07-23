@@ -9,10 +9,14 @@ browser Geolocation API.
 """
 
 import math
+import csv as _csv
+import io as _io
+from calendar import monthrange as _monthrange
 from datetime import datetime, timedelta, timezone, date as date_cls
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from logger_config import logger
@@ -224,3 +228,129 @@ async def get_team_attendance(request: Request, date: Optional[str] = None):
     except Exception as e:
         logger.error("Failed to fetch team attendance: {}", e)
         raise HTTPException(status_code=500, detail="Failed to fetch team attendance")
+
+
+@router.get("/report")
+async def monthly_report(request: Request, month: str, user_email: Optional[str] = None):
+    """Monthly attendance records for a specific user or all users (admin only for all)."""
+    current = _current_user(request)
+    is_admin = current["role"] in ("Super Admin", "Manager", "Team Leader")
+
+    if not is_admin:
+        user_email = current["email"]
+
+    try:
+        year, mon = map(int, month.split("-"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+
+    _, dim = _monthrange(year, mon)
+    date_from = f"{year}-{mon:02d}-01"
+    date_to = f"{year}-{mon:02d}-{dim:02d}"
+
+    try:
+        q = (
+            supabase_data.client.table("attendance")
+            .select("*")
+            .gte("date", date_from)
+            .lte("date", date_to)
+        )
+        if user_email:
+            q = q.eq("user_email", user_email)
+        resp = q.order("date").order("user_name").execute()
+        return {"month": month, "days_in_month": dim, "records": resp.data or []}
+    except Exception as exc:
+        logger.error("monthly_report failed: {}", exc)
+        raise HTTPException(status_code=500, detail="Failed to fetch attendance report")
+
+
+@router.get("/export-csv")
+async def export_attendance_csv(request: Request, month: str, user_email: Optional[str] = None):
+    """Download monthly attendance report as CSV."""
+    current = _current_user(request)
+    is_admin = current["role"] in ("Super Admin", "Manager", "Team Leader")
+
+    if not is_admin:
+        user_email = current["email"]
+
+    try:
+        year, mon = map(int, month.split("-"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+
+    _, dim = _monthrange(year, mon)
+    date_from = f"{year}-{mon:02d}-01"
+    date_to = f"{year}-{mon:02d}-{dim:02d}"
+
+    q = (
+        supabase_data.client.table("attendance")
+        .select("*")
+        .gte("date", date_from)
+        .lte("date", date_to)
+    )
+    if user_email:
+        q = q.eq("user_email", user_email)
+    resp = q.order("user_name").order("date").execute()
+    records = resp.data or []
+
+    # Index by (user, date)
+    by_user_date = {}
+    for r in records:
+        by_user_date[(r["user_email"], r["date"])] = r
+
+    # Collect distinct users
+    users_seen = {}
+    for r in records:
+        users_seen[r["user_email"]] = r.get("user_name", r["user_email"])
+    if not users_seen and user_email:
+        users_seen[user_email] = user_email
+
+    IST_OFF = timezone(timedelta(hours=5, minutes=30))
+
+    def fmt_time(iso):
+        if not iso:
+            return ""
+        try:
+            return datetime.fromisoformat(iso).astimezone(IST_OFF).strftime("%I:%M %p")
+        except Exception:
+            return iso
+
+    STATUS_LABEL = {
+        "present": "Present",
+        "late": "Late",
+        "left_early": "Left Early",
+        "late_and_left_early": "Late & Left Early",
+        "absent": "Absent",
+    }
+
+    output = _io.StringIO()
+    writer = _csv.writer(output)
+    writer.writerow(["Employee", "Date", "Day", "Status", "Check In", "Check Out"])
+
+    from datetime import date as _date
+    today = _date.today()
+    for email, name in sorted(users_seen.items(), key=lambda x: x[1]):
+        for d in range(1, dim + 1):
+            dt = _date(year, mon, d)
+            date_str = dt.isoformat()
+            day_name = dt.strftime("%a")
+            if dt.weekday() == 6:  # Sunday
+                writer.writerow([name, date_str, day_name, "Week Off", "", ""])
+                continue
+            if dt > today:
+                continue
+            rec = by_user_date.get((email, date_str))
+            status = STATUS_LABEL.get(rec["status"], rec["status"]) if rec else "Absent"
+            writer.writerow([
+                name, date_str, day_name, status,
+                fmt_time(rec.get("check_in_at") if rec else None),
+                fmt_time(rec.get("check_out_at") if rec else None),
+            ])
+
+    output.seek(0)
+    filename = f"attendance_{month}{'_' + user_email.split('@')[0] if user_email else ''}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
