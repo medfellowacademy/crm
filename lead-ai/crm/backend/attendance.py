@@ -33,6 +33,7 @@ OFFICE_RADIUS_M = 200
 
 IST = timezone(timedelta(hours=5, minutes=30))
 OFFICE_START_HOUR = 11  # 11:00 AM IST
+CHECK_IN_GRACE_MINUTES = 10  # grace period before marking late
 OFFICE_END_HOUR = 20    # 8:00 PM IST
 
 
@@ -94,7 +95,7 @@ async def check_in(payload: LocationPayload, request: Request):
         raise HTTPException(status_code=400, detail="You've already checked in today.")
 
     now_ist = datetime.now(IST)
-    status = "late" if (now_ist.hour, now_ist.minute) > (OFFICE_START_HOUR, 0) else "present"
+    status = "late" if (now_ist.hour * 60 + now_ist.minute) > (OFFICE_START_HOUR * 60 + CHECK_IN_GRACE_MINUTES) else "present"
 
     record = {
         "user_email": user["email"],
