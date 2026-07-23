@@ -74,6 +74,12 @@ const LeadAnalysisPage = () => {
   const [dateRange, setDateRange] = useState([dayjs().subtract(90, 'days'), dayjs()]);
   const [searchText, setSearchText] = useState('');
   const [activeTab, setActiveTab] = useState('overview');
+  const [drillDown, setDrillDown] = useState(null); // { leads, label }
+
+  const drillInto = (leads, label) => {
+    setDrillDown({ leads, label });
+    setActiveTab('details');
+  };
 
   // Fetch data
   const { data: leadsData, isLoading: leadsLoading, refetch: refetchLeads } = useQuery({
@@ -473,7 +479,12 @@ const LeadAnalysisPage = () => {
       key: 'totalLeads',
       width: 110,
       sorter: (a, b) => a.totalLeads - b.totalLeads,
-      render: (value) => <Badge count={value} showZero style={{ backgroundColor: '#1890ff' }} />
+      render: (value, record) => (
+        <span
+          style={{ cursor: 'pointer', background: '#1890ff', color: '#fff', borderRadius: 12, padding: '2px 10px', fontWeight: 700 }}
+          onClick={() => drillInto(filteredLeads.filter(l => l.assigned_to === record.userId), `${record.userName} — All Leads`)}
+        >{value}</span>
+      )
     },
     {
       title: 'Converted',
@@ -481,7 +492,12 @@ const LeadAnalysisPage = () => {
       key: 'convertedLeads',
       width: 110,
       sorter: (a, b) => a.convertedLeads - b.convertedLeads,
-      render: (value) => <Badge count={value} showZero style={{ backgroundColor: '#52c41a' }} />
+      render: (value, record) => (
+        <span
+          style={{ cursor: 'pointer', background: '#52c41a', color: '#fff', borderRadius: 12, padding: '2px 10px', fontWeight: 700 }}
+          onClick={() => drillInto(filteredLeads.filter(l => l.assigned_to === record.userId && l.status === 'Enrolled'), `${record.userName} — Enrolled`)}
+        >{value}</span>
+      )
     },
     {
       title: 'Active',
@@ -489,7 +505,12 @@ const LeadAnalysisPage = () => {
       key: 'activeLeads',
       width: 100,
       sorter: (a, b) => a.activeLeads - b.activeLeads,
-      render: (value) => <Badge count={value} showZero style={{ backgroundColor: '#fa8c16' }} />
+      render: (value, record) => (
+        <span
+          style={{ cursor: 'pointer', background: '#fa8c16', color: '#fff', borderRadius: 12, padding: '2px 10px', fontWeight: 700 }}
+          onClick={() => drillInto(filteredLeads.filter(l => l.assigned_to === record.userId && ['Fresh', 'Follow Up', 'Warm', 'Hot'].includes(l.status)), `${record.userName} — Active`)}
+        >{value}</span>
+      )
     },
     {
       title: 'Lost',
@@ -497,7 +518,12 @@ const LeadAnalysisPage = () => {
       key: 'lostLeads',
       width: 90,
       sorter: (a, b) => a.lostLeads - b.lostLeads,
-      render: (value) => <Badge count={value} showZero style={{ backgroundColor: '#8c8c8c' }} />
+      render: (value, record) => (
+        <span
+          style={{ cursor: 'pointer', background: '#8c8c8c', color: '#fff', borderRadius: 12, padding: '2px 10px', fontWeight: 700 }}
+          onClick={() => drillInto(filteredLeads.filter(l => l.assigned_to === record.userId && ['Not Interested', 'Not Answering', 'Junk'].includes(l.status)), `${record.userName} — Lost`)}
+        >{value}</span>
+      )
     },
     {
       title: 'Stale (>7d)',
@@ -507,7 +533,10 @@ const LeadAnalysisPage = () => {
       sorter: (a, b) => a.staleLeads - b.staleLeads,
       render: (value, record) => (
         <Space>
-          <Badge count={value} showZero style={{ backgroundColor: '#f5222d' }} />
+          <span
+            style={{ cursor: 'pointer', background: '#f5222d', color: '#fff', borderRadius: 12, padding: '2px 10px', fontWeight: 700 }}
+            onClick={() => drillInto(filteredLeads.filter(l => l.assigned_to === record.userId && calculateDaysSinceUpdate(l.updated_at) > 7), `${record.userName} — Stale (>7d)`)}
+          >{value}</span>
           <Text type="secondary" style={{ fontSize: 12 }}>({record.staleRate}%)</Text>
         </Space>
       )
@@ -838,9 +867,15 @@ const LeadAnalysisPage = () => {
           </TabPane>
 
           <TabPane tab="Detailed Leads" key="details">
+            {drillDown && (
+              <div style={{ marginBottom: 12, padding: '8px 14px', background: '#e6f7ff', border: '1px solid #91d5ff', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontWeight: 600, color: '#096dd9' }}>Showing: {drillDown.label} ({drillDown.leads.length} leads)</span>
+                <Button size="small" onClick={() => setDrillDown(null)}>Clear filter</Button>
+              </div>
+            )}
             <Table
               columns={columns}
-              dataSource={filteredLeads}
+              dataSource={drillDown ? drillDown.leads : filteredLeads}
               rowKey="id"
               scroll={{ x: 1800 }}
               pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `Total ${total} leads` }}
