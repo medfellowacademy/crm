@@ -213,7 +213,7 @@ function AttendanceReport() {
   const currentUser   = JSON.parse(localStorage.getItem('user') || '{}');
   const isAdmin       = ['Super Admin', 'Manager', 'Team Leader'].includes(currentUser.role);
 
-  const [month,        setMonth]        = useState(dayjs());
+  const [dateRange,    setDateRange]    = useState([dayjs().startOf('month'), dayjs()]);
   const [selectedUser, setSelectedUser] = useState(isAdmin ? null : currentUser.email);
 
   // salary calc state
@@ -227,44 +227,46 @@ function AttendanceReport() {
     enabled:  isAdmin,
   });
 
-  const monthStr = month.format('YYYY-MM');
+  const dateFrom = dateRange[0]?.format('YYYY-MM-DD');
+  const dateTo   = dateRange[1]?.format('YYYY-MM-DD');
 
   const { data: reportData, isLoading } = useQuery({
-    queryKey: ['attendance-report', monthStr, selectedUser],
-    queryFn:  () => attendanceAPI.report(monthStr, selectedUser || undefined).then(r => r.data),
+    queryKey: ['attendance-report', dateFrom, dateTo, selectedUser],
+    queryFn:  () => attendanceAPI.report(dateFrom, dateTo, selectedUser || undefined).then(r => r.data),
+    enabled:  !!(dateFrom && dateTo),
   });
 
-  // Build full daily list (one row per calendar day)
+  // Build full daily list (one row per day in the selected range)
   const dailyList = useMemo(() => {
+    if (!dateRange[0] || !dateRange[1]) return [];
     const records = reportData?.records || [];
-    const daysInMonth = month.daysInMonth();
-    const today = dayjs();
+    const today   = dayjs();
 
-    // For single-user view, index by date
     const byDate = {};
     records.forEach(r => { byDate[r.date] = r; });
 
     const rows = [];
-    for (let d = 1; d <= daysInMonth; d++) {
-      const dt      = month.date(d);
-      const dateStr = dt.format('YYYY-MM-DD');
-      const isSun   = dt.day() === 0;
-      const isFuture = dt.isAfter(today, 'day');
-      const rec     = byDate[dateStr];
-
+    let cur = dateRange[0].startOf('day');
+    const end = dateRange[1].startOf('day');
+    while (!cur.isAfter(end)) {
+      const dateStr  = cur.format('YYYY-MM-DD');
+      const isSun    = cur.day() === 0;
+      const isFuture = cur.isAfter(today, 'day');
+      const rec      = byDate[dateStr];
       rows.push({
         key:          dateStr,
         date:         dateStr,
-        dayName:      dt.format('ddd'),
+        dayName:      cur.format('ddd'),
         isSunday:     isSun,
         isFuture,
         status:       isSun ? 'week_off' : isFuture ? null : (rec?.status || 'absent'),
         check_in_at:  rec?.check_in_at  || null,
         check_out_at: rec?.check_out_at || null,
       });
+      cur = cur.add(1, 'day');
     }
     return rows;
-  }, [reportData, month]);
+  }, [reportData, dateRange]);
 
   // Summary counts
   const summary = useMemo(() => {
@@ -291,15 +293,13 @@ function AttendanceReport() {
 
   // Client-side CSV download
   const handleDownloadCSV = async () => {
-    if (!selectedUser && isAdmin) {
-      // use backend CSV (all users or filtered)
-    }
+    if (!dateFrom || !dateTo) return;
     try {
-      const res = await attendanceAPI.exportCsv(monthStr, selectedUser || undefined);
+      const res = await attendanceAPI.exportCsv(dateFrom, dateTo, selectedUser || undefined);
       const url = URL.createObjectURL(new Blob([res.data], { type: 'text/csv' }));
       const a   = document.createElement('a');
       a.href     = url;
-      a.download = `attendance_${monthStr}${selectedUser ? '_' + selectedUser.split('@')[0] : ''}.csv`;
+      a.download = `attendance_${dateFrom}_to_${dateTo}${selectedUser ? '_' + selectedUser.split('@')[0] : ''}.csv`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
@@ -348,13 +348,19 @@ function AttendanceReport() {
       <Card style={{ marginBottom: 16 }}>
         <Space wrap>
           <div>
-            <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Month</div>
-            <DatePicker
-              picker="month"
-              value={month}
-              onChange={(d) => d && setMonth(d)}
-              disabledDate={(d) => d && d > dayjs().endOf('month')}
+            <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Date Range</div>
+            <DatePicker.RangePicker
+              value={dateRange}
+              onChange={(range) => range && range[0] && range[1] && setDateRange(range)}
+              disabledDate={(d) => d && d > dayjs().endOf('day')}
               allowClear={false}
+              presets={[
+                { label: 'This Month',  value: [dayjs().startOf('month'), dayjs()] },
+                { label: 'Last Month',  value: [dayjs().subtract(1, 'month').startOf('month'), dayjs().subtract(1, 'month').endOf('month')] },
+                { label: 'Last 7 Days', value: [dayjs().subtract(6, 'day'), dayjs()] },
+                { label: 'Last 30 Days',value: [dayjs().subtract(29, 'day'), dayjs()] },
+                { label: 'This Week',   value: [dayjs().startOf('week'), dayjs()] },
+              ]}
             />
           </div>
 
@@ -409,7 +415,7 @@ function AttendanceReport() {
       </Row>
 
       {/* ── Daily table ── */}
-      <Card title={<Space><CalendarOutlined />{month.format('MMMM YYYY')} — Daily Report</Space>}
+      <Card title={<Space><CalendarOutlined />{dateRange[0]?.format('DD MMM YYYY')} → {dateRange[1]?.format('DD MMM YYYY')} — Attendance Report</Space>}
         style={{ marginBottom: 16 }}>
         {isLoading
           ? <Spin />

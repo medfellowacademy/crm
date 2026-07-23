@@ -231,22 +231,33 @@ async def get_team_attendance(request: Request, date: Optional[str] = None):
 
 
 @router.get("/report")
-async def monthly_report(request: Request, month: str, user_email: Optional[str] = None):
-    """Monthly attendance records for a specific user or all users (admin only for all)."""
+async def monthly_report(
+    request: Request,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    month: Optional[str] = None,
+    user_email: Optional[str] = None,
+):
+    """Attendance records for a date range or month, for a specific user or all users."""
     current = _current_user(request)
     is_admin = current["role"] in ("Super Admin", "Manager", "Team Leader")
 
     if not is_admin:
         user_email = current["email"]
 
-    try:
-        year, mon = map(int, month.split("-"))
-    except ValueError:
-        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
-
-    _, dim = _monthrange(year, mon)
-    date_from = f"{year}-{mon:02d}-01"
-    date_to = f"{year}-{mon:02d}-{dim:02d}"
+    # Resolve date range
+    if date_from and date_to:
+        pass  # use as-is
+    elif month:
+        try:
+            year, mon = map(int, month.split("-"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+        _, dim = _monthrange(year, mon)
+        date_from = f"{year}-{mon:02d}-01"
+        date_to   = f"{year}-{mon:02d}-{dim:02d}"
+    else:
+        raise HTTPException(status_code=400, detail="Provide date_from+date_to or month")
 
     try:
         q = (
@@ -258,29 +269,39 @@ async def monthly_report(request: Request, month: str, user_email: Optional[str]
         if user_email:
             q = q.eq("user_email", user_email)
         resp = q.order("date").order("user_name").execute()
-        return {"month": month, "days_in_month": dim, "records": resp.data or []}
+        return {"date_from": date_from, "date_to": date_to, "records": resp.data or []}
     except Exception as exc:
         logger.error("monthly_report failed: {}", exc)
         raise HTTPException(status_code=500, detail="Failed to fetch attendance report")
 
 
 @router.get("/export-csv")
-async def export_attendance_csv(request: Request, month: str, user_email: Optional[str] = None):
-    """Download monthly attendance report as CSV."""
+async def export_attendance_csv(
+    request: Request,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    month: Optional[str] = None,
+    user_email: Optional[str] = None,
+):
+    """Download attendance report as CSV for a date range or month."""
     current = _current_user(request)
     is_admin = current["role"] in ("Super Admin", "Manager", "Team Leader")
 
     if not is_admin:
         user_email = current["email"]
 
-    try:
-        year, mon = map(int, month.split("-"))
-    except ValueError:
-        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
-
-    _, dim = _monthrange(year, mon)
-    date_from = f"{year}-{mon:02d}-01"
-    date_to = f"{year}-{mon:02d}-{dim:02d}"
+    if date_from and date_to:
+        pass
+    elif month:
+        try:
+            year, mon = map(int, month.split("-"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+        _, dim = _monthrange(year, mon)
+        date_from = f"{year}-{mon:02d}-01"
+        date_to   = f"{year}-{mon:02d}-{dim:02d}"
+    else:
+        raise HTTPException(status_code=400, detail="Provide date_from+date_to or month")
 
     q = (
         supabase_data.client.table("attendance")
@@ -329,9 +350,11 @@ async def export_attendance_csv(request: Request, month: str, user_email: Option
 
     from datetime import date as _date
     today = _date.today()
+    _start = _date.fromisoformat(date_from)
+    _end   = _date.fromisoformat(date_to)
+    _days  = [_start + timedelta(days=i) for i in range((_end - _start).days + 1)]
     for email, name in sorted(users_seen.items(), key=lambda x: x[1]):
-        for d in range(1, dim + 1):
-            dt = _date(year, mon, d)
+        for dt in _days:
             date_str = dt.isoformat()
             day_name = dt.strftime("%a")
             if dt.weekday() == 6:  # Sunday
@@ -348,7 +371,8 @@ async def export_attendance_csv(request: Request, month: str, user_email: Option
             ])
 
     output.seek(0)
-    filename = f"attendance_{month}{'_' + user_email.split('@')[0] if user_email else ''}.csv"
+    label = f"{date_from}_to_{date_to}"
+    filename = f"attendance_{label}{'_' + user_email.split('@')[0] if user_email else ''}.csv"
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
