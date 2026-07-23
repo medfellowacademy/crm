@@ -228,10 +228,10 @@ const LeadAnalysisPage = () => {
       if (!lead.assigned_to) return;
       
       if (!performance[lead.assigned_to]) {
-        const user = users.find(u => u.id === lead.assigned_to);
+        const user = users.find(u => u.full_name === lead.assigned_to);
         performance[lead.assigned_to] = {
           userId: lead.assigned_to,
-          userName: user?.name || 'Unknown',
+          userName: user?.full_name || lead.assigned_to || 'Unknown',
           userRole: user?.role || 'Unknown',
           totalLeads: 0,
           convertedLeads: 0,
@@ -306,7 +306,7 @@ const LeadAnalysisPage = () => {
   const columns = [
     {
       title: 'Lead Name',
-      dataIndex: 'name',
+      dataIndex: 'full_name',
       key: 'name',
       fixed: 'left',
       width: 180,
@@ -370,7 +370,7 @@ const LeadAnalysisPage = () => {
     },
     {
       title: 'Course',
-      dataIndex: 'course',
+      dataIndex: 'course_interested',
       key: 'course',
       width: 200,
       ellipsis: true,
@@ -396,17 +396,18 @@ const LeadAnalysisPage = () => {
       dataIndex: 'assigned_to',
       key: 'assigned_to',
       width: 180,
-      render: (userId) => {
-        const user = users.find(u => u.id === userId);
-        if (!user) return <Text type="secondary">Unassigned</Text>;
+      render: (assignedTo) => {
+        const user = users.find(u => u.full_name === assignedTo);
+        const displayName = user?.full_name || assignedTo;
+        if (!displayName) return <Text type="secondary">Unassigned</Text>;
         return (
           <Space>
             <Avatar size="small" style={{ backgroundColor: '#722ed1' }}>
-              {user.name?.charAt(0)?.toUpperCase()}
+              {displayName?.charAt(0)?.toUpperCase()}
             </Avatar>
             <div>
-              <div style={{ fontWeight: 500 }}>{user.name}</div>
-              <Text type="secondary" style={{ fontSize: 12 }}>{user.role}</Text>
+              <div style={{ fontWeight: 500 }}>{displayName}</div>
+              <Text type="secondary" style={{ fontSize: 12 }}>{user?.role}</Text>
             </div>
           </Space>
         );
@@ -420,7 +421,7 @@ const LeadAnalysisPage = () => {
       sorter: (a, b) => (a.potential_revenue || 0) - (b.potential_revenue || 0),
       render: (value) => (
         <Text strong style={{ color: '#52c41a' }}>
-          ${value?.toLocaleString() || '0'}
+          ₹{Number(value || 0).toLocaleString('en-IN')}
         </Text>
       )
     },
@@ -551,7 +552,7 @@ const LeadAnalysisPage = () => {
       sorter: (a, b) => a.totalRevenue - b.totalRevenue,
       render: (value) => (
         <Text strong style={{ color: '#52c41a' }}>
-          ${value?.toLocaleString() || '0'}
+          ₹{Number(value || 0).toLocaleString('en-IN')}
         </Text>
       )
     }
@@ -650,7 +651,7 @@ const LeadAnalysisPage = () => {
             >
               <Option value="all">All Users</Option>
               {users.map(user => (
-                <Option key={user.id} value={user.id}>{user.name}</Option>
+                <Option key={user.id} value={user.full_name}>{user.full_name}</Option>
               ))}
             </Select>
           </Col>

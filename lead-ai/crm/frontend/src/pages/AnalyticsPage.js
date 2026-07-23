@@ -1,13 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Row, Col, Card, Table, Spin, Tag, DatePicker, Space, Typography } from 'antd';
+import { Row, Col, Card, Table, Spin, Tag, DatePicker, Space, Typography, Select, Avatar } from 'antd';
 import {
   BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, RadarChart, Radar, PolarGrid,
   PolarAngleAxis, PolarRadiusAxis,
 } from 'recharts';
-import { analyticsAPI, leadsAPI, counselorsAPI, sourceAnalyticsAPI, callTimingAPI } from '../api/api';
+import { analyticsAPI, leadsAPI, counselorsAPI, sourceAnalyticsAPI, callTimingAPI, usersAPI } from '../api/api';
+
+const { Option } = Select;
 
 /* ── palette ─────────────────────────────────────────── */
 const PALETTE = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#3b82f6', '#8b5cf6', '#ec4899', '#14b8a6'];
@@ -76,6 +78,7 @@ const Rank = ({ n }) => {
 const AnalyticsPage = () => {
   const [sourceSort, setSourceSort] = useState('conversion_rate');
   const [dateRange, setDateRange] = useState([null, null]);
+  const [selectedCounselor, setSelectedCounselor] = useState('all');
   const dateParams = dateRange[0] && dateRange[1] ? {
     created_from: dateRange[0].startOf('day').toISOString(),
     created_to: dateRange[1].endOf('day').toISOString(),
@@ -100,9 +103,9 @@ const AnalyticsPage = () => {
     staleTime: 5 * 60 * 1000,
   });
 
-  const { data: counselors } = useQuery({
-    queryKey: ['counselors'],
-    queryFn: () => counselorsAPI.getAll().then(res => res.data),
+  const { data: usersData } = useQuery({
+    queryKey: ['users-analytics'],
+    queryFn: () => usersAPI.getAll().then(res => res.data),
   });
 
   const { data: srcData, isLoading: srcLoading } = useQuery({
@@ -157,12 +160,77 @@ const AnalyticsPage = () => {
     { metric: 'Hot Leads', ...Object.fromEntries(top5.map(s => [s.source, s.total_leads > 0 ? Math.round((s.hot_leads / s.total_leads) * 100) : 0])) },
   ];
 
+  // Compute counselor performance from leads (date-filtered) grouped by assigned_to
+  const users = Array.isArray(usersData) ? usersData : (usersData?.users || []);
+  const counselorPerfRaw = useMemo(() => {
+    const perf = {};
+    (leads || []).forEach(lead => {
+      const name = lead.assigned_to;
+      if (!name) return;
+      if (!perf[name]) {
+        perf[name] = { name, total: 0, enrolled: 0, active: 0, lost: 0, revenue: 0, hot: 0 };
+      }
+      perf[name].total++;
+      if (lead.status === 'Enrolled') { perf[name].enrolled++; perf[name].revenue += lead.potential_revenue || 0; }
+      if (['Fresh', 'Follow Up', 'Warm', 'Hot'].includes(lead.status)) perf[name].active++;
+      if (['Not Interested', 'Not Answering', 'Junk'].includes(lead.status)) perf[name].lost++;
+      if (lead.status === 'Hot') perf[name].hot++;
+    });
+    return Object.values(perf).map(p => ({
+      ...p,
+      conversionRate: p.total > 0 ? ((p.enrolled / p.total) * 100).toFixed(1) : '0.0',
+    })).sort((a, b) => b.total - a.total);
+  }, [leads]);
+
+  const counselorNames = counselorPerfRaw.map(c => c.name);
+  const counselorPerf = selectedCounselor === 'all'
+    ? counselorPerfRaw
+    : counselorPerfRaw.filter(c => c.name === selectedCounselor);
+
   const counselorColumns = [
-    { title: 'Counselor', dataIndex: 'name', key: 'name', render: t => <strong>{t}</strong> },
-    { title: 'Total Leads', dataIndex: 'total_leads', key: 'total_leads', sorter: (a, b) => a.total_leads - b.total_leads },
-    { title: 'Conversions', dataIndex: 'total_conversions', key: 'total_conversions', sorter: (a, b) => a.total_conversions - b.total_conversions },
-    { title: 'Conversion Rate', dataIndex: 'conversion_rate', key: 'conversion_rate', render: r => `${r?.toFixed(2)}%`, sorter: (a, b) => a.conversion_rate - b.conversion_rate },
-    { title: 'Specialization', dataIndex: 'specialization', key: 'specialization' },
+    {
+      title: '#',
+      key: 'rank',
+      width: 48,
+      render: (_, __, i) => <Rank n={i + 1} />,
+    },
+    {
+      title: 'Counselor',
+      dataIndex: 'name',
+      key: 'name',
+      render: t => (
+        <Space>
+          <Avatar size="small" style={{ backgroundColor: '#6366f1' }}>{t?.charAt(0)?.toUpperCase()}</Avatar>
+          <strong>{t}</strong>
+        </Space>
+      ),
+    },
+    { title: 'Total Leads', dataIndex: 'total', key: 'total', sorter: (a, b) => a.total - b.total, align: 'center' },
+    { title: 'Active', dataIndex: 'active', key: 'active', sorter: (a, b) => a.active - b.active, align: 'center', render: n => <Tag color="blue">{n}</Tag> },
+    { title: 'Hot', dataIndex: 'hot', key: 'hot', sorter: (a, b) => a.hot - b.hot, align: 'center', render: n => <Tag color="red">{n}</Tag> },
+    { title: 'Enrolled', dataIndex: 'enrolled', key: 'enrolled', sorter: (a, b) => a.enrolled - b.enrolled, align: 'center', render: n => <Tag color="green">{n}</Tag> },
+    { title: 'Lost', dataIndex: 'lost', key: 'lost', sorter: (a, b) => a.lost - b.lost, align: 'center', render: n => <Tag color="default">{n}</Tag> },
+    {
+      title: 'Conv. Rate',
+      dataIndex: 'conversionRate',
+      key: 'conversionRate',
+      sorter: (a, b) => parseFloat(a.conversionRate) - parseFloat(b.conversionRate),
+      align: 'center',
+      defaultSortOrder: 'descend',
+      render: v => (
+        <span style={{ color: v >= 30 ? '#10b981' : v >= 15 ? '#f59e0b' : '#ef4444', fontWeight: 700 }}>
+          {v}%
+        </span>
+      ),
+    },
+    {
+      title: 'Revenue (₹)',
+      dataIndex: 'revenue',
+      key: 'revenue',
+      sorter: (a, b) => a.revenue - b.revenue,
+      align: 'right',
+      render: v => <span style={{ color: '#10b981', fontWeight: 600 }}>₹{Number(v).toLocaleString('en-IN')}</span>,
+    },
   ];
 
   const sourceColumns = [
@@ -565,14 +633,39 @@ const AnalyticsPage = () => {
 
       <Row gutter={[16, 16]}>
         <Col span={24}>
-          <Card title="Counselor Performance" bordered={false} style={{ borderRadius: 12 }}>
-            <Table
-              dataSource={counselors}
-              columns={counselorColumns}
-              rowKey="id"
-              pagination={false}
-              size="middle"
-            />
+          <Card
+            title={<span style={{ fontWeight: 700 }}>Counselor Performance</span>}
+            bordered={false}
+            style={{ borderRadius: 12 }}
+            extra={
+              <Select
+                value={selectedCounselor}
+                onChange={setSelectedCounselor}
+                style={{ width: 200 }}
+                showSearch
+                placeholder="Filter by counselor"
+              >
+                <Option value="all">All Counselors</Option>
+                {counselorNames.map(n => (
+                  <Option key={n} value={n}>{n}</Option>
+                ))}
+              </Select>
+            }
+          >
+            {counselorPerf.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-secondary)' }}>
+                No data for the selected date range
+              </div>
+            ) : (
+              <Table
+                dataSource={counselorPerf}
+                columns={counselorColumns}
+                rowKey="name"
+                pagination={{ pageSize: 10, hideOnSinglePage: true }}
+                size="middle"
+                scroll={{ x: 700 }}
+              />
+            )}
           </Card>
         </Col>
       </Row>
