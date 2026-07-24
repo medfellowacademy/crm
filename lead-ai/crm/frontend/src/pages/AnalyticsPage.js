@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Row, Col, Card, Table, Spin, Tag, DatePicker, Space, Typography, Select, Avatar } from 'antd';
+import { Row, Col, Card, Table, Spin, Tag, DatePicker, Space, Typography, Select, Avatar, Drawer, Button } from 'antd';
 import {
   BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
@@ -79,6 +79,9 @@ const AnalyticsPage = () => {
   const [sourceSort, setSourceSort] = useState('conversion_rate');
   const [dateRange, setDateRange] = useState([null, null]);
   const [selectedCounselor, setSelectedCounselor] = useState('all');
+  const [drawer, setDrawer] = useState({ open: false, title: '', leads: [] });
+
+  const openDrawer = (title, leadsSubset) => setDrawer({ open: true, title, leads: leadsSubset });
   const dateParams = dateRange[0] && dateRange[1] ? {
     created_from: dateRange[0].startOf('day').toISOString(),
     created_to: dateRange[1].endOf('day').toISOString(),
@@ -114,7 +117,7 @@ const AnalyticsPage = () => {
     staleTime: 5 * 60 * 1000,
   });
 
-  // Compute counselor performance from leads (date-filtered) grouped by assigned_to
+  // Compute counselor performance — every status tracked individually so counts always tally
   // Must be before any early return to satisfy React hooks rules
   const users = Array.isArray(usersData) ? usersData : (usersData?.users || []);
   const counselorPerfRaw = useMemo(() => {
@@ -123,16 +126,33 @@ const AnalyticsPage = () => {
       const name = lead.assigned_to;
       if (!name) return;
       if (!perf[name]) {
-        perf[name] = { name, total: 0, enrolled: 0, active: 0, lost: 0, revenue: 0, hot: 0 };
+        perf[name] = {
+          name,
+          total: 0,
+          fresh: 0, followUp: 0, warm: 0, hot: 0,
+          enrolled: 0,
+          notInterested: 0, notAnswering: 0, junk: 0,
+          other: 0,
+          revenue: 0,
+        };
       }
-      perf[name].total++;
-      if (lead.status === 'Enrolled') { perf[name].enrolled++; perf[name].revenue += lead.potential_revenue || 0; }
-      if (['Fresh', 'Follow Up', 'Warm', 'Hot'].includes(lead.status)) perf[name].active++;
-      if (['Not Interested', 'Not Answering', 'Junk'].includes(lead.status)) perf[name].lost++;
-      if (lead.status === 'Hot') perf[name].hot++;
+      const p = perf[name];
+      p.total++;
+      const s = lead.status;
+      if (s === 'Fresh')              p.fresh++;
+      else if (s === 'Follow Up')     p.followUp++;
+      else if (s === 'Warm')          p.warm++;
+      else if (s === 'Hot')           p.hot++;
+      else if (s === 'Enrolled')    { p.enrolled++; p.revenue += lead.potential_revenue || 0; }
+      else if (s === 'Not Interested') p.notInterested++;
+      else if (s === 'Not Answering')  p.notAnswering++;
+      else if (s === 'Junk')           p.junk++;
+      else                             p.other++;
     });
     return Object.values(perf).map(p => ({
       ...p,
+      active: p.fresh + p.followUp + p.warm + p.hot,
+      lost:   p.notInterested + p.notAnswering + p.junk,
       conversionRate: p.total > 0 ? ((p.enrolled / p.total) * 100).toFixed(1) : '0.0',
     })).sort((a, b) => b.total - a.total);
   }, [leads]);
@@ -141,6 +161,15 @@ const AnalyticsPage = () => {
   const counselorPerf = selectedCounselor === 'all'
     ? counselorPerfRaw
     : counselorPerfRaw.filter(c => c.name === selectedCounselor);
+
+  // Helper: render a clickable count pill
+  const countPill = (n, color, title, subset) => (
+    <span
+      title="Click to view leads"
+      style={{ cursor: n > 0 ? 'pointer' : 'default', background: color, color: '#fff', borderRadius: 12, padding: '2px 10px', fontWeight: 700, opacity: n === 0 ? 0.4 : 1 }}
+      onClick={() => n > 0 && openDrawer(title, subset)}
+    >{n}</span>
+  );
 
   const counselorColumns = [
     {
@@ -153,6 +182,8 @@ const AnalyticsPage = () => {
       title: 'Counselor',
       dataIndex: 'name',
       key: 'name',
+      fixed: 'left',
+      width: 160,
       render: t => (
         <Space>
           <Avatar size="small" style={{ backgroundColor: '#6366f1' }}>{t?.charAt(0)?.toUpperCase()}</Avatar>
@@ -160,18 +191,103 @@ const AnalyticsPage = () => {
         </Space>
       ),
     },
-    { title: 'Total Leads', dataIndex: 'total', key: 'total', sorter: (a, b) => a.total - b.total, align: 'center' },
-    { title: 'Active', dataIndex: 'active', key: 'active', sorter: (a, b) => a.active - b.active, align: 'center', render: n => <Tag color="blue">{n}</Tag> },
-    { title: 'Hot', dataIndex: 'hot', key: 'hot', sorter: (a, b) => a.hot - b.hot, align: 'center', render: n => <Tag color="red">{n}</Tag> },
-    { title: 'Enrolled', dataIndex: 'enrolled', key: 'enrolled', sorter: (a, b) => a.enrolled - b.enrolled, align: 'center', render: n => <Tag color="green">{n}</Tag> },
-    { title: 'Lost', dataIndex: 'lost', key: 'lost', sorter: (a, b) => a.lost - b.lost, align: 'center', render: n => <Tag color="default">{n}</Tag> },
     {
-      title: 'Conv. Rate',
+      title: 'Total',
+      dataIndex: 'total',
+      key: 'total',
+      sorter: (a, b) => a.total - b.total,
+      align: 'center',
+      width: 80,
+      render: (n, r) => countPill(n, '#1d4ed8', `${r.name} — All Leads`, (leads || []).filter(l => l.assigned_to === r.name)),
+    },
+    {
+      title: 'Fresh',
+      dataIndex: 'fresh',
+      key: 'fresh',
+      sorter: (a, b) => a.fresh - b.fresh,
+      align: 'center',
+      width: 75,
+      render: (n, r) => countPill(n, '#0891b2', `${r.name} — Fresh`, (leads || []).filter(l => l.assigned_to === r.name && l.status === 'Fresh')),
+    },
+    {
+      title: 'Follow Up',
+      dataIndex: 'followUp',
+      key: 'followUp',
+      sorter: (a, b) => a.followUp - b.followUp,
+      align: 'center',
+      width: 90,
+      render: (n, r) => countPill(n, '#2563eb', `${r.name} — Follow Up`, (leads || []).filter(l => l.assigned_to === r.name && l.status === 'Follow Up')),
+    },
+    {
+      title: 'Warm',
+      dataIndex: 'warm',
+      key: 'warm',
+      sorter: (a, b) => a.warm - b.warm,
+      align: 'center',
+      width: 75,
+      render: (n, r) => countPill(n, '#d97706', `${r.name} — Warm`, (leads || []).filter(l => l.assigned_to === r.name && l.status === 'Warm')),
+    },
+    {
+      title: 'Hot',
+      dataIndex: 'hot',
+      key: 'hot',
+      sorter: (a, b) => a.hot - b.hot,
+      align: 'center',
+      width: 65,
+      render: (n, r) => countPill(n, '#dc2626', `${r.name} — Hot`, (leads || []).filter(l => l.assigned_to === r.name && l.status === 'Hot')),
+    },
+    {
+      title: 'Enrolled',
+      dataIndex: 'enrolled',
+      key: 'enrolled',
+      sorter: (a, b) => a.enrolled - b.enrolled,
+      align: 'center',
+      width: 85,
+      render: (n, r) => countPill(n, '#16a34a', `${r.name} — Enrolled`, (leads || []).filter(l => l.assigned_to === r.name && l.status === 'Enrolled')),
+    },
+    {
+      title: 'Not Interested',
+      dataIndex: 'notInterested',
+      key: 'notInterested',
+      sorter: (a, b) => a.notInterested - b.notInterested,
+      align: 'center',
+      width: 110,
+      render: (n, r) => countPill(n, '#6b7280', `${r.name} — Not Interested`, (leads || []).filter(l => l.assigned_to === r.name && l.status === 'Not Interested')),
+    },
+    {
+      title: 'Not Answering',
+      dataIndex: 'notAnswering',
+      key: 'notAnswering',
+      sorter: (a, b) => a.notAnswering - b.notAnswering,
+      align: 'center',
+      width: 110,
+      render: (n, r) => countPill(n, '#78716c', `${r.name} — Not Answering`, (leads || []).filter(l => l.assigned_to === r.name && l.status === 'Not Answering')),
+    },
+    {
+      title: 'Junk',
+      dataIndex: 'junk',
+      key: 'junk',
+      sorter: (a, b) => a.junk - b.junk,
+      align: 'center',
+      width: 70,
+      render: (n, r) => countPill(n, '#9ca3af', `${r.name} — Junk`, (leads || []).filter(l => l.assigned_to === r.name && l.status === 'Junk')),
+    },
+    {
+      title: 'Other',
+      dataIndex: 'other',
+      key: 'other',
+      sorter: (a, b) => a.other - b.other,
+      align: 'center',
+      width: 70,
+      render: (n, r) => countPill(n, '#a855f7', `${r.name} — Other`, (leads || []).filter(l => l.assigned_to === r.name && !['Fresh','Follow Up','Warm','Hot','Enrolled','Not Interested','Not Answering','Junk'].includes(l.status))),
+    },
+    {
+      title: 'Conv %',
       dataIndex: 'conversionRate',
       key: 'conversionRate',
       sorter: (a, b) => parseFloat(a.conversionRate) - parseFloat(b.conversionRate),
       align: 'center',
-      defaultSortOrder: 'descend',
+      width: 80,
       render: v => (
         <span style={{ color: v >= 30 ? '#10b981' : v >= 15 ? '#f59e0b' : '#ef4444', fontWeight: 700 }}>
           {v}%
@@ -184,6 +300,7 @@ const AnalyticsPage = () => {
       key: 'revenue',
       sorter: (a, b) => a.revenue - b.revenue,
       align: 'right',
+      width: 120,
       render: v => <span style={{ color: '#10b981', fontWeight: 600 }}>₹{Number(v).toLocaleString('en-IN')}</span>,
     },
   ];
@@ -659,14 +776,56 @@ const AnalyticsPage = () => {
                 dataSource={counselorPerf}
                 columns={counselorColumns}
                 rowKey="name"
-                pagination={{ pageSize: 10, hideOnSinglePage: true }}
-                size="middle"
-                scroll={{ x: 700 }}
+                pagination={{ pageSize: 15, hideOnSinglePage: true }}
+                size="small"
+                scroll={{ x: 1400 }}
               />
             )}
           </Card>
         </Col>
       </Row>
+
+      {/* Leads drill-down drawer */}
+      <Drawer
+        title={drawer.title}
+        open={drawer.open}
+        onClose={() => setDrawer(d => ({ ...d, open: false }))}
+        width={900}
+        extra={<span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{drawer.leads.length} leads</span>}
+      >
+        <Table
+          dataSource={drawer.leads}
+          rowKey="id"
+          size="small"
+          pagination={{ pageSize: 20, showSizeChanger: true, showTotal: t => `${t} leads` }}
+          scroll={{ x: 800 }}
+          columns={[
+            { title: 'Name', dataIndex: 'full_name', key: 'name', width: 160, render: t => <strong>{t}</strong> },
+            {
+              title: 'Status',
+              dataIndex: 'status',
+              key: 'status',
+              width: 130,
+              render: s => {
+                const c = { Fresh: 'cyan', 'Follow Up': 'blue', Warm: 'orange', Hot: 'red', Enrolled: 'green', 'Not Interested': 'default', 'Not Answering': 'default', Junk: 'default' };
+                return <Tag color={c[s] || 'default'}>{s}</Tag>;
+              },
+            },
+            { title: 'Source', dataIndex: 'source', key: 'source', width: 110 },
+            { title: 'Country', dataIndex: 'country', key: 'country', width: 100 },
+            { title: 'Course', dataIndex: 'course_interested', key: 'course', width: 200, ellipsis: true },
+            { title: 'Phone', dataIndex: 'phone', key: 'phone', width: 130 },
+            { title: 'Email', dataIndex: 'email', key: 'email', width: 200, ellipsis: true },
+            {
+              title: 'Created',
+              dataIndex: 'created_at',
+              key: 'created',
+              width: 110,
+              render: v => v ? new Date(v).toLocaleDateString('en-IN') : '—',
+            },
+          ]}
+        />
+      </Drawer>
     </div>
   );
 };
