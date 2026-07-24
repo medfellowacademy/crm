@@ -3566,17 +3566,17 @@ async def get_audit_logs(
 
 @app.get("/api/admin/lead-update-activity")
 async def get_lead_update_activity(
-    date: Optional[str] = None,        # YYYY-MM-DD — filter to specific day
+    date: Optional[str] = None,        # YYYY-MM-DD — single day (legacy)
+    date_from: Optional[str] = None,   # YYYY-MM-DD — range start (inclusive)
+    date_to: Optional[str] = None,     # YYYY-MM-DD — range end   (inclusive)
     user: Optional[str] = None,        # filter to specific user (admin/manager only)
-    days: int = 7,                     # how many past days to include (ignored when date is set)
+    days: int = 7,                     # how many past days (ignored when date or date_from/to is set)
     current_user: dict = Depends(get_current_user),
 ):
     """
     Per-user lead-update activity summary.
     Counselors are always scoped to their own name; admins/managers see all.
     """
-    # Counselors may only see their own activity regardless of what the
-    # `user` query param says — enforce server-side, not just on the UI.
     counselor_roles = {"Counselor"}
     if current_user.get("role") in counselor_roles:
         user = current_user.get("full_name") or current_user.get("email")
@@ -3584,14 +3584,19 @@ async def get_lead_update_activity(
         from datetime import timezone
 
         # ── Date window ──────────────────────────────────────────────────────
-        if date:
-            date_from = f"{date}T00:00:00"
-            date_to   = f"{date}T23:59:59.999"
+        if date_from and date_to:
+            _from = f"{date_from}T00:00:00"
+            _to   = f"{date_to}T23:59:59.999"
+        elif date:
+            _from = f"{date}T00:00:00"
+            _to   = f"{date}T23:59:59.999"
         else:
             today_utc  = datetime.utcnow().date()
             start_date = today_utc - timedelta(days=max(1, days) - 1)
-            date_from  = f"{start_date}T00:00:00"
-            date_to    = f"{today_utc}T23:59:59.999"
+            _from = f"{start_date}T00:00:00"
+            _to   = f"{today_utc}T23:59:59.999"
+        date_from = _from
+        date_to   = _to
 
         # ── Pull activities in the window ─────────────────────────────────────
         q = (

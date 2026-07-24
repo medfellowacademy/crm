@@ -63,9 +63,10 @@ function typeTag(type) {
 }
 
 // ── Fetch helper ──────────────────────────────────────────────────────────────
-async function fetchActivity({ date, days }) {
-  const params = { days };
-  if (date) params.date = date;
+async function fetchActivity({ date_from, date_to }) {
+  const params = {};
+  if (date_from) params.date_from = date_from;
+  if (date_to)   params.date_to   = date_to;
   const res = await api.get('/api/admin/lead-update-activity', { params });
   return res.data;
 }
@@ -75,17 +76,18 @@ export default function LeadUpdateActivityPage() {
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
   const isCounselor = currentUser.role === 'Counselor';
 
-  const [selectedDate, setSelectedDate] = useState(null);   // dayjs or null
-  const [userFilter, setUserFilter]     = useState('');
-  const [days, setDays]                 = useState(7);
-  const [drawerRow, setDrawerRow]       = useState(null);   // the row being viewed
-  const [leadSearch, setLeadSearch]     = useState('');
+  const [dateRange, setDateRange]   = useState([dayjs().subtract(6, 'day'), dayjs()]);
+  const [userFilter, setUserFilter] = useState('');
+  const [drawerRow, setDrawerRow]   = useState(null);
+  const [leadSearch, setLeadSearch] = useState('');
 
   // ── Query ──────────────────────────────────────────────────────────────────
-  const queryKey = ['lead-update-activity', selectedDate?.format('YYYY-MM-DD') || null, days];
+  const fromStr = dateRange?.[0]?.format('YYYY-MM-DD');
+  const toStr   = dateRange?.[1]?.format('YYYY-MM-DD');
+  const queryKey = ['lead-update-activity', fromStr, toStr];
   const { data, isLoading, isFetching, refetch } = useQuery({
     queryKey,
-    queryFn: () => fetchActivity({ date: selectedDate?.format('YYYY-MM-DD') || null, days }),
+    queryFn: () => fetchActivity({ date_from: fromStr, date_to: toStr }),
     staleTime: 30_000,
   });
 
@@ -295,27 +297,21 @@ export default function LeadUpdateActivityPage() {
         bodyStyle={{ padding: '16px 20px' }}
       >
         <Space wrap size={12}>
-          <DatePicker
-            value={selectedDate}
-            onChange={v => setSelectedDate(v)}
-            placeholder="Select specific day"
+          <DatePicker.RangePicker
+            value={dateRange}
+            onChange={v => setDateRange(v || [dayjs().subtract(6, 'day'), dayjs()])}
             format="DD MMM YYYY"
-            allowClear
-            suffixIcon={<CalendarOutlined />}
-            style={{ width: 190 }}
+            allowClear={false}
+            presets={[
+              { label: 'Today',        value: [dayjs(), dayjs()] },
+              { label: 'Yesterday',    value: [dayjs().subtract(1, 'day'), dayjs().subtract(1, 'day')] },
+              { label: 'Last 7 days',  value: [dayjs().subtract(6, 'day'), dayjs()] },
+              { label: 'Last 14 days', value: [dayjs().subtract(13, 'day'), dayjs()] },
+              { label: 'Last 30 days', value: [dayjs().subtract(29, 'day'), dayjs()] },
+              { label: 'This Month',   value: [dayjs().startOf('month'), dayjs()] },
+            ]}
+            style={{ width: 300 }}
           />
-          {!selectedDate && (
-            <Select
-              value={days}
-              onChange={setDays}
-              style={{ width: 150 }}
-              options={[
-                { label: 'Last 7 days',  value: 7  },
-                { label: 'Last 14 days', value: 14 },
-                { label: 'Last 30 days', value: 30 },
-              ]}
-            />
-          )}
           {!isCounselor && (
             <Select
               value={userFilter}
@@ -347,7 +343,7 @@ export default function LeadUpdateActivityPage() {
           { title: 'Leads Updated',        value: totalLeads,   icon: <EditOutlined />,      color: '#10b981' },
           { title: 'Total Events Logged',  value: totalEvents,  icon: <FileTextOutlined />,  color: '#f59e0b' },
           { title: 'Days in Window',
-            value: selectedDate ? 1 : days,
+            value: (dateRange?.[1]?.diff(dateRange?.[0], 'day') ?? 0) + 1,
             icon: <CalendarOutlined />,  color: '#06b6d4' },
         ].filter(Boolean).map(s => (
           <Col xs={24} sm={12} md={6} key={s.title}>

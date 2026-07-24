@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import * as XLSX from 'xlsx';
 import { useQuery } from '@tanstack/react-query';
 import {
   Card,
@@ -49,6 +50,7 @@ import {
   SearchOutlined,
   ReloadOutlined,
   DownloadOutlined,
+  FileExcelOutlined,
   TeamOutlined,
   TrophyOutlined,
   WarningOutlined,
@@ -160,6 +162,144 @@ const LeadAnalysisPage = () => {
     a.download = `lead-analysis-${dateRange[0].format('YYYY-MM-DD')}-to-${dateRange[1].format('YYYY-MM-DD')}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  // Full Excel report — all chart data + user performance + detailed leads
+  const handleDownloadReport = () => {
+    const wb = XLSX.utils.book_new();
+
+    const fromLabel = dateRange[0].format('DD MMM YYYY');
+    const toLabel   = dateRange[1].format('DD MMM YYYY');
+
+    // ── Sheet 1: Summary ────────────────────────────────────────────────────
+    const totalLeads   = filteredLeads.length;
+    const enrolled     = filteredLeads.filter(l => l.status === 'Enrolled').length;
+    const active       = filteredLeads.filter(l => ['Fresh','Follow Up','Warm','Hot'].includes(l.status)).length;
+    const stale        = filteredLeads.filter(l => calculateDaysSinceUpdate(l.updated_at) > 7).length;
+    const lost         = filteredLeads.filter(l => ['Not Interested','Not Answering','Junk'].includes(l.status)).length;
+    const totalRevenue = filteredLeads.reduce((s, l) => s + (l.potential_revenue || 0), 0);
+    const convRate     = totalLeads > 0 ? ((enrolled / totalLeads) * 100).toFixed(1) : '0.0';
+    const avgAge       = totalLeads > 0
+      ? (filteredLeads.reduce((s, l) => s + calculateLeadAge(l.created_at), 0) / totalLeads).toFixed(1)
+      : '0';
+    const avgUpdate    = totalLeads > 0
+      ? (filteredLeads.reduce((s, l) => s + calculateDaysSinceUpdate(l.updated_at), 0) / totalLeads).toFixed(1)
+      : '0';
+
+    const summarySheet = XLSX.utils.aoa_to_sheet([
+      ['Lead Analysis Report'],
+      [`Generated: ${dayjs().format('DD MMM YYYY, h:mm A')}`],
+      [`Date Range: ${fromLabel} → ${toLabel}`],
+      [],
+      ['Metric', 'Value'],
+      ['Total Leads', totalLeads],
+      ['Active Leads (Fresh / Follow Up / Warm / Hot)', active],
+      ['Enrolled', enrolled],
+      ['Conversion Rate', `${convRate}%`],
+      ['Lost Leads (Not Interested / Not Answering / Junk)', lost],
+      ['Stale Leads (not updated >7 days)', stale],
+      ['Stale Rate', `${totalLeads > 0 ? ((stale / totalLeads) * 100).toFixed(1) : 0}%`],
+      ['Avg Lead Age', `${avgAge} days`],
+      ['Avg Days Since Last Update', `${avgUpdate} days`],
+      ['Total Revenue (₹)', totalRevenue],
+    ]);
+    summarySheet['!cols'] = [{ wch: 45 }, { wch: 20 }];
+    XLSX.utils.book_append_sheet(wb, summarySheet, 'Summary');
+
+    // ── Sheet 2: Age Distribution ────────────────────────────────────────────
+    XLSX.utils.book_append_sheet(wb,
+      XLSX.utils.aoa_to_sheet([
+        ['Age Range', 'Lead Count'],
+        ...ageDistribution.map(r => [r.name, r.count]),
+      ]),
+      'Age Distribution'
+    );
+
+    // ── Sheet 3: Status Distribution ────────────────────────────────────────
+    XLSX.utils.book_append_sheet(wb,
+      XLSX.utils.aoa_to_sheet([
+        ['Status', 'Count'],
+        ...statusDistribution.sort((a, b) => b.value - a.value).map(r => [r.name, r.value]),
+      ]),
+      'Status Distribution'
+    );
+
+    // ── Sheet 4: Country Distribution (all countries) ───────────────────────
+    const allCountryDist = Object.entries(
+      filteredLeads.reduce((acc, l) => { if (l.country) acc[l.country] = (acc[l.country] || 0) + 1; return acc; }, {})
+    ).sort((a, b) => b[1] - a[1]);
+    XLSX.utils.book_append_sheet(wb,
+      XLSX.utils.aoa_to_sheet([
+        ['Country', 'Leads'],
+        ...allCountryDist.map(([name, value]) => [name, value]),
+      ]),
+      'Country Distribution'
+    );
+
+    // ── Sheet 5: Course Distribution (all courses) ───────────────────────────
+    const allCourseDist = Object.entries(
+      filteredLeads.reduce((acc, l) => { if (l.course_interested) acc[l.course_interested] = (acc[l.course_interested] || 0) + 1; return acc; }, {})
+    ).sort((a, b) => b[1] - a[1]);
+    XLSX.utils.book_append_sheet(wb,
+      XLSX.utils.aoa_to_sheet([
+        ['Course', 'Leads'],
+        ...allCourseDist.map(([name, value]) => [name, value]),
+      ]),
+      'Course Distribution'
+    );
+
+    // ── Sheet 6: User Performance ────────────────────────────────────────────
+    const perfHeaders = [
+      '#', 'Counselor', 'Role', 'Total',
+      'Fresh', 'Follow Up', 'Warm', 'Hot', 'Enrolled',
+      'Not Interested', 'Not Answering', 'Junk', 'Other',
+      'Stale >7d', 'Conv %', 'Avg Age (days)', 'Avg Days Since Update', 'Revenue (₹)',
+    ];
+    const perfRows = userPerformance.map((r, i) => [
+      i + 1, r.userName, r.userRole, r.totalLeads,
+      r.fresh, r.followUp, r.warm, r.hot, r.enrolled,
+      r.notInterested, r.notAnswering, r.junk, r.other,
+      r.staleLeads, `${r.conversionRate}%`, r.avgAge, r.avgDaysSinceUpdate, r.totalRevenue,
+    ]);
+    const perfSheet = XLSX.utils.aoa_to_sheet([perfHeaders, ...perfRows]);
+    perfSheet['!cols'] = [
+      { wch: 5 }, { wch: 22 }, { wch: 14 }, { wch: 8 },
+      { wch: 8 }, { wch: 10 }, { wch: 8 }, { wch: 7 }, { wch: 9 },
+      { wch: 14 }, { wch: 14 }, { wch: 7 }, { wch: 7 },
+      { wch: 10 }, { wch: 8 }, { wch: 16 }, { wch: 20 }, { wch: 14 },
+    ];
+    XLSX.utils.book_append_sheet(wb, perfSheet, 'User Performance');
+
+    // ── Sheet 7: Detailed Leads ──────────────────────────────────────────────
+    const leadHeaders = [
+      'Name', 'Status', 'Source', 'Country', 'Course', 'Phone', 'Email',
+      'Assigned To', 'Lead Age (days)', 'Days Since Update', 'Revenue (₹)', 'Created At', 'Updated At',
+    ];
+    const leadRows = filteredLeads.map(l => [
+      l.full_name     || '',
+      l.status        || '',
+      l.source        || '',
+      l.country       || '',
+      l.course_interested || '',
+      l.phone         || '',
+      l.email         || '',
+      l.assigned_to   || '',
+      calculateLeadAge(l.created_at),
+      calculateDaysSinceUpdate(l.updated_at),
+      l.potential_revenue || 0,
+      l.created_at ? dayjs(l.created_at).format('DD MMM YYYY') : '',
+      l.updated_at ? dayjs(l.updated_at).format('DD MMM YYYY') : '',
+    ]);
+    const leadSheet = XLSX.utils.aoa_to_sheet([leadHeaders, ...leadRows]);
+    leadSheet['!cols'] = [
+      { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 30 },
+      { wch: 14 }, { wch: 28 }, { wch: 22 },
+      { wch: 15 }, { wch: 17 }, { wch: 13 }, { wch: 14 }, { wch: 14 },
+    ];
+    XLSX.utils.book_append_sheet(wb, leadSheet, 'Detailed Leads');
+
+    // ── Write file ───────────────────────────────────────────────────────────
+    XLSX.writeFile(wb, `lead-analysis-report_${dateRange[0].format('YYYY-MM-DD')}_to_${dateRange[1].format('YYYY-MM-DD')}.xlsx`);
   };
 
   // Calculate metrics
@@ -653,8 +793,11 @@ const LeadAnalysisPage = () => {
             <Button icon={<ReloadOutlined />} onClick={() => refetchLeads()}>
               Refresh
             </Button>
-            <Button type="primary" icon={<DownloadOutlined />} onClick={handleExport}>
+            <Button icon={<DownloadOutlined />} onClick={handleExport}>
               Export CSV ({filteredLeads.length})
+            </Button>
+            <Button type="primary" icon={<FileExcelOutlined />} onClick={handleDownloadReport} style={{ background: '#16a34a', borderColor: '#16a34a' }}>
+              Download Full Report (.xlsx)
             </Button>
           </Space>
         </Col>
