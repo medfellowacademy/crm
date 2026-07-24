@@ -3598,31 +3598,44 @@ async def get_lead_update_activity(
         date_from = _from
         date_to   = _to
 
-        # ── Pull activities in the window ─────────────────────────────────────
-        q = (
-            supabase_data.client.table("activities")
-            .select("id,lead_id,activity_type,description,created_by,created_at")
-            .gte("created_at", date_from)
-            .lte("created_at", date_to)
-            .order("created_at", desc=True)
-        )
-        if user:
-            q = q.ilike("created_by", user.strip())
-        acts_resp = q.limit(5000).execute()
-        activities = acts_resp.data if acts_resp.data else []
+        # ── Pull activities in the window (paginated — no row cap) ───────────
+        activities = []
+        _offset = 0
+        _PAGE   = 1000
+        while True:
+            q = (
+                supabase_data.client.table("activities")
+                .select("id,lead_id,activity_type,description,created_by,created_at")
+                .gte("created_at", date_from)
+                .lte("created_at", date_to)
+                .order("created_at", desc=True)
+            )
+            if user:
+                q = q.ilike("created_by", user.strip())
+            batch = q.range(_offset, _offset + _PAGE - 1).execute().data or []
+            activities.extend(batch)
+            if len(batch) < _PAGE:
+                break
+            _offset += _PAGE
 
-        # ── Pull notes in the window (notes = counselor updates too) ─────────
-        nq = (
-            supabase_data.client.table("notes")
-            .select("id,lead_id,content,created_by,created_at,channel")
-            .gte("created_at", date_from)
-            .lte("created_at", date_to)
-            .order("created_at", desc=True)
-        )
-        if user:
-            nq = nq.ilike("created_by", user.strip())
-        notes_resp = nq.limit(5000).execute()
-        notes = notes_resp.data if notes_resp.data else []
+        # ── Pull notes in the window (paginated — no row cap) ─────────────────
+        notes   = []
+        _offset = 0
+        while True:
+            nq = (
+                supabase_data.client.table("notes")
+                .select("id,lead_id,content,created_by,created_at,channel")
+                .gte("created_at", date_from)
+                .lte("created_at", date_to)
+                .order("created_at", desc=True)
+            )
+            if user:
+                nq = nq.ilike("created_by", user.strip())
+            batch = nq.range(_offset, _offset + _PAGE - 1).execute().data or []
+            notes.extend(batch)
+            if len(batch) < _PAGE:
+                break
+            _offset += _PAGE
 
         # ── Collect all unique INTEGER lead db-ids so we can resolve names ──────
         # activities.lead_id and notes.lead_id both store the INTEGER `id`
