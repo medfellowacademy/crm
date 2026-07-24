@@ -7,7 +7,7 @@ import {
 import {
   CalendarOutlined, UserOutlined, EditOutlined, FileTextOutlined,
   PhoneOutlined, TeamOutlined, EyeOutlined, ReloadOutlined,
-  SearchOutlined,
+  SearchOutlined, ApartmentOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import dayjs from 'dayjs';
@@ -109,6 +109,31 @@ export default function LeadUpdateActivityPage() {
   const totalLeads  = filteredRows.reduce((s, r) => s + r.leads_updated, 0);
   const totalEvents = filteredRows.reduce((s, r) => s + r.total_events, 0);
   const uniqueUsers = new Set(filteredRows.map(r => r.user)).size;
+
+  // ── Unique leads across all days (deduplicated) ────────────────────────────
+  const uniqueLeadsData = useMemo(() => {
+    const map = new Map();
+    filteredRows.forEach(row => {
+      (row.leads || []).forEach(lead => {
+        if (!map.has(lead.lead_id)) {
+          map.set(lead.lead_id, {
+            lead_id:           lead.lead_id,
+            full_name:         lead.full_name,
+            status:            lead.status,
+            course_interested: lead.course_interested,
+            totalEvents:       0,
+            datesSet:          new Set(),
+          });
+        }
+        const e = map.get(lead.lead_id);
+        e.totalEvents += (lead.events || []).length;
+        e.datesSet.add(row.date);
+      });
+    });
+    return [...map.values()]
+      .map(e => ({ ...e, dates: [...e.datesSet].sort().reverse(), daysUpdated: e.datesSet.size }))
+      .sort((a, b) => b.daysUpdated - a.daysUpdated || b.totalEvents - a.totalEvents);
+  }, [filteredRows]);
 
   // ── Leads filtered by search inside drawer ────────────────────────────────
   const drawerLeads = useMemo(() => {
@@ -339,16 +364,15 @@ export default function LeadUpdateActivityPage() {
       {/* ── Summary stat cards ── */}
       <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
         {[
-          !isCounselor && { title: 'Unique Users Active', value: uniqueUsers, icon: <TeamOutlined />, color: '#6366f1' },
-          { title: 'Leads Updated',        value: totalLeads,   icon: <EditOutlined />,      color: '#10b981' },
-          { title: 'Total Events Logged',  value: totalEvents,  icon: <FileTextOutlined />,  color: '#f59e0b' },
-          { title: 'Days in Window',
-            value: (dateRange?.[1]?.diff(dateRange?.[0], 'day') ?? 0) + 1,
-            icon: <CalendarOutlined />,  color: '#06b6d4' },
+          !isCounselor && { title: 'Unique Users Active',    value: uniqueUsers,              icon: <TeamOutlined />,      color: '#6366f1', sub: null },
+          { title: 'Unique Leads Updated',  value: uniqueLeadsData.length,    icon: <ApartmentOutlined />, color: '#10b981', sub: 'distinct leads (no duplicates)' },
+          { title: 'Lead-Day Interactions', value: totalLeads,                icon: <EditOutlined />,      color: '#06b6d4', sub: 'same lead on multiple days counts each day' },
+          { title: 'Total Events Logged',   value: totalEvents,               icon: <FileTextOutlined />,  color: '#f59e0b', sub: null },
+          { title: 'Days in Window',        value: (dateRange?.[1]?.diff(dateRange?.[0], 'day') ?? 0) + 1, icon: <CalendarOutlined />, color: '#8b5cf6', sub: null },
         ].filter(Boolean).map(s => (
-          <Col xs={24} sm={12} md={6} key={s.title}>
+          <Col xs={24} sm={12} md={s.sub ? 5 : 4} key={s.title} style={{ flex: 1 }}>
             <Card
-              style={{ borderRadius: 12, border: `1px solid ${s.color}30`, background: '#fff' }}
+              style={{ borderRadius: 12, border: `1px solid ${s.color}30`, background: '#fff', height: '100%' }}
               bodyStyle={{ padding: '16px 20px' }}
             >
               <Statistic
@@ -357,6 +381,7 @@ export default function LeadUpdateActivityPage() {
                 prefix={React.cloneElement(s.icon, { style: { color: s.color } })}
                 valueStyle={{ color: s.color, fontWeight: 700, fontSize: 28 }}
               />
+              {s.sub && <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>{s.sub}</div>}
             </Card>
           </Col>
         ))}
@@ -378,6 +403,108 @@ export default function LeadUpdateActivityPage() {
           rowClassName={() => 'activity-row'}
         />
       </Card>
+
+      {/* ── Lead Update Frequency table ── */}
+      {uniqueLeadsData.length > 0 && (
+        <Card
+          style={{ borderRadius: 12, border: '1px solid #e8e8f0', marginTop: 20 }}
+          title={
+            <Space>
+              <ApartmentOutlined style={{ color: '#10b981' }} />
+              <span style={{ fontWeight: 700, color: '#1e1b4b' }}>
+                Lead Update Frequency
+              </span>
+              <Tag color="green">{uniqueLeadsData.length} unique leads</Tag>
+            </Space>
+          }
+          bodyStyle={{ padding: 0 }}
+        >
+          <Table
+            dataSource={uniqueLeadsData}
+            rowKey="lead_id"
+            size="small"
+            pagination={{ pageSize: 20, showSizeChanger: true, showTotal: t => `${t} leads` }}
+            scroll={{ x: 900 }}
+            columns={[
+              {
+                title: '#',
+                key: 'rank',
+                width: 50,
+                render: (_, __, i) => <Text type="secondary" style={{ fontSize: 12 }}>#{i + 1}</Text>,
+              },
+              {
+                title: 'Lead Name',
+                dataIndex: 'full_name',
+                key: 'full_name',
+                width: 200,
+                render: (name, rec) => (
+                  <span
+                    style={{ cursor: 'pointer', color: '#6366f1', fontWeight: 600 }}
+                    onClick={() => navigate(`/leads/${rec.lead_id}`)}
+                  >
+                    {name || rec.lead_id}
+                  </span>
+                ),
+              },
+              {
+                title: 'Lead ID',
+                dataIndex: 'lead_id',
+                key: 'lead_id',
+                width: 110,
+                render: id => (
+                  <Text code style={{ fontSize: 11, cursor: 'pointer', color: '#6366f1' }}
+                    onClick={() => navigate(`/leads/${id}`)}>
+                    {id}
+                  </Text>
+                ),
+              },
+              {
+                title: 'Status',
+                dataIndex: 'status',
+                key: 'status',
+                width: 120,
+                render: s => s ? <Tag color="processing">{s}</Tag> : '—',
+              },
+              {
+                title: 'Days Updated',
+                dataIndex: 'daysUpdated',
+                key: 'daysUpdated',
+                width: 110,
+                sorter: (a, b) => a.daysUpdated - b.daysUpdated,
+                render: n => (
+                  <span style={{
+                    background: n >= 7 ? '#dc262620' : n >= 3 ? '#d9770620' : '#10b98120',
+                    color:      n >= 7 ? '#dc2626'   : n >= 3 ? '#d97706'   : '#10b981',
+                    fontWeight: 700, borderRadius: 8, padding: '2px 10px',
+                  }}>{n} {n === 1 ? 'day' : 'days'}</span>
+                ),
+              },
+              {
+                title: 'Total Events',
+                dataIndex: 'totalEvents',
+                key: 'totalEvents',
+                width: 110,
+                sorter: (a, b) => a.totalEvents - b.totalEvents,
+                render: n => <Tag color="purple">{n} events</Tag>,
+              },
+              {
+                title: 'Updated On (dates)',
+                dataIndex: 'dates',
+                key: 'dates',
+                render: dates => (
+                  <Space wrap size={4}>
+                    {dates.map(d => (
+                      <Tag key={d} style={{ fontSize: 11, margin: 0, background: '#6366f110', color: '#6366f1', border: '1px solid #6366f130' }}>
+                        {dayjs(d).format('DD MMM')}
+                      </Tag>
+                    ))}
+                  </Space>
+                ),
+              },
+            ]}
+          />
+        </Card>
+      )}
 
       {/* ── Drill-down drawer ── */}
       <Drawer
