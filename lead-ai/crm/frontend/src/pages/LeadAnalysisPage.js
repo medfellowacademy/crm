@@ -111,18 +111,20 @@ const LeadAnalysisPage = () => {
     return dayjs().diff(dayjs(updatedAt), 'days');
   };
 
-  // Filter leads
+  // Filter leads — inclusive boundary dates, course derived from actual lead data
   const filteredLeads = useMemo(() => {
     if (!leads || !dateRange || !dateRange[0] || !dateRange[1]) return [];
+    const from = dateRange[0].startOf('day');
+    const to   = dateRange[1].endOf('day');
 
     return leads.filter(lead => {
       const leadDate = dayjs(lead.created_at);
-      const matchesDate = leadDate.isAfter(dateRange[0]) && leadDate.isBefore(dateRange[1]);
+      const matchesDate    = !leadDate.isBefore(from) && !leadDate.isAfter(to);
       const matchesCountry = selectedCountry === 'all' || lead.country === selectedCountry;
-      const matchesCourse = selectedCourse === 'all' || lead.course_interested === selectedCourse;
-      const matchesStatus = selectedStatus === 'all' || lead.status === selectedStatus;
-      const matchesUser = selectedUser === 'all' || lead.assigned_to === selectedUser;
-      const matchesSearch = !searchText ||
+      const matchesCourse  = selectedCourse  === 'all' || lead.course_interested === selectedCourse;
+      const matchesStatus  = selectedStatus  === 'all' || lead.status === selectedStatus;
+      const matchesUser    = selectedUser    === 'all' || lead.assigned_to === selectedUser;
+      const matchesSearch  = !searchText ||
         lead.full_name?.toLowerCase().includes(searchText.toLowerCase()) ||
         lead.email?.toLowerCase().includes(searchText.toLowerCase()) ||
         lead.phone?.includes(searchText);
@@ -131,9 +133,34 @@ const LeadAnalysisPage = () => {
     });
   }, [leads, dateRange, selectedCountry, selectedCourse, selectedStatus, selectedUser, searchText]);
 
-  // Get unique values for filters
-  const countries = useMemo(() => [...new Set(leads.map(l => l.country).filter(Boolean))], [leads]);
-  const statuses = useMemo(() => [...new Set(leads.map(l => l.status).filter(Boolean))], [leads]);
+  // Get unique filter values derived from actual lead data (not from separate API calls)
+  const countries     = useMemo(() => [...new Set(leads.map(l => l.country).filter(Boolean))].sort(), [leads]);
+  const statuses      = useMemo(() => [...new Set(leads.map(l => l.status).filter(Boolean))].sort(), [leads]);
+  const courseOptions = useMemo(() => [...new Set(leads.map(l => l.course_interested).filter(Boolean))].sort(), [leads]);
+
+  // CSV export of filteredLeads
+  const handleExport = () => {
+    const headers = ['Name', 'Status', 'Source', 'Country', 'Course', 'Phone', 'Email', 'Assigned To', 'Created At'];
+    const rows = filteredLeads.map(l => [
+      l.full_name || '',
+      l.status || '',
+      l.source || '',
+      l.country || '',
+      l.course_interested || '',
+      l.phone || '',
+      l.email || '',
+      l.assigned_to || '',
+      l.created_at ? new Date(l.created_at).toLocaleDateString('en-IN') : '',
+    ]);
+    const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `lead-analysis-${dateRange[0].format('YYYY-MM-DD')}-to-${dateRange[1].format('YYYY-MM-DD')}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   // Calculate metrics
   const metrics = useMemo(() => {
@@ -626,8 +653,8 @@ const LeadAnalysisPage = () => {
             <Button icon={<ReloadOutlined />} onClick={() => refetchLeads()}>
               Refresh
             </Button>
-            <Button type="primary" icon={<DownloadOutlined />}>
-              Export Report
+            <Button type="primary" icon={<DownloadOutlined />} onClick={handleExport}>
+              Export CSV ({filteredLeads.length})
             </Button>
           </Space>
         </Col>
@@ -673,8 +700,8 @@ const LeadAnalysisPage = () => {
               showSearch
             >
               <Option value="all">All Courses</Option>
-              {courses.map(course => (
-                <Option key={course.id} value={course.name}>{course.name}</Option>
+              {courseOptions.map(c => (
+                <Option key={c} value={c}>{c}</Option>
               ))}
             </Select>
           </Col>
