@@ -18,7 +18,8 @@ import {
   Empty,
   Badge,
   Button,
-  Input
+  Input,
+  Drawer
 } from 'antd';
 import {
   LineChart,
@@ -74,12 +75,9 @@ const LeadAnalysisPage = () => {
   const [dateRange, setDateRange] = useState([dayjs().subtract(90, 'days'), dayjs()]);
   const [searchText, setSearchText] = useState('');
   const [activeTab, setActiveTab] = useState('overview');
-  const [drillDown, setDrillDown] = useState(null); // { leads, label }
+  const [drawer, setDrawer] = useState({ open: false, title: '', leads: [] });
 
-  const drillInto = (leads, label) => {
-    setDrillDown({ leads, label });
-    setActiveTab('details');
-  };
+  const openDrawer = (title, leadsSubset) => setDrawer({ open: true, title, leads: leadsSubset });
 
   // Fetch data
   const { data: leadsData, isLoading: leadsLoading, refetch: refetchLeads } = useQuery({
@@ -226,13 +224,13 @@ const LeadAnalysisPage = () => {
       .slice(0, 10);
   }, [filteredLeads]);
 
-  // User performance analysis
+  // User performance — every status tracked individually so counts always tally
   const userPerformance = useMemo(() => {
     const performance = {};
-    
+
     filteredLeads.forEach(lead => {
       if (!lead.assigned_to) return;
-      
+
       if (!performance[lead.assigned_to]) {
         const user = users.find(u => u.full_name === lead.assigned_to);
         performance[lead.assigned_to] = {
@@ -240,46 +238,45 @@ const LeadAnalysisPage = () => {
           userName: user?.full_name || lead.assigned_to || 'Unknown',
           userRole: user?.role || 'Unknown',
           totalLeads: 0,
-          convertedLeads: 0,
-          lostLeads: 0,
-          activeLeads: 0,
+          fresh: 0, followUp: 0, warm: 0, hot: 0,
+          enrolled: 0,
+          notInterested: 0, notAnswering: 0, junk: 0,
+          other: 0,
           staleLeads: 0,
-          avgAge: 0,
-          avgDaysSinceUpdate: 0,
           totalRevenue: 0,
           ages: [],
-          updateDays: []
+          updateDays: [],
         };
       }
 
-      const perf = performance[lead.assigned_to];
-      perf.totalLeads++;
-      perf.ages.push(calculateLeadAge(lead.created_at));
-      perf.updateDays.push(calculateDaysSinceUpdate(lead.updated_at));
+      const p = performance[lead.assigned_to];
+      p.totalLeads++;
+      p.ages.push(calculateLeadAge(lead.created_at));
+      p.updateDays.push(calculateDaysSinceUpdate(lead.updated_at));
+      if (calculateDaysSinceUpdate(lead.updated_at) > 7) p.staleLeads++;
 
-      if (lead.status === 'Enrolled') {
-        perf.convertedLeads++;
-        perf.totalRevenue += lead.potential_revenue || 0;
-      }
-      if (['Not Interested', 'Not Answering', 'Junk'].includes(lead.status)) {
-        perf.lostLeads++;
-      }
-      if (['Fresh', 'Follow Up', 'Warm', 'Hot'].includes(lead.status)) {
-        perf.activeLeads++;
-      }
-      if (calculateDaysSinceUpdate(lead.updated_at) > 7) {
-        perf.staleLeads++;
-      }
+      const s = lead.status;
+      if (s === 'Fresh')               p.fresh++;
+      else if (s === 'Follow Up')      p.followUp++;
+      else if (s === 'Warm')           p.warm++;
+      else if (s === 'Hot')            p.hot++;
+      else if (s === 'Enrolled')     { p.enrolled++; p.totalRevenue += lead.potential_revenue || 0; }
+      else if (s === 'Not Interested') p.notInterested++;
+      else if (s === 'Not Answering')  p.notAnswering++;
+      else if (s === 'Junk')           p.junk++;
+      else                             p.other++;
     });
 
-    return Object.values(performance).map(perf => ({
-      ...perf,
-      avgAge: (perf.ages.reduce((a, b) => a + b, 0) / perf.ages.length).toFixed(1),
-      avgDaysSinceUpdate: (perf.updateDays.reduce((a, b) => a + b, 0) / perf.updateDays.length).toFixed(1),
-      conversionRate: perf.totalLeads > 0 ? ((perf.convertedLeads / perf.totalLeads) * 100).toFixed(1) : 0,
-      lostRate: perf.totalLeads > 0 ? ((perf.lostLeads / perf.totalLeads) * 100).toFixed(1) : 0,
-      staleRate: perf.totalLeads > 0 ? ((perf.staleLeads / perf.totalLeads) * 100).toFixed(1) : 0
-    })).sort((a, b) => b.totalRevenue - a.totalRevenue);
+    return Object.values(performance).map(p => ({
+      ...p,
+      activeLeads:    p.fresh + p.followUp + p.warm + p.hot,
+      convertedLeads: p.enrolled,
+      lostLeads:      p.notInterested + p.notAnswering + p.junk,
+      avgAge: (p.ages.reduce((a, b) => a + b, 0) / (p.ages.length || 1)).toFixed(1),
+      avgDaysSinceUpdate: (p.updateDays.reduce((a, b) => a + b, 0) / (p.updateDays.length || 1)).toFixed(1),
+      conversionRate: p.totalLeads > 0 ? ((p.enrolled / p.totalLeads) * 100).toFixed(1) : '0.0',
+      staleRate:      p.totalLeads > 0 ? ((p.staleLeads / p.totalLeads) * 100).toFixed(1) : '0.0',
+    })).sort((a, b) => b.totalLeads - a.totalLeads);
   }, [filteredLeads, users]);
 
   // Lead aging scatter plot data
@@ -444,134 +441,158 @@ const LeadAnalysisPage = () => {
     }
   ];
 
+  // Shared pill renderer for user columns
+  const pill = (n, bg, title, subset) => (
+    <span
+      title={n > 0 ? 'Click to view leads' : undefined}
+      style={{ cursor: n > 0 ? 'pointer' : 'default', background: bg, color: '#fff', borderRadius: 12, padding: '2px 10px', fontWeight: 700, opacity: n === 0 ? 0.35 : 1 }}
+      onClick={() => n > 0 && openDrawer(title, subset)}
+    >{n}</span>
+  );
+
   // User performance columns
   const userColumns = [
     {
       title: 'Rank',
       key: 'rank',
-      width: 80,
-      render: (_, __, index) => {
-        if (index === 0) return <TrophyOutlined style={{ fontSize: 24, color: '#ffd700' }} />;
-        if (index === 1) return <TrophyOutlined style={{ fontSize: 24, color: '#c0c0c0' }} />;
-        if (index === 2) return <TrophyOutlined style={{ fontSize: 24, color: '#cd7f32' }} />;
-        return <Text strong>#{index + 1}</Text>;
-      }
+      width: 65,
+      render: (_, __, i) => {
+        if (i === 0) return <TrophyOutlined style={{ fontSize: 22, color: '#ffd700' }} />;
+        if (i === 1) return <TrophyOutlined style={{ fontSize: 22, color: '#c0c0c0' }} />;
+        if (i === 2) return <TrophyOutlined style={{ fontSize: 22, color: '#cd7f32' }} />;
+        return <Text strong>#{i + 1}</Text>;
+      },
     },
     {
       title: 'User',
       key: 'user',
-      width: 200,
-      render: (_, record) => (
+      fixed: 'left',
+      width: 180,
+      render: (_, r) => (
         <Space>
-          <Avatar style={{ backgroundColor: '#722ed1' }}>
-            {record.userName?.charAt(0)?.toUpperCase()}
-          </Avatar>
+          <Avatar style={{ backgroundColor: '#722ed1' }}>{r.userName?.charAt(0)?.toUpperCase()}</Avatar>
           <div>
-            <div style={{ fontWeight: 500 }}>{record.userName}</div>
-            <Text type="secondary" style={{ fontSize: 12 }}>{record.userRole}</Text>
+            <div style={{ fontWeight: 500 }}>{r.userName}</div>
+            <Text type="secondary" style={{ fontSize: 12 }}>{r.userRole}</Text>
           </div>
         </Space>
-      )
+      ),
     },
     {
-      title: 'Total Leads',
+      title: 'Total',
       dataIndex: 'totalLeads',
       key: 'totalLeads',
-      width: 110,
+      width: 75,
       sorter: (a, b) => a.totalLeads - b.totalLeads,
-      render: (value, record) => (
-        <span
-          style={{ cursor: 'pointer', background: '#1890ff', color: '#fff', borderRadius: 12, padding: '2px 10px', fontWeight: 700 }}
-          onClick={() => drillInto(filteredLeads.filter(l => l.assigned_to === record.userId), `${record.userName} — All Leads`)}
-        >{value}</span>
-      )
+      render: (n, r) => pill(n, '#1d4ed8', `${r.userName} — All Leads`, filteredLeads.filter(l => l.assigned_to === r.userId)),
     },
     {
-      title: 'Converted',
-      dataIndex: 'convertedLeads',
-      key: 'convertedLeads',
-      width: 110,
-      sorter: (a, b) => a.convertedLeads - b.convertedLeads,
-      render: (value, record) => (
-        <span
-          style={{ cursor: 'pointer', background: '#52c41a', color: '#fff', borderRadius: 12, padding: '2px 10px', fontWeight: 700 }}
-          onClick={() => drillInto(filteredLeads.filter(l => l.assigned_to === record.userId && l.status === 'Enrolled'), `${record.userName} — Enrolled`)}
-        >{value}</span>
-      )
+      title: 'Fresh',
+      dataIndex: 'fresh',
+      key: 'fresh',
+      width: 70,
+      sorter: (a, b) => a.fresh - b.fresh,
+      render: (n, r) => pill(n, '#0891b2', `${r.userName} — Fresh`, filteredLeads.filter(l => l.assigned_to === r.userId && l.status === 'Fresh')),
     },
     {
-      title: 'Active',
-      dataIndex: 'activeLeads',
-      key: 'activeLeads',
-      width: 100,
-      sorter: (a, b) => a.activeLeads - b.activeLeads,
-      render: (value, record) => (
-        <span
-          style={{ cursor: 'pointer', background: '#fa8c16', color: '#fff', borderRadius: 12, padding: '2px 10px', fontWeight: 700 }}
-          onClick={() => drillInto(filteredLeads.filter(l => l.assigned_to === record.userId && ['Fresh', 'Follow Up', 'Warm', 'Hot'].includes(l.status)), `${record.userName} — Active`)}
-        >{value}</span>
-      )
-    },
-    {
-      title: 'Lost',
-      dataIndex: 'lostLeads',
-      key: 'lostLeads',
+      title: 'Follow Up',
+      dataIndex: 'followUp',
+      key: 'followUp',
       width: 90,
-      sorter: (a, b) => a.lostLeads - b.lostLeads,
-      render: (value, record) => (
-        <span
-          style={{ cursor: 'pointer', background: '#8c8c8c', color: '#fff', borderRadius: 12, padding: '2px 10px', fontWeight: 700 }}
-          onClick={() => drillInto(filteredLeads.filter(l => l.assigned_to === record.userId && ['Not Interested', 'Not Answering', 'Junk'].includes(l.status)), `${record.userName} — Lost`)}
-        >{value}</span>
-      )
+      sorter: (a, b) => a.followUp - b.followUp,
+      render: (n, r) => pill(n, '#2563eb', `${r.userName} — Follow Up`, filteredLeads.filter(l => l.assigned_to === r.userId && l.status === 'Follow Up')),
     },
     {
-      title: 'Stale (>7d)',
+      title: 'Warm',
+      dataIndex: 'warm',
+      key: 'warm',
+      width: 70,
+      sorter: (a, b) => a.warm - b.warm,
+      render: (n, r) => pill(n, '#d97706', `${r.userName} — Warm`, filteredLeads.filter(l => l.assigned_to === r.userId && l.status === 'Warm')),
+    },
+    {
+      title: 'Hot',
+      dataIndex: 'hot',
+      key: 'hot',
+      width: 60,
+      sorter: (a, b) => a.hot - b.hot,
+      render: (n, r) => pill(n, '#dc2626', `${r.userName} — Hot`, filteredLeads.filter(l => l.assigned_to === r.userId && l.status === 'Hot')),
+    },
+    {
+      title: 'Enrolled',
+      dataIndex: 'enrolled',
+      key: 'enrolled',
+      width: 80,
+      sorter: (a, b) => a.enrolled - b.enrolled,
+      render: (n, r) => pill(n, '#16a34a', `${r.userName} — Enrolled`, filteredLeads.filter(l => l.assigned_to === r.userId && l.status === 'Enrolled')),
+    },
+    {
+      title: 'Not Interested',
+      dataIndex: 'notInterested',
+      key: 'notInterested',
+      width: 110,
+      sorter: (a, b) => a.notInterested - b.notInterested,
+      render: (n, r) => pill(n, '#6b7280', `${r.userName} — Not Interested`, filteredLeads.filter(l => l.assigned_to === r.userId && l.status === 'Not Interested')),
+    },
+    {
+      title: 'Not Answering',
+      dataIndex: 'notAnswering',
+      key: 'notAnswering',
+      width: 110,
+      sorter: (a, b) => a.notAnswering - b.notAnswering,
+      render: (n, r) => pill(n, '#78716c', `${r.userName} — Not Answering`, filteredLeads.filter(l => l.assigned_to === r.userId && l.status === 'Not Answering')),
+    },
+    {
+      title: 'Junk',
+      dataIndex: 'junk',
+      key: 'junk',
+      width: 65,
+      sorter: (a, b) => a.junk - b.junk,
+      render: (n, r) => pill(n, '#9ca3af', `${r.userName} — Junk`, filteredLeads.filter(l => l.assigned_to === r.userId && l.status === 'Junk')),
+    },
+    {
+      title: 'Other',
+      dataIndex: 'other',
+      key: 'other',
+      width: 65,
+      sorter: (a, b) => a.other - b.other,
+      render: (n, r) => pill(n, '#a855f7', `${r.userName} — Other`, filteredLeads.filter(l => l.assigned_to === r.userId && !['Fresh','Follow Up','Warm','Hot','Enrolled','Not Interested','Not Answering','Junk'].includes(l.status))),
+    },
+    {
+      title: 'Stale >7d',
       dataIndex: 'staleLeads',
       key: 'staleLeads',
-      width: 110,
+      width: 90,
       sorter: (a, b) => a.staleLeads - b.staleLeads,
-      render: (value, record) => (
-        <Space>
-          <span
-            style={{ cursor: 'pointer', background: '#f5222d', color: '#fff', borderRadius: 12, padding: '2px 10px', fontWeight: 700 }}
-            onClick={() => drillInto(filteredLeads.filter(l => l.assigned_to === record.userId && calculateDaysSinceUpdate(l.updated_at) > 7), `${record.userName} — Stale (>7d)`)}
-          >{value}</span>
-          <Text type="secondary" style={{ fontSize: 12 }}>({record.staleRate}%)</Text>
-        </Space>
-      )
+      render: (n, r) => pill(n, '#f5222d', `${r.userName} — Stale (>7d)`, filteredLeads.filter(l => l.assigned_to === r.userId && calculateDaysSinceUpdate(l.updated_at) > 7)),
+    },
+    {
+      title: 'Conv %',
+      dataIndex: 'conversionRate',
+      key: 'conversionRate',
+      width: 80,
+      sorter: (a, b) => parseFloat(a.conversionRate) - parseFloat(b.conversionRate),
+      render: v => (
+        <span style={{ color: v >= 30 ? '#16a34a' : v >= 15 ? '#d97706' : '#dc2626', fontWeight: 700 }}>
+          {v}%
+        </span>
+      ),
     },
     {
       title: 'Avg Age',
       dataIndex: 'avgAge',
       key: 'avgAge',
-      width: 100,
+      width: 90,
       sorter: (a, b) => parseFloat(a.avgAge) - parseFloat(b.avgAge),
-      render: (value) => <Text>{value} days</Text>
+      render: v => <Text>{v}d</Text>,
     },
     {
-      title: 'Avg Days Since Update',
+      title: 'Last Updated',
       dataIndex: 'avgDaysSinceUpdate',
       key: 'avgDaysSinceUpdate',
-      width: 180,
+      width: 100,
       sorter: (a, b) => parseFloat(a.avgDaysSinceUpdate) - parseFloat(b.avgDaysSinceUpdate),
-      render: (value) => {
-        const isHigh = parseFloat(value) > 5;
-        return <Text type={isHigh ? 'danger' : 'success'}>{value} days</Text>;
-      }
-    },
-    {
-      title: 'Conversion',
-      dataIndex: 'conversionRate',
-      key: 'conversionRate',
-      width: 130,
-      sorter: (a, b) => parseFloat(a.conversionRate) - parseFloat(b.conversionRate),
-      render: (value) => (
-        <Space>
-          <Progress percent={parseFloat(value)} size="small" style={{ width: 60 }} />
-          <Text>{value}%</Text>
-        </Space>
-      )
+      render: v => <Text type={parseFloat(v) > 5 ? 'danger' : 'success'}>{v}d ago</Text>,
     },
     {
       title: 'Revenue',
@@ -861,21 +882,16 @@ const LeadAnalysisPage = () => {
               columns={userColumns}
               dataSource={userPerformance}
               rowKey="userId"
-              scroll={{ x: 1500 }}
-              pagination={{ pageSize: 10 }}
+              scroll={{ x: 1600 }}
+              pagination={{ pageSize: 15, hideOnSinglePage: true }}
+              size="small"
             />
           </TabPane>
 
           <TabPane tab="Detailed Leads" key="details">
-            {drillDown && (
-              <div style={{ marginBottom: 12, padding: '8px 14px', background: '#e6f7ff', border: '1px solid #91d5ff', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontWeight: 600, color: '#096dd9' }}>Showing: {drillDown.label} ({drillDown.leads.length} leads)</span>
-                <Button size="small" onClick={() => setDrillDown(null)}>Clear filter</Button>
-              </div>
-            )}
             <Table
               columns={columns}
-              dataSource={drillDown ? drillDown.leads : filteredLeads}
+              dataSource={filteredLeads}
               rowKey="id"
               scroll={{ x: 1800 }}
               pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `Total ${total} leads` }}
@@ -883,6 +899,48 @@ const LeadAnalysisPage = () => {
           </TabPane>
         </Tabs>
       </Card>
+
+      {/* Leads drill-down drawer */}
+      <Drawer
+        title={drawer.title}
+        open={drawer.open}
+        onClose={() => setDrawer(d => ({ ...d, open: false }))}
+        width={920}
+        extra={<span style={{ color: '#6b7280', fontSize: 13 }}>{drawer.leads.length} leads</span>}
+      >
+        <Table
+          dataSource={drawer.leads}
+          rowKey="id"
+          size="small"
+          pagination={{ pageSize: 20, showSizeChanger: true, showTotal: t => `${t} leads` }}
+          scroll={{ x: 800 }}
+          columns={[
+            { title: 'Name', dataIndex: 'full_name', key: 'name', width: 160, render: t => <strong>{t}</strong> },
+            {
+              title: 'Status',
+              dataIndex: 'status',
+              key: 'status',
+              width: 130,
+              render: s => {
+                const c = { Fresh: 'cyan', 'Follow Up': 'blue', Warm: 'orange', Hot: 'red', Enrolled: 'green', 'Not Interested': 'default', 'Not Answering': 'default', Junk: 'default' };
+                return <Tag color={c[s] || 'default'}>{s}</Tag>;
+              },
+            },
+            { title: 'Source', dataIndex: 'source', key: 'source', width: 110 },
+            { title: 'Country', dataIndex: 'country', key: 'country', width: 100 },
+            { title: 'Course', dataIndex: 'course_interested', key: 'course', width: 200, ellipsis: true },
+            { title: 'Phone', dataIndex: 'phone', key: 'phone', width: 130 },
+            { title: 'Email', dataIndex: 'email', key: 'email', width: 200, ellipsis: true },
+            {
+              title: 'Created',
+              dataIndex: 'created_at',
+              key: 'created',
+              width: 110,
+              render: v => v ? new Date(v).toLocaleDateString('en-IN') : '—',
+            },
+          ]}
+        />
+      </Drawer>
     </div>
   );
 };
