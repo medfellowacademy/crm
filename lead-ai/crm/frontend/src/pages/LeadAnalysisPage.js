@@ -51,6 +51,7 @@ import {
   ReloadOutlined,
   DownloadOutlined,
   FileExcelOutlined,
+  FilePdfOutlined,
   TeamOutlined,
   TrophyOutlined,
   WarningOutlined,
@@ -162,6 +163,215 @@ const LeadAnalysisPage = () => {
     a.download = `lead-analysis-${dateRange[0].format('YYYY-MM-DD')}-to-${dateRange[1].format('YYYY-MM-DD')}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  // ── PDF report: generates self-contained HTML + opens print dialog ────────
+  const handleDownloadPDF = () => {
+    const fromLabel = dateRange[0].format('DD MMM YYYY');
+    const toLabel   = dateRange[1].format('DD MMM YYYY');
+    const now       = dayjs().format('DD MMM YYYY, h:mm A');
+
+    // SVG helpers
+    const hBar = (items, nameKey, valueKey, color) => {
+      const max   = Math.max(...items.map(d => d[valueKey]), 1);
+      const rowH  = 22;
+      const labelW = 170;
+      const barAreaW = 280;
+      const svgH  = items.length * rowH + 16;
+      const rows  = items.map((d, i) => {
+        const bw = Math.round((d[valueKey] / max) * barAreaW);
+        const y  = i * rowH + 8;
+        const label = String(d[nameKey] || '').length > 24
+          ? String(d[nameKey]).slice(0, 23) + '…' : String(d[nameKey] || '');
+        return `<text x="${labelW - 6}" y="${y + 14}" text-anchor="end" font-size="11" fill="#374151" font-family="sans-serif">${label}</text>
+                <rect x="${labelW}" y="${y + 2}" width="${Math.max(bw, 2)}" height="15" fill="${color}" rx="3"/>
+                <text x="${labelW + bw + 5}" y="${y + 14}" font-size="11" fill="#374151" font-family="sans-serif">${d[valueKey]}</text>`;
+      }).join('');
+      return `<svg width="${labelW + barAreaW + 60}" height="${svgH}" xmlns="http://www.w3.org/2000/svg">${rows}</svg>`;
+    };
+
+    const vBar = (items, nameKey, valueKey, color) => {
+      const max    = Math.max(...items.map(d => d[valueKey]), 1);
+      const barW   = 56;
+      const gap    = 12;
+      const chartH = 150;
+      const totalW = items.length * (barW + gap) + 20;
+      const totalH = chartH + 52;
+      const bars = items.map((d, i) => {
+        const bh  = Math.round((d[valueKey] / max) * chartH);
+        const x   = i * (barW + gap) + 10;
+        const y   = chartH - bh + 10;
+        const lbl = String(d[nameKey] || '').replace(' days', 'd');
+        return `<rect x="${x}" y="${y}" width="${barW}" height="${bh}" fill="${color}" rx="4"/>
+                <text x="${x + barW / 2}" y="${y - 4}" text-anchor="middle" font-size="11" font-weight="700" fill="#374151" font-family="sans-serif">${d[valueKey]}</text>
+                <text x="${x + barW / 2}" y="${chartH + 26}" text-anchor="middle" font-size="10" fill="#374151" font-family="sans-serif">${lbl}</text>`;
+      }).join('');
+      return `<svg width="${totalW}" height="${totalH}" xmlns="http://www.w3.org/2000/svg">${bars}</svg>`;
+    };
+
+    // Full distributions
+    const allCountryPdf = Object.entries(
+      filteredLeads.reduce((acc, l) => { if (l.country) acc[l.country] = (acc[l.country] || 0) + 1; return acc; }, {})
+    ).sort((a, b) => b[1] - a[1]).map(([name, value]) => ({ name, value }));
+
+    const allCoursePdf = Object.entries(
+      filteredLeads.reduce((acc, l) => { if (l.course_interested) acc[l.course_interested] = (acc[l.course_interested] || 0) + 1; return acc; }, {})
+    ).sort((a, b) => b[1] - a[1]).map(([name, value]) => ({ name, value }));
+
+    const totalLeads_  = filteredLeads.length;
+    const enrolled_    = filteredLeads.filter(l => l.status === 'Enrolled').length;
+    const active_      = filteredLeads.filter(l => ['Fresh','Follow Up','Warm','Hot'].includes(l.status)).length;
+    const stale_       = filteredLeads.filter(l => calculateDaysSinceUpdate(l.updated_at) > 7).length;
+    const lost_        = filteredLeads.filter(l => ['Not Interested','Not Answering','Junk'].includes(l.status)).length;
+    const revenue_     = filteredLeads.reduce((s, l) => s + (l.potential_revenue || 0), 0);
+    const convRate_    = totalLeads_ > 0 ? ((enrolled_ / totalLeads_) * 100).toFixed(1) : '0.0';
+
+    const sColor = { 'Fresh':'#13c2c2','Follow Up':'#1890ff','Warm':'#fa8c16','Hot':'#f5222d',
+                     'Enrolled':'#52c41a','Not Interested':'#8c8c8c','Not Answering':'#78716c','Junk':'#9ca3af' };
+
+    const statCard = (lbl, val, clr) =>
+      `<div style="flex:1;min-width:110px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px">
+         <div style="font-size:11px;color:#64748b;margin-bottom:3px">${lbl}</div>
+         <div style="font-size:20px;font-weight:700;color:${clr}">${val}</div>
+       </div>`;
+
+    const statusRows = [...statusDistribution].sort((a,b) => b.value - a.value).map(s =>
+      `<tr>
+         <td style="padding:5px 10px"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${sColor[s.name]||'#888'};margin-right:6px;vertical-align:middle"></span>${s.name}</td>
+         <td style="padding:5px 10px;text-align:right;font-weight:600">${s.value}</td>
+         <td style="padding:5px 10px;text-align:right;color:#64748b">${totalLeads_ > 0 ? ((s.value/totalLeads_)*100).toFixed(1) : 0}%</td>
+       </tr>`
+    ).join('');
+
+    const perfRows = userPerformance.map((r, i) =>
+      `<tr style="background:${i%2?'#f8fafc':'#fff'}">
+         <td style="padding:4px 7px;text-align:center">${i+1}</td>
+         <td style="padding:4px 7px;font-weight:600">${r.userName}</td>
+         <td style="padding:4px 7px;text-align:center;font-weight:700">${r.totalLeads}</td>
+         <td style="padding:4px 7px;text-align:center">${r.fresh}</td>
+         <td style="padding:4px 7px;text-align:center">${r.followUp}</td>
+         <td style="padding:4px 7px;text-align:center">${r.warm}</td>
+         <td style="padding:4px 7px;text-align:center">${r.hot}</td>
+         <td style="padding:4px 7px;text-align:center;color:#16a34a;font-weight:600">${r.enrolled}</td>
+         <td style="padding:4px 7px;text-align:center">${r.notInterested}</td>
+         <td style="padding:4px 7px;text-align:center">${r.notAnswering}</td>
+         <td style="padding:4px 7px;text-align:center">${r.junk}</td>
+         <td style="padding:4px 7px;text-align:center;color:#dc2626">${r.staleLeads}</td>
+         <td style="padding:4px 7px;text-align:center;font-weight:700;color:${parseFloat(r.conversionRate)>=30?'#16a34a':parseFloat(r.conversionRate)>=15?'#d97706':'#dc2626'}">${r.conversionRate}%</td>
+         <td style="padding:4px 7px;text-align:right;color:#16a34a">₹${Number(r.totalRevenue||0).toLocaleString('en-IN')}</td>
+       </tr>`
+    ).join('');
+
+    const leadRows = filteredLeads.map((l, i) => {
+      const age  = calculateLeadAge(l.created_at);
+      const upd  = calculateDaysSinceUpdate(l.updated_at);
+      return `<tr style="background:${i%2?'#f8fafc':'#fff'}">
+        <td style="padding:4px 7px;font-size:11px">${l.full_name||''}</td>
+        <td style="padding:4px 7px"><span style="background:${sColor[l.status]||'#888'}22;color:${sColor[l.status]||'#555'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600">${l.status||''}</span></td>
+        <td style="padding:4px 7px;font-size:11px">${l.source||''}</td>
+        <td style="padding:4px 7px;font-size:11px">${l.country||''}</td>
+        <td style="padding:4px 7px;font-size:10px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l.course_interested||''}</td>
+        <td style="padding:4px 7px;font-size:11px">${l.assigned_to||''}</td>
+        <td style="padding:4px 7px;text-align:center;font-size:11px;color:${age>60?'#dc2626':age>30?'#d97706':'#16a34a'}">${age}d</td>
+        <td style="padding:4px 7px;text-align:center;font-size:11px;color:${upd>7?'#dc2626':'#374151'}">${upd}d</td>
+        <td style="padding:4px 7px;text-align:right;font-size:11px;color:#16a34a">₹${Number(l.potential_revenue||0).toLocaleString('en-IN')}</td>
+      </tr>`;
+    }).join('');
+
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>Lead Analysis Report ${fromLabel} to ${toLabel}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;color:#1e293b;background:#fff;font-size:13px}
+.page{padding:28px 36px;max-width:1080px;margin:0 auto}
+h1{font-size:22px;color:#1e1b4b;margin-bottom:3px}
+h2{font-size:15px;font-weight:700;color:#1e1b4b;margin:28px 0 12px;padding-bottom:6px;border-bottom:2px solid #e2e8f0}
+.meta{font-size:11px;color:#64748b;margin-bottom:22px}
+.stats{display:flex;gap:10px;flex-wrap:wrap}
+.charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:4px}
+.chart-box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:14px}
+.chart-title{font-size:12px;font-weight:600;color:#1e293b;margin-bottom:10px}
+table{width:100%;border-collapse:collapse;font-size:11px}
+thead tr{background:#1e1b4b;color:#fff}
+thead th{padding:7px 8px;text-align:left;font-weight:600;font-size:10px;white-space:nowrap}
+tbody td{border-bottom:1px solid #f1f5f9;vertical-align:middle}
+.no-break{page-break-inside:avoid}
+@media print{
+  body{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .no-break{page-break-inside:avoid}
+  thead{display:table-header-group}
+  h2{page-break-before:auto}
+}
+</style></head><body>
+<div class="page">
+
+<h1>Lead Analysis Report</h1>
+<div class="meta">
+  Date Range: <strong>${fromLabel} → ${toLabel}</strong> &nbsp;·&nbsp;
+  Generated: ${now} &nbsp;·&nbsp; ${totalLeads_} leads
+</div>
+
+<h2>Summary</h2>
+<div class="stats">
+  ${statCard('Total Leads',   totalLeads_,  '#1890ff')}
+  ${statCard('Active',        active_,      '#1890ff')}
+  ${statCard('Enrolled',      enrolled_,    '#16a34a')}
+  ${statCard('Conv. Rate',    convRate_+'%', parseFloat(convRate_)>=10?'#16a34a':'#dc2626')}
+  ${statCard('Lost',          lost_,        '#6b7280')}
+  ${statCard('Stale >7d',     stale_,       '#dc2626')}
+  ${statCard('Revenue',       '₹'+Number(revenue_).toLocaleString('en-IN'), '#16a34a')}
+</div>
+
+<h2>Overview Charts</h2>
+<div class="charts-grid">
+  <div class="chart-box no-break">
+    <div class="chart-title">Lead Age Distribution</div>
+    ${vBar(ageDistribution, 'name', 'count', '#1890ff')}
+  </div>
+  <div class="chart-box no-break">
+    <div class="chart-title">Status Distribution</div>
+    <table>
+      <thead><tr><th>Status</th><th style="text-align:right">Count</th><th style="text-align:right">%</th></tr></thead>
+      <tbody>${statusRows}</tbody>
+    </table>
+  </div>
+  <div class="chart-box no-break">
+    <div class="chart-title">Country Distribution (${allCountryPdf.length} countries)</div>
+    ${hBar(allCountryPdf, 'name', 'value', '#52c41a')}
+  </div>
+  <div class="chart-box no-break">
+    <div class="chart-title">Course Distribution (${allCoursePdf.length} courses)</div>
+    ${hBar(allCoursePdf, 'name', 'value', '#722ed1')}
+  </div>
+</div>
+
+<h2>User Performance</h2>
+<table>
+  <thead><tr>
+    <th>#</th><th>Counselor</th><th>Total</th><th>Fresh</th><th>Follow Up</th>
+    <th>Warm</th><th>Hot</th><th>Enrolled</th><th>Not Int.</th><th>Not Ans.</th>
+    <th>Junk</th><th>Stale</th><th>Conv%</th><th>Revenue</th>
+  </tr></thead>
+  <tbody>${perfRows}</tbody>
+</table>
+
+<h2>Detailed Leads (${filteredLeads.length})</h2>
+<table>
+  <thead><tr>
+    <th>Name</th><th>Status</th><th>Source</th><th>Country</th><th>Course</th>
+    <th>Assigned To</th><th>Age</th><th>Last Upd.</th><th>Revenue</th>
+  </tr></thead>
+  <tbody>${leadRows}</tbody>
+</table>
+
+</div>
+<script>window.addEventListener('load',function(){window.print();})</script>
+</body></html>`;
+
+    const w = window.open('', '_blank');
+    if (!w) { alert('Please allow pop-ups for this site to download the PDF report.'); return; }
+    w.document.write(html);
+    w.document.close();
   };
 
   // Full Excel report — all chart data + user performance + detailed leads
@@ -796,8 +1006,11 @@ const LeadAnalysisPage = () => {
             <Button icon={<DownloadOutlined />} onClick={handleExport}>
               Export CSV ({filteredLeads.length})
             </Button>
-            <Button type="primary" icon={<FileExcelOutlined />} onClick={handleDownloadReport} style={{ background: '#16a34a', borderColor: '#16a34a' }}>
-              Download Full Report (.xlsx)
+            <Button icon={<FileExcelOutlined />} onClick={handleDownloadReport} style={{ color: '#16a34a', borderColor: '#16a34a' }}>
+              Download Excel (.xlsx)
+            </Button>
+            <Button type="primary" icon={<FilePdfOutlined />} onClick={handleDownloadPDF} style={{ background: '#dc2626', borderColor: '#dc2626' }}>
+              Download PDF Report
             </Button>
           </Space>
         </Col>
