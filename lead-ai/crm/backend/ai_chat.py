@@ -75,7 +75,9 @@ def _search_knowledge_base(query: str, limit: int = 5) -> List[dict]:
 
 def _build_context(message: str, lead_id: Optional[str]) -> str:
     parts = []
+    msg_lower = message.lower()
 
+    # ── 1. Knowledge-base full-text search ───────────────────────────────────
     kb_hits = _search_knowledge_base(message)
     if kb_hits:
         kb_text = "\n\n".join(
@@ -84,6 +86,65 @@ def _build_context(message: str, lead_id: Optional[str]) -> str:
         )
         parts.append(f"--- Knowledge base matches ---\n{kb_text}")
 
+    # ── 2. CRM course catalog (fetched directly from DB) ─────────────────────
+    COURSE_KW = [
+        "course", "program", "programme", "study", "studies", "degree",
+        "mbbs", "md ", " md ", "bds", "dental", "nursing", "pharmacy",
+        "pediatric", "paediatric", "cardiology", "surgery", "radiology",
+        "medicine", "medical", "clinical", "specialty", "speciality",
+        "duration", "fee", "fees", "price", "cost", "eligib", "certificate",
+        "diploma", "bachelor", "master",
+    ]
+    if any(kw in msg_lower for kw in COURSE_KW):
+        try:
+            courses = supabase_data.get_courses(is_active=True)
+            if courses:
+                lines = []
+                for c in courses:
+                    name = c.get("course_name", "")
+                    cat  = c.get("category") or ""
+                    dur  = c.get("duration") or "N/A"
+                    pri  = c.get("price") or ""
+                    cur  = c.get("currency") or "INR"
+                    elig = c.get("eligibility") or ""
+                    desc = (c.get("description") or "")[:120]
+                    line = f"• {name}"
+                    if cat:  line += f" | Category: {cat}"
+                    if dur:  line += f" | Duration: {dur}"
+                    if pri:  line += f" | Fee: {cur} {pri:,.0f}" if isinstance(pri, (int, float)) else f" | Fee: {pri}"
+                    if elig: line += f" | Eligibility: {elig}"
+                    if desc: line += f" | {desc}"
+                    lines.append(line)
+                parts.append(
+                    f"--- MedFellow Academy Course Catalog ({len(courses)} active courses) ---\n"
+                    + "\n".join(lines)
+                )
+        except Exception as e:
+            logger.warning("Course context fetch failed: {}", e)
+
+    # ── 3. Partner hospitals/universities ─────────────────────────────────────
+    HOSPITAL_KW = [
+        "hospital", "university", "universities", "college", "institution",
+        "partner", "ukraine", "russia", "georgia", "philippines", "china",
+        "kyrgyzstan", "kazakhstan", "bangladesh", "nepal", "abroad",
+    ]
+    if any(kw in msg_lower for kw in HOSPITAL_KW):
+        try:
+            hospitals = supabase_data.get_hospitals()
+            if hospitals:
+                lines = [
+                    f"• {h.get('hospital_name', 'N/A')} | Country: {h.get('country', 'N/A')}"
+                    + (f" | Courses: {h.get('courses', '')}" if h.get("courses") else "")
+                    for h in hospitals[:50]
+                ]
+                parts.append(
+                    f"--- MedFellow Partner Institutions ({len(hospitals)} listed) ---\n"
+                    + "\n".join(lines)
+                )
+        except Exception as e:
+            logger.warning("Hospital context fetch failed: {}", e)
+
+    # ── 4. Lead-specific context ──────────────────────────────────────────────
     if lead_id:
         lead = supabase_data.get_lead_by_id(lead_id)
         if lead:
