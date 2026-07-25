@@ -32,7 +32,9 @@ const WebsiteLeadsPage = () => {
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
   const [assignTarget, setAssignTarget] = useState(null); // { leadIds: [...] } when modal open
   const [assignCounselor, setAssignCounselor] = useState(null);
-  const [dateRange, setDateRange] = useState([null, null]);
+  const [dateRange, setDateRange]         = useState([null, null]);
+  const [assignedFilter, setAssignedFilter] = useState('all');  // 'all' | 'assigned' | 'unassigned'
+  const [counselorFilter, setCounselorFilter] = useState('');
 
   const { data: leads = [], isLoading } = useQuery({
     queryKey: ['website-leads', dateRange[0]?.toISOString(), dateRange[1]?.toISOString()],
@@ -72,10 +74,21 @@ const WebsiteLeadsPage = () => {
     onError: (e) => message.error(`Assign failed: ${e?.response?.data?.detail || e.message}`),
   });
 
-  const total = leads.length;
+  const total      = leads.length;
   const unassigned = leads.filter(l => !l.assigned_to).length;
-  const assigned = total - unassigned;
-  const enrolled = leads.filter(l => l.status === 'Enrolled').length;
+  const assigned   = total - unassigned;
+  const enrolled   = leads.filter(l => l.status === 'Enrolled').length;
+
+  // Client-side filtered data
+  const filteredLeads = leads.filter(l => {
+    if (assignedFilter === 'assigned'   && !l.assigned_to) return false;
+    if (assignedFilter === 'unassigned' &&  l.assigned_to) return false;
+    if (counselorFilter && l.assigned_to !== counselorFilter) return false;
+    return true;
+  });
+
+  // All unique counselors who appear in this lead set
+  const activeCounselors = [...new Set(leads.map(l => l.assigned_to).filter(Boolean))].sort();
 
   const openAssignModal = (leadIds) => {
     setAssignTarget({ leadIds });
@@ -149,26 +162,69 @@ const WebsiteLeadsPage = () => {
 
       <Row gutter={16} style={{ marginBottom: 24 }}>
         {[
-          { title: 'Total Website Leads', value: total, icon: <GlobalOutlined />, color: '#1677ff' },
-          { title: 'Unassigned', value: unassigned, icon: <ClockCircleOutlined />, color: '#f59e0b' },
-          { title: 'Assigned', value: assigned, icon: <TeamOutlined />, color: '#8b5cf6' },
-          { title: 'Enrolled', value: enrolled, icon: <DollarCircleOutlined />, color: '#10b981' },
-        ].map(({ title, value, icon, color }) => (
-          <Col xs={12} sm={6} key={title}>
-            <Card>
-              <Statistic
-                title={<Space size={4}>{icon}<span>{title}</span></Space>}
-                value={value}
-                valueStyle={{ color, fontWeight: 700 }}
-              />
-            </Card>
-          </Col>
-        ))}
+          { title: 'Total Website Leads', value: total,      icon: <GlobalOutlined />,      color: '#1677ff', filter: 'all'        },
+          { title: 'Unassigned',           value: unassigned, icon: <ClockCircleOutlined />, color: '#f59e0b', filter: 'unassigned' },
+          { title: 'Assigned',             value: assigned,   icon: <TeamOutlined />,        color: '#8b5cf6', filter: 'assigned'   },
+          { title: 'Enrolled',             value: enrolled,   icon: <DollarCircleOutlined />, color: '#10b981', filter: null        },
+        ].map(({ title, value, icon, color, filter }) => {
+          const active = filter && assignedFilter === filter;
+          return (
+            <Col xs={12} sm={6} key={title}>
+              <Card
+                onClick={() => {
+                  if (!filter) return;
+                  setAssignedFilter(assignedFilter === filter ? 'all' : filter);
+                  setCounselorFilter('');
+                }}
+                style={{
+                  cursor: filter ? 'pointer' : 'default',
+                  border: active ? `2px solid ${color}` : '1px solid #f0f0f0',
+                  borderRadius: 8,
+                  transition: 'border 0.2s',
+                }}
+              >
+                <Statistic
+                  title={<Space size={4}>{icon}<span>{title}</span></Space>}
+                  value={value}
+                  valueStyle={{ color, fontWeight: 700 }}
+                />
+                {active && <div style={{ fontSize: 11, color, marginTop: 4 }}>● Filtering active — click to clear</div>}
+              </Card>
+            </Col>
+          );
+        })}
       </Row>
+
+      <Card
+        style={{ marginBottom: 16 }}
+        bodyStyle={{ padding: '12px 16px' }}
+      >
+        <Space wrap>
+          <Text strong style={{ color: '#64748b' }}>Filter by counselor:</Text>
+          <Select
+            value={counselorFilter || 'all'}
+            onChange={v => { setCounselorFilter(v === 'all' ? '' : v); setAssignedFilter(v === 'all' ? 'all' : 'assigned'); }}
+            style={{ width: 220 }}
+            showSearch
+            optionFilterProp="children"
+          >
+            <Option value="all">All counselors</Option>
+            {activeCounselors.map(c => <Option key={c} value={c}>{c}</Option>)}
+          </Select>
+          {(assignedFilter !== 'all' || counselorFilter) && (
+            <Button size="small" onClick={() => { setAssignedFilter('all'); setCounselorFilter(''); }}>
+              Clear filters
+            </Button>
+          )}
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            Showing {filteredLeads.length} of {total} leads
+          </Text>
+        </Space>
+      </Card>
 
       <Card>
         <Table
-          dataSource={leads}
+          dataSource={filteredLeads}
           columns={columns}
           rowKey="lead_id"
           rowSelection={rowSelection}
