@@ -98,6 +98,8 @@ const WebsiteLeadsPage = () => {
     { title: 'Assigned To', dataIndex: 'assigned_to', key: 'assigned_to', width: 150,
       render: v => v ? <Tag color="cyan">{v}</Tag> : <Tag>Unassigned</Tag> },
     { title: 'Received', dataIndex: 'created_at', key: 'received', width: 130,
+      sorter: (a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0),
+      defaultSortOrder: 'ascend',
       render: v => v ? (
         <Tooltip title={dayjs(v).format('DD MMM YYYY HH:mm')}>
           <Text type="secondary">{dayjs(v).fromNow()}</Text>
