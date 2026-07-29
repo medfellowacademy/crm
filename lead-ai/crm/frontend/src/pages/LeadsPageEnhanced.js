@@ -2027,20 +2027,30 @@ const LeadsPageEnhanced = () => {
         <Form form={bulkForm} layout="vertical"
           onFinish={v => {
             const updates = {};
-            if (v.status) updates.status = v.status;
-            if (v.assigned_to) updates.assigned_to = v.assigned_to;
-            if (v.follow_up_date) updates.follow_up_date = v.follow_up_date.toISOString();
-            if (v.source) updates.source = v.source;
-            
-            // Check if at least one field is filled
+            if (v.status)           updates.status           = v.status;
+            if (v.assigned_to)      updates.assigned_to      = v.assigned_to;
+            if (v.follow_up_date)   updates.follow_up_date   = v.follow_up_date.toISOString();
+            if (v.source)           updates.source           = v.source;
+            if (v.country)          updates.country          = v.country;
+            if (v.course_interested) updates.course_interested = v.course_interested;
+            if (v.qualification)    updates.qualification    = v.qualification;
+            if (v.ai_segment)       updates.ai_segment       = v.ai_segment;
+            if (v.utm_campaign)     updates.utm_campaign     = v.utm_campaign;
+            if (v.utm_source)       updates.utm_source       = v.utm_source;
+            if (v.utm_medium)       updates.utm_medium       = v.utm_medium;
+
             if (Object.keys(updates).length === 0) {
               message.warning('Please fill at least one field to update');
               return;
             }
-            
+
             bulkMutation.mutate({ leadIds: selectedRows, updates });
           }}>
-          <Form.Item name="status" label="Status"><Select placeholder="Keep unchanged" allowClear>{STATUS_OPTIONS.map(s => <Option key={s} value={s}>{s}</Option>)}</Select></Form.Item>
+          <Form.Item name="status" label="Status">
+            <Select placeholder="Keep unchanged" allowClear>
+              {STATUS_OPTIONS.map(s => <Option key={s} value={s}>{s}</Option>)}
+            </Select>
+          </Form.Item>
           <Form.Item name="assigned_to" label="Assign To">
             <Select placeholder="Keep unchanged" allowClear showSearch
               loading={!users || users.length === 0}
@@ -2055,7 +2065,40 @@ const LeadsPageEnhanced = () => {
               placeholder="Select date and time"
             />
           </Form.Item>
-          <Form.Item name="source" label="Source"><Select placeholder="Keep unchanged" allowClear>{['Website','Facebook','Google Ads','Instagram','Referral','Direct','LinkedIn','YouTube'].map(s => <Option key={s} value={s}>{s}</Option>)}</Select></Form.Item>
+          <Form.Item name="source" label="Source">
+            <Select placeholder="Keep unchanged" allowClear>
+              {uniqueSources.map(s => <Option key={s} value={s}>{s}</Option>)}
+            </Select>
+          </Form.Item>
+          <Form.Item name="country" label="Country">
+            <Select placeholder="Keep unchanged" allowClear showSearch>
+              {COUNTRIES.map(c => <Option key={c} value={c}>{c}</Option>)}
+            </Select>
+          </Form.Item>
+          <Form.Item name="course_interested" label="Course Interested">
+            <Select placeholder="Keep unchanged" allowClear showSearch>
+              {uniqueCourses.map(c => <Option key={c} value={c}>{c}</Option>)}
+            </Select>
+          </Form.Item>
+          <Form.Item name="qualification" label="Qualification">
+            <Select placeholder="Keep unchanged" allowClear>
+              {QUALIFICATION_OPTIONS.map(q => <Option key={q} value={q}>{q}</Option>)}
+            </Select>
+          </Form.Item>
+          <Form.Item name="ai_segment" label="AI Segment / Priority">
+            <Select placeholder="Keep unchanged" allowClear>
+              {uniqueSegments.map(s => <Option key={s} value={s}>{s}</Option>)}
+            </Select>
+          </Form.Item>
+          <Form.Item name="utm_campaign" label="UTM Campaign">
+            <Input placeholder="e.g. mbbs_jan26 (keep blank to skip)" allowClear />
+          </Form.Item>
+          <Form.Item name="utm_source" label="UTM Source">
+            <Input placeholder="e.g. google (keep blank to skip)" allowClear />
+          </Form.Item>
+          <Form.Item name="utm_medium" label="UTM Medium">
+            <Input placeholder="e.g. cpc (keep blank to skip)" allowClear />
+          </Form.Item>
         </Form>
       </Drawer>
 
