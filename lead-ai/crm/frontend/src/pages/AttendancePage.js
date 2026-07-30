@@ -248,31 +248,78 @@ const STATUSES = [
 
 // ── Team Attendance ─────────────────────────────────────────────────────────
 function TeamAttendance() {
-  const queryClient  = useQueryClient();
-  const [date, setDate] = useState(dayjs());
-  const [saving, setSaving] = useState(null); // user_email currently being saved
+  const queryClient = useQueryClient();
+  const [dateRange,     setDateRange]     = useState([dayjs().startOf('month'), dayjs()]);
+  const [selectedUser,  setSelectedUser]  = useState(null);
+  const [saving,        setSaving]        = useState(null); // `${user_email}-${date}` key
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['attendance-team', date.format('YYYY-MM-DD')],
-    queryFn: () => attendanceAPI.team(date.format('YYYY-MM-DD')).then(res => res.data),
+  const dateFrom = dateRange[0]?.format('YYYY-MM-DD');
+  const dateTo   = dateRange[1]?.format('YYYY-MM-DD');
+
+  const { data: usersData = [] } = useQuery({
+    queryKey: ['users-all'],
+    queryFn: () => usersAPI.getAll().then(r => r.data?.users || r.data || []),
   });
+
+  // Use the report endpoint — returns all users' records when no user_email given (admin)
+  const { data: reportData, isLoading } = useQuery({
+    queryKey: ['team-report', dateFrom, dateTo, selectedUser],
+    queryFn: () => attendanceAPI.report(dateFrom, dateTo, selectedUser || undefined).then(r => r.data),
+    enabled: !!(dateFrom && dateTo),
+  });
+
+  // Build rows: if a user is selected, fill every day in range (including absent/sunday).
+  // If no user selected, show all records that exist across all users.
+  const tableRows = useMemo(() => {
+    const records = reportData?.records || [];
+    if (selectedUser) {
+      const byDate = {};
+      records.forEach(r => { byDate[r.date] = r; });
+      const emp = usersData.find(u => u.email === selectedUser);
+      const rows = [];
+      let cur = dateRange[0].startOf('day');
+      const end = dateRange[1].startOf('day');
+      while (!cur.isAfter(end)) {
+        const ds = cur.format('YYYY-MM-DD');
+        const isSun = cur.day() === 0;
+        const rec = byDate[ds];
+        rows.push({
+          key: ds, date: ds, isSunday: isSun,
+          user_email:  selectedUser,
+          user_name:   emp?.full_name || selectedUser,
+          role:        emp?.role || '',
+          status:      rec?.status || (isSun ? 'week_off' : 'absent'),
+          check_in_at:  rec?.check_in_at  || null,
+          check_out_at: rec?.check_out_at || null,
+        });
+        cur = cur.add(1, 'day');
+      }
+      return rows;
+    }
+    // All users — show every record that exists, sorted date desc then name
+    return records
+      .slice()
+      .sort((a, b) => b.date.localeCompare(a.date) || (a.user_name || '').localeCompare(b.user_name || ''))
+      .map(r => ({ key: `${r.user_email}-${r.date}`, isSunday: dayjs(r.date).day() === 0, ...r }));
+  }, [reportData, selectedUser, dateRange, usersData]);
 
   const markMutation = useMutation({
     mutationFn: (payload) => attendanceAPI.adminMark(payload),
     onSuccess: (_, vars) => {
       message.success(`${vars.user_name} marked as ${STATUS_TAG[vars.status]?.label || vars.status}.`);
       setSaving(null);
-      queryClient.invalidateQueries({ queryKey: ['attendance-team'] });
+      queryClient.invalidateQueries({ queryKey: ['team-report'] });
     },
     onError: (e) => { setSaving(null); message.error('Failed: ' + (e?.response?.data?.detail || e.message)); },
   });
 
   const handleMark = (row, status) => {
-    setSaving(row.user_email);
+    const k = `${row.user_email}-${row.date}`;
+    setSaving(k);
     markMutation.mutate({
-      user_email: row.user_email,
-      user_name:  row.user_name,
-      date:       date.format('YYYY-MM-DD'),
+      user_email:   row.user_email,
+      user_name:    row.user_name,
+      date:         row.date,
       status,
       check_in_at:  null,
       check_out_at: null,
@@ -280,46 +327,101 @@ function TeamAttendance() {
   };
 
   const columns = [
-    { title: 'Name',      dataIndex: 'user_name', key: 'user_name', width: 160 },
-    { title: 'Role',      dataIndex: 'role',      key: 'role',      width: 120 },
-    { title: 'Check In',  dataIndex: 'check_in_at',  key: 'check_in_at',  width: 100, render: fmtTime },
-    { title: 'Check Out', dataIndex: 'check_out_at', key: 'check_out_at', width: 100, render: fmtTime },
-    { title: 'Hours',     key: 'hours', width: 90, render: (_, r) => hoursWorked(r.check_in_at, r.check_out_at) },
+    ...(!selectedUser ? [{ title: 'Employee', dataIndex: 'user_name', key: 'user_name', width: 160,
+        filters: usersData.map(u => ({ text: u.full_name, value: u.full_name })),
+        onFilter: (val, r) => r.user_name === val,
+    }] : []),
     {
-      title: 'Mark Attendance', key: 'mark', width: 320,
-      render: (_, row) => (
-        <Space size={4} wrap>
-          {STATUSES.map(s => (
-            <Button
-              key={s.value}
-              size="small"
-              type={row.status === s.value ? 'primary' : 'default'}
-              danger={s.value === 'absent'}
-              loading={saving === row.user_email}
-              onClick={() => handleMark(row, s.value)}
-              style={row.status === s.value ? {} : { opacity: 0.7 }}
-            >
-              {s.label}
-            </Button>
-          ))}
-        </Space>
+      title: 'Date', dataIndex: 'date', key: 'date', width: 160,
+      render: (d, r) => (
+        <span style={{ color: r.isSunday ? '#722ed1' : undefined, fontWeight: r.isSunday ? 600 : undefined }}>
+          {dayjs(d).format('DD MMM YYYY (ddd)')}
+        </span>
       ),
+    },
+    { title: 'Check In',  dataIndex: 'check_in_at',  key: 'check_in_at',  width: 95, render: fmtTime },
+    { title: 'Check Out', dataIndex: 'check_out_at', key: 'check_out_at', width: 95, render: fmtTime },
+    { title: 'Hours', key: 'hours', width: 80, render: (_, r) => hoursWorked(r.check_in_at, r.check_out_at) },
+    {
+      title: 'Mark Attendance', key: 'mark',
+      render: (_, row) => {
+        if (row.isSunday) return <Tag color="purple">Week Off</Tag>;
+        const k = `${row.user_email}-${row.date}`;
+        return (
+          <Space size={4} wrap>
+            {STATUSES.map(s => (
+              <Button
+                key={s.value} size="small"
+                type={row.status === s.value ? 'primary' : 'default'}
+                danger={s.value === 'absent' && row.status === s.value}
+                loading={saving === k}
+                onClick={() => handleMark(row, s.value)}
+                style={row.status !== s.value ? { opacity: 0.65 } : {}}
+              >
+                {s.label}
+              </Button>
+            ))}
+          </Space>
+        );
+      },
     },
   ];
 
   return (
-    <Card
-      title="Team Attendance"
-      extra={
-        <DatePicker
-          value={date}
-          onChange={(d) => d && setDate(d)}
-        />
-      }
-    >
-      {isLoading
-        ? <Spin />
-        : <Table columns={columns} dataSource={data?.rows || []} rowKey="user_email" pagination={false} size="small" scroll={{ x: 900 }} />
+    <Card title={<Space><TeamOutlined />Team Attendance</Space>}>
+      {/* ── Filters ── */}
+      <Space wrap style={{ marginBottom: 16 }}>
+        <div>
+          <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Date Range</div>
+          <DatePicker.RangePicker
+            value={dateRange}
+            onChange={(r) => r && r[0] && r[1] && setDateRange(r)}
+            allowClear={false}
+            presets={[
+              { label: 'Today',      value: [dayjs(), dayjs()] },
+              { label: 'This Week',  value: [dayjs().startOf('week'), dayjs()] },
+              { label: 'This Month', value: [dayjs().startOf('month'), dayjs()] },
+              { label: 'Last Month', value: [dayjs().subtract(1,'month').startOf('month'), dayjs().subtract(1,'month').endOf('month')] },
+              { label: 'Last 7 Days', value: [dayjs().subtract(6,'day'), dayjs()] },
+            ]}
+          />
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Employee</div>
+          <Select
+            style={{ width: 220 }} placeholder="All employees" allowClear
+            value={selectedUser} onChange={setSelectedUser}
+            showSearch optionFilterProp="label"
+          >
+            {usersData.map(u => (
+              <Option key={u.email} value={u.email} label={u.full_name}>{u.full_name}</Option>
+            ))}
+          </Select>
+        </div>
+        {tableRows.length > 0 && (
+          <div style={{ marginTop: 20, fontSize: 12, color: '#8c8c8c' }}>
+            {tableRows.length} record{tableRows.length !== 1 ? 's' : ''}
+            {selectedUser && (
+              <> &nbsp;·&nbsp;
+                Present: <b style={{ color: '#389e0d' }}>{tableRows.filter(r => ['present','late','left_early','late_and_left_early'].includes(r.status)).length}</b>
+                &nbsp;· Absent: <b style={{ color: '#ff4d4f' }}>{tableRows.filter(r => r.status === 'absent').length}</b>
+              </>
+            )}
+          </div>
+        )}
+      </Space>
+
+      {isLoading ? <Spin /> : tableRows.length === 0
+        ? <Empty description="No attendance records for this selection." />
+        : (
+          <Table
+            columns={columns} dataSource={tableRows} rowKey="key"
+            size="small"
+            pagination={{ pageSize: 31, showSizeChanger: true, pageSizeOptions: ['15','31','62','100'] }}
+            scroll={{ x: 950 }}
+            rowClassName={r => r.isSunday ? 'ant-table-row-sunday' : ''}
+          />
+        )
       }
     </Card>
   );
