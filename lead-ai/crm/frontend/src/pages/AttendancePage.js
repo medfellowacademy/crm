@@ -272,12 +272,44 @@ function TeamAttendance() {
   );
 }
 
+function bulkSlipHTML(selectedSlips) {
+  const bodies = selectedSlips.map((slip, i) => {
+    const inner = generateSlipHTML(slip)
+      .replace(/<!DOCTYPE html>[\s\S]*?<body[^>]*>/i, '')
+      .replace(/<\/body>[\s\S]*$/i, '');
+    return `<div class="slip-page">${inner}</div>`;
+  });
+  return `<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>Salary Slips — Bulk Download</title>
+<style>
+  body{font-family:Arial,sans-serif;margin:0;padding:0;color:#333}
+  .slip-page{max-width:750px;margin:40px auto;padding:20px;page-break-after:always}
+  .slip-page:last-child{page-break-after:auto}
+  .header{text-align:center;border-bottom:3px solid #1890ff;padding-bottom:16px;margin-bottom:24px}
+  .company{font-size:24px;font-weight:700;color:#1890ff}
+  .slip-title{font-size:15px;color:#666;margin-top:4px}
+  .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:24px;background:#f8faff;padding:16px;border-radius:8px}
+  .info-item label{font-size:11px;color:#888;display:block;margin-bottom:2px}
+  .info-item span{font-weight:600;font-size:14px}
+  table{width:100%;border-collapse:collapse;margin-bottom:24px}
+  th{background:#1890ff;color:white;padding:9px 12px;text-align:left;font-size:13px}
+  td{padding:8px 12px;border-bottom:1px solid #f0f0f0;font-size:13px}
+  tr:nth-child(even) td{background:#fafafa}
+  .net-row td{background:#f6ffed !important;font-weight:700;font-size:15px;color:#389e0d;border-top:2px solid #b7eb8f}
+  .deduction-row td{color:#cf1322}
+  .notes-box{background:#fffbe6;border:1px solid #ffe58f;padding:12px 16px;border-radius:6px;font-size:13px;margin-bottom:20px}
+  .footer{text-align:center;font-size:11px;color:#999;margin-top:32px;border-top:1px solid #f0f0f0;padding-top:12px}
+  @media print{.slip-page{margin:0;padding:16px}}
+</style></head><body>${bodies.join('\n')}</body></html>`;
+}
+
 // ── Salary Slips List ────────────────────────────────────────────────────────
 function SalarySlips() {
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
   const isAdmin = ['Super Admin', 'Manager', 'Team Leader'].includes(currentUser.role);
-  const [filterMonth, setFilterMonth] = useState(null);
-  const [filterUser,  setFilterUser]  = useState(isAdmin ? null : currentUser.email);
+  const [filterMonth,   setFilterMonth]   = useState(null);
+  const [filterUser,    setFilterUser]    = useState(isAdmin ? null : currentUser.email);
+  const [selectedKeys,  setSelectedKeys]  = useState([]);
 
   const { data: usersData } = useQuery({
     queryKey: ['users-all'],
@@ -288,7 +320,17 @@ function SalarySlips() {
   const { data: slips = [], isLoading } = useQuery({
     queryKey: ['salary-slips', filterMonth, filterUser],
     queryFn: () => attendanceAPI.listSlips(filterMonth || undefined, filterUser || undefined).then(r => r.data),
+    onSuccess: () => setSelectedKeys([]),
   });
+
+  const handleBulkPDF = () => {
+    const selected = slips.filter(s => selectedKeys.includes(s.id));
+    if (!selected.length) return;
+    const w = window.open('', '_blank');
+    w.document.write(bulkSlipHTML(selected));
+    w.document.close();
+    setTimeout(() => w.print(), 600);
+  };
 
   const columns = [
     {
@@ -349,7 +391,7 @@ function SalarySlips() {
             <DatePicker
               picker="month"
               value={filterMonth ? dayjs(filterMonth + '-01') : null}
-              onChange={d => setFilterMonth(d ? d.format('YYYY-MM') : null)}
+              onChange={d => { setFilterMonth(d ? d.format('YYYY-MM') : null); setSelectedKeys([]); }}
               allowClear
               placeholder="All months"
             />
@@ -359,7 +401,8 @@ function SalarySlips() {
               <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Employee</div>
               <Select
                 style={{ width: 220 }} placeholder="All employees" allowClear
-                value={filterUser} onChange={setFilterUser} showSearch optionFilterProp="label"
+                value={filterUser} onChange={v => { setFilterUser(v); setSelectedKeys([]); }}
+                showSearch optionFilterProp="label"
               >
                 {(usersData || []).map(u => (
                   <Option key={u.email} value={u.email} label={u.full_name}>{u.full_name}</Option>
@@ -367,16 +410,56 @@ function SalarySlips() {
               </Select>
             </div>
           )}
+          {selectedKeys.length > 0 && (
+            <div style={{ marginTop: 20 }}>
+              <Button
+                type="primary" icon={<FilePdfOutlined />}
+                onClick={handleBulkPDF}
+              >
+                Download {selectedKeys.length} Slip{selectedKeys.length > 1 ? 's' : ''} as PDF
+              </Button>
+            </div>
+          )}
         </Space>
       </Card>
 
-      <Card title={<Space><DollarOutlined />Salary Slips</Space>}>
+      <Card
+        title={
+          <Space>
+            <DollarOutlined />Salary Slips
+            {selectedKeys.length > 0 && (
+              <Tag color="blue">{selectedKeys.length} selected</Tag>
+            )}
+          </Space>
+        }
+        extra={
+          slips.length > 0 && (
+            <Space size={8}>
+              <Button size="small" onClick={() => setSelectedKeys(slips.map(s => s.id))}>
+                Select All
+              </Button>
+              {selectedKeys.length > 0 && (
+                <Button size="small" onClick={() => setSelectedKeys([])}>Clear</Button>
+              )}
+            </Space>
+          )
+        }
+      >
         {isLoading ? <Spin /> : slips.length === 0
           ? <Empty description="No salary slips saved yet. Generate one from the Reports tab." />
           : (
             <Table
-              columns={columns} dataSource={slips} rowKey="id"
-              size="small" pagination={{ pageSize: 20 }} scroll={{ x: 1200 }}
+              columns={columns}
+              dataSource={slips}
+              rowKey="id"
+              size="small"
+              pagination={{ pageSize: 20 }}
+              scroll={{ x: 1200 }}
+              rowSelection={{
+                selectedRowKeys: selectedKeys,
+                onChange: setSelectedKeys,
+                preserveSelectedRowKeys: false,
+              }}
             />
           )
         }
