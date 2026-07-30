@@ -55,13 +55,16 @@ function getCurrentLocation() {
 
 function generateSlipHTML(slip) {
   const monthLabel = dayjs((slip.month || '2025-01') + '-01').format('MMMM YYYY');
-  const perDay = slip.working_days > 0 ? slip.gross_salary / slip.working_days : 0;
+  const perDay     = slip.working_days > 0 ? slip.gross_salary / slip.working_days : 0;
+  const logoUrl    = window.location.origin + '/medfellow-logo.png';
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Salary Slip - ${slip.user_name} - ${monthLabel}</title>
 <style>
   body{font-family:Arial,sans-serif;max-width:750px;margin:40px auto;padding:20px;color:#333}
-  .header{text-align:center;border-bottom:3px solid #1890ff;padding-bottom:16px;margin-bottom:24px}
-  .company{font-size:24px;font-weight:700;color:#1890ff}
-  .slip-title{font-size:15px;color:#666;margin-top:4px}
+  .header{display:flex;align-items:center;justify-content:space-between;border-bottom:3px solid #1890ff;padding-bottom:16px;margin-bottom:24px}
+  .header-logo img{height:64px;width:auto;display:block}
+  .header-right{text-align:right}
+  .slip-title{font-size:18px;font-weight:700;color:#1890ff}
+  .slip-sub{font-size:13px;color:#666;margin-top:4px}
   .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:24px;background:#f8faff;padding:16px;border-radius:8px}
   .info-item label{font-size:11px;color:#888;display:block;margin-bottom:2px}
   .info-item span{font-weight:600;font-size:14px}
@@ -76,8 +79,11 @@ function generateSlipHTML(slip) {
   @media print{body{margin:0}}
 </style></head><body>
 <div class="header">
-  <div class="company">MedFellow Academy</div>
-  <div class="slip-title">Salary Slip &mdash; ${monthLabel}</div>
+  <div class="header-logo"><img src="${logoUrl}" alt="MedFellow Academy" /></div>
+  <div class="header-right">
+    <div class="slip-title">Salary Slip</div>
+    <div class="slip-sub">${monthLabel}</div>
+  </div>
 </div>
 <div class="info-grid">
   <div class="info-item"><label>Employee Name</label><span>${slip.user_name}</span></div>
@@ -285,9 +291,11 @@ function bulkSlipHTML(selectedSlips) {
   body{font-family:Arial,sans-serif;margin:0;padding:0;color:#333}
   .slip-page{max-width:750px;margin:40px auto;padding:20px;page-break-after:always}
   .slip-page:last-child{page-break-after:auto}
-  .header{text-align:center;border-bottom:3px solid #1890ff;padding-bottom:16px;margin-bottom:24px}
-  .company{font-size:24px;font-weight:700;color:#1890ff}
-  .slip-title{font-size:15px;color:#666;margin-top:4px}
+  .header{display:flex;align-items:center;justify-content:space-between;border-bottom:3px solid #1890ff;padding-bottom:16px;margin-bottom:24px}
+  .header-logo img{height:64px;width:auto;display:block}
+  .header-right{text-align:right}
+  .slip-title{font-size:18px;font-weight:700;color:#1890ff}
+  .slip-sub{font-size:13px;color:#666;margin-top:4px}
   .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:24px;background:#f8faff;padding:16px;border-radius:8px}
   .info-item label{font-size:11px;color:#888;display:block;margin-bottom:2px}
   .info-item span{font-weight:600;font-size:14px}
