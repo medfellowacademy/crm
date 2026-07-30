@@ -445,14 +445,15 @@ function AttendanceReport() {
   }, [reportData, dateRange]);
 
   const summary = useMemo(() => {
-    const working       = dailyList.filter(r => !r.isSunday && !r.isFuture).length;
+    const working       = dailyList.filter(r => !r.isFuture).length;  // ALL days incl. Sundays
+    const weekOffs      = dailyList.filter(r => r.isSunday && !r.isFuture).length;
     const present       = dailyList.filter(r => r.status === 'present').length;
     const late          = dailyList.filter(r => r.status === 'late').length;
     const leftEarly     = dailyList.filter(r => r.status === 'left_early').length;
     const lateLeftEarly = dailyList.filter(r => r.status === 'late_and_left_early').length;
     const absent        = dailyList.filter(r => r.status === 'absent').length;
-    const attended      = present + late + leftEarly + lateLeftEarly;
-    return { working, present, late, leftEarly, lateLeftEarly, absent, attended };
+    const attended      = present + late + leftEarly + lateLeftEarly + weekOffs;
+    return { working, weekOffs, present, late, leftEarly, lateLeftEarly, absent, attended };
   }, [dailyList]);
 
   const salaryCalc = useMemo(() => {
@@ -583,11 +584,12 @@ function AttendanceReport() {
       {/* ── Summary stats ── */}
       <Row gutter={12} style={{ marginBottom: 16 }}>
         {[
-          { label: 'Working Days', value: summary.working,                            color: '#1890ff' },
-          { label: 'Present',      value: summary.present,                            color: '#52c41a' },
-          { label: 'Late',         value: summary.late,                               color: '#fa8c16' },
-          { label: 'Left Early',   value: summary.leftEarly + summary.lateLeftEarly,  color: '#fadb14' },
-          { label: 'Absent',       value: summary.absent,                             color: '#ff4d4f' },
+          { label: 'Total Days',       value: summary.working,                           color: '#1890ff' },
+          { label: 'Days Came',        value: summary.present + summary.late + summary.leftEarly + summary.lateLeftEarly, color: '#52c41a' },
+          { label: 'Week Offs (Sun)',  value: summary.weekOffs,                          color: '#722ed1' },
+          { label: 'Late',             value: summary.late,                              color: '#fa8c16' },
+          { label: 'Left Early',       value: summary.leftEarly + summary.lateLeftEarly, color: '#fadb14' },
+          { label: 'Absent',           value: summary.absent,                            color: '#ff4d4f' },
         ].map(s => (
           <Col key={s.label} xs={12} sm={8} md={4} style={{ marginBottom: 8 }}>
             <Card size="small" bodyStyle={{ padding: '12px 16px' }}>
@@ -600,6 +602,15 @@ function AttendanceReport() {
           </Col>
         ))}
       </Row>
+      {/* payable days = days came + week offs */}
+      <div style={{ marginBottom: 12, fontSize: 13, color: '#595959' }}>
+        <span style={{ fontWeight: 600 }}>Payable days:</span>{' '}
+        {summary.present + summary.late + summary.leftEarly + summary.lateLeftEarly} came
+        {summary.weekOffs > 0 && <> + {summary.weekOffs} week off</>}
+        {' '}= <span style={{ fontWeight: 700, color: '#389e0d' }}>{summary.attended}</span>
+        {' '}out of {summary.working} total days
+        {summary.absent > 0 && <span style={{ color: '#ff4d4f' }}> · {summary.absent} absent</span>}
+      </div>
 
       {/* ── Daily table ── */}
       <Card
@@ -669,14 +680,15 @@ function AttendanceReport() {
               <Row gutter={12} style={{ marginBottom: 12 }}>
                 <Col xs={12} sm={6} style={{ marginBottom: 8 }}>
                   <Card size="small" bodyStyle={{ padding: '12px 16px', background: '#f6ffed', borderColor: '#b7eb8f' }}>
-                    <div style={{ fontSize: 11, color: '#8c8c8c' }}>Working Days</div>
+                    <div style={{ fontSize: 11, color: '#8c8c8c' }}>Total Days (incl. Sundays)</div>
                     <div style={{ fontSize: 20, fontWeight: 700, color: '#52c41a' }}>{summary.working}</div>
                   </Card>
                 </Col>
                 <Col xs={12} sm={6} style={{ marginBottom: 8 }}>
                   <Card size="small" bodyStyle={{ padding: '12px 16px', background: '#e6f7ff', borderColor: '#91d5ff' }}>
-                    <div style={{ fontSize: 11, color: '#8c8c8c' }}>Days Attended</div>
+                    <div style={{ fontSize: 11, color: '#8c8c8c' }}>Payable Days (came + Sun)</div>
                     <div style={{ fontSize: 20, fontWeight: 700, color: '#1890ff' }}>{summary.attended}</div>
+                    <div style={{ fontSize: 11, color: '#8c8c8c' }}>{summary.attended - summary.weekOffs} came + {summary.weekOffs} Sun</div>
                   </Card>
                 </Col>
                 <Col xs={12} sm={6} style={{ marginBottom: 8 }}>
