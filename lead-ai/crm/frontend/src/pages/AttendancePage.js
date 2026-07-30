@@ -7,7 +7,7 @@ import {
 import {
   LoginOutlined, LogoutOutlined, EnvironmentOutlined, ClockCircleOutlined,
   CheckCircleOutlined, WarningOutlined, DownloadOutlined, FileTextOutlined,
-  DollarOutlined, TeamOutlined, CalendarOutlined, SaveOutlined, FilePdfOutlined,
+  DollarOutlined, TeamOutlined, CalendarOutlined, SaveOutlined, FilePdfOutlined, PlusOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { attendanceAPI, usersAPI } from '../api/api';
@@ -110,6 +110,8 @@ function generateSlipHTML(slip) {
     <tr><td>Per Day Rate</td><td>${fmtINR(perDay)}</td></tr>
     ${slip.effective_absent > 0 ? `<tr class="deduction-row"><td>Absent Deduction (${slip.effective_absent} days &times; ${fmtINR(perDay)})</td><td>&minus; ${fmtINR(slip.absent_deduction)}</td></tr>` : ''}
     ${slip.late_deduction_total > 0 ? `<tr class="deduction-row"><td>Late Arrival Deduction (${slip.days_late} days &times; ${fmtINR(slip.late_deduction_per_day)})</td><td>&minus; ${fmtINR(slip.late_deduction_total)}</td></tr>` : ''}
+    ${(slip.advance_deduction || 0) > 0 ? `<tr class="deduction-row"><td>Advance Deduction</td><td>&minus; ${fmtINR(slip.advance_deduction)}</td></tr>` : ''}
+    ${(slip.leave_payout_amt || 0) > 0 ? `<tr style="color:#389e0d"><td>Leave Encashment (${slip.leave_payout_days} day(s) &times; ${fmtINR(perDay)})</td><td>+ ${fmtINR(slip.leave_payout_amt)}</td></tr>` : ''}
     <tr class="net-row"><td>Net Salary Payable</td><td>${fmtINR(slip.net_salary)}</td></tr>
   </tbody>
 </table>
@@ -484,9 +486,11 @@ function AttendanceReport() {
   const [dateRange,           setDateRange]           = useState([dayjs().startOf('month'), dayjs()]);
   const [selectedUser,        setSelectedUser]        = useState(isAdmin ? null : currentUser.email);
   const [monthlySalary,       setMonthlySalary]       = useState('');
-  const [paidLeavesAllowed,   setPaidLeavesAllowed]   = useState(1);
   const [lateDeductionPerDay, setLateDeductionPerDay] = useState(0);
   const [slipNotes,           setSlipNotes]           = useState('');
+  const [leavesUsed,          setLeavesUsed]          = useState(0);
+  const [advanceDeduction,    setAdvanceDeduction]    = useState(0);
+  const [selectedAdvanceId,   setSelectedAdvanceId]   = useState(null);
 
   const { data: usersData } = useQuery({
     queryKey: ['users-all'],
@@ -501,6 +505,21 @@ function AttendanceReport() {
     queryKey: ['attendance-report', dateFrom, dateTo, selectedUser],
     queryFn:  () => attendanceAPI.report(dateFrom, dateTo, selectedUser || undefined).then(r => r.data),
     enabled:  !!(dateFrom && dateTo),
+  });
+
+  const slipMonth = dateRange[0]?.format('YYYY-MM');
+  const leaveEmployee = selectedUser || (isAdmin ? null : currentUser.email);
+
+  const { data: leaveBalance } = useQuery({
+    queryKey: ['leave-balance', leaveEmployee, slipMonth],
+    queryFn:  () => attendanceAPI.getLeaveBalance(leaveEmployee, slipMonth).then(r => r.data),
+    enabled:  !!(leaveEmployee && slipMonth),
+  });
+
+  const { data: pendingAdvances = [] } = useQuery({
+    queryKey: ['advances-pending', leaveEmployee],
+    queryFn:  () => attendanceAPI.listAdvances(leaveEmployee, 'pending').then(r => r.data),
+    enabled:  !!leaveEmployee,
   });
 
   const saveMutation = useMutation({
@@ -547,17 +566,33 @@ function AttendanceReport() {
     return { working, weekOffs, present, late, leftEarly, lateLeftEarly, absent, attended };
   }, [dailyList]);
 
+  // Leave balance calculation for this month
+  const leaveCalc = useMemo(() => {
+    const opening   = parseFloat(leaveBalance?.opening_balance ?? 0);
+    const accrued   = 1;
+    const used      = parseFloat(leavesUsed || 0);
+    const rawClose  = opening + accrued - used;
+    const payoutDays = Math.max(0, rawClose - 3);
+    const closing   = Math.min(Math.max(rawClose, 0), 3);
+    return { opening, accrued, available: opening + accrued, used, closing, payoutDays };
+  }, [leaveBalance, leavesUsed]);
+
   const salaryCalc = useMemo(() => {
     const sal = parseFloat(monthlySalary);
     if (!sal || summary.working === 0) return null;
     const perDay          = sal / summary.working;
-    const effectiveAbsent = Math.max(0, summary.absent - paidLeavesAllowed);
+    // Absences: reduce by leaves used this month (those are paid)
+    const effectiveAbsent = Math.max(0, summary.absent - leaveCalc.used);
     const absentDeduction = effectiveAbsent * perDay;
     const lateDeduction   = summary.late * parseFloat(lateDeductionPerDay || 0);
-    const totalDeduction  = absentDeduction + lateDeduction;
-    const netSalary       = Math.max(0, sal - totalDeduction);
-    return { perDay, effectiveAbsent, absentDeduction, lateDeduction, totalDeduction, netSalary };
-  }, [monthlySalary, paidLeavesAllowed, lateDeductionPerDay, summary]);
+    const advDeduction    = parseFloat(advanceDeduction || 0);
+    // Leave payout when balance would exceed 3 months
+    const leavePayoutAmt  = leaveCalc.payoutDays * perDay;
+    const totalDeduction  = absentDeduction + lateDeduction + advDeduction;
+    const netSalary       = Math.max(0, sal - totalDeduction + leavePayoutAmt);
+    return { perDay, effectiveAbsent, absentDeduction, lateDeduction, advDeduction,
+             leavePayoutAmt, totalDeduction, netSalary };
+  }, [monthlySalary, lateDeductionPerDay, advanceDeduction, summary, leaveCalc]);
 
   const handleDownloadCSV = async () => {
     if (!dateFrom || !dateTo) return;
@@ -578,22 +613,48 @@ function AttendanceReport() {
     return {
       user_email:            employeeEmail,
       user_name:             employeeName,
-      month:                 dateRange[0]?.format('YYYY-MM'),
+      month:                 slipMonth,
       gross_salary:          parseFloat(monthlySalary),
       working_days:          summary.working,
       days_present:          summary.present,
       days_late:             summary.late,
       days_left_early:       summary.leftEarly + summary.lateLeftEarly,
       days_absent:           summary.absent,
-      paid_leaves_allowed:   paidLeavesAllowed,
+      paid_leaves_allowed:   leaveCalc.used,
       effective_absent:      salaryCalc.effectiveAbsent,
       late_deduction_per_day: parseFloat(lateDeductionPerDay || 0),
       late_deduction_total:  salaryCalc.lateDeduction,
       absent_deduction:      salaryCalc.absentDeduction,
       total_deduction:       salaryCalc.totalDeduction,
       net_salary:            salaryCalc.netSalary,
+      advance_deduction:     salaryCalc.advDeduction,
+      leave_opening:         leaveCalc.opening,
+      leaves_used:           leaveCalc.used,
+      leave_closing:         leaveCalc.closing,
+      leave_payout_days:     leaveCalc.payoutDays,
+      leave_payout_amt:      salaryCalc.leavePayoutAmt,
       notes:                 slipNotes || null,
     };
+  };
+
+  const handleSaveSlipFull = async () => {
+    if (!salaryCalc) return;
+    const employeeEmail = selectedUser || currentUser.email;
+    const employeeName  = (usersData || []).find(u => u.email === employeeEmail)?.full_name || employeeEmail;
+    // 1. Save the slip
+    saveMutation.mutate(buildSlipPayload());
+    // 2. Save/update leave balance
+    try {
+      await attendanceAPI.saveLeaveBalance({
+        user_email: employeeEmail, user_name: employeeName,
+        month: slipMonth, opening_balance: leaveCalc.opening,
+        used: leaveCalc.used, payout_amount: salaryCalc.leavePayoutAmt,
+      });
+    } catch (e) { console.error('Leave balance save failed', e); }
+    // 3. Mark advance as deducted if one was selected
+    if (selectedAdvanceId && salaryCalc.advDeduction > 0) {
+      try { await attendanceAPI.markAdvanceDeducted(selectedAdvanceId); } catch (e) {}
+    }
   };
 
   const handleDownloadSlipPDF = () => {
@@ -734,15 +795,6 @@ function AttendanceReport() {
               </div>
             </Col>
             <Col xs={24} sm={6}>
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 6 }}>Paid Leave Allowance (days)</div>
-                <InputNumber
-                  style={{ width: '100%' }} min={0} max={summary.working}
-                  value={paidLeavesAllowed} onChange={(v) => setPaidLeavesAllowed(v ?? 0)} size="large"
-                />
-              </div>
-            </Col>
-            <Col xs={24} sm={6}>
               <Tooltip title="Amount deducted per late-arrival day. Set 0 to ignore late arrivals.">
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 6 }}>
@@ -793,7 +845,7 @@ function AttendanceReport() {
                 </Col>
                 <Col xs={12} sm={6} style={{ marginBottom: 8 }}>
                   <Card size="small" bodyStyle={{ padding: '12px 16px', background: '#fff2e8', borderColor: '#ffbb96' }}>
-                    <div style={{ fontSize: 11, color: '#8c8c8c' }}>Effective Absent (after {paidLeavesAllowed} PL)</div>
+                    <div style={{ fontSize: 11, color: '#8c8c8c' }}>Effective Absent (after {leaveCalc.used} PL)</div>
                     <div style={{ fontSize: 20, fontWeight: 700, color: '#fa541c' }}>{salaryCalc.effectiveAbsent}</div>
                   </Card>
                 </Col>
@@ -814,6 +866,7 @@ function AttendanceReport() {
                       {salaryCalc.effectiveAbsent > 0 && `Absent: ${fmtINR(salaryCalc.absentDeduction)}`}
                       {salaryCalc.effectiveAbsent > 0 && salaryCalc.lateDeduction > 0 && ' + '}
                       {salaryCalc.lateDeduction > 0 && `Late: ${fmtINR(salaryCalc.lateDeduction)}`}
+                      {salaryCalc.advDeduction > 0 && ` + Advance: ${fmtINR(salaryCalc.advDeduction)}`}
                     </div>
                   </Card>
                 </Col>
@@ -823,16 +876,82 @@ function AttendanceReport() {
                     <div style={{ fontSize: 26, fontWeight: 700, color: '#389e0d' }}>{fmtINR(salaryCalc.netSalary)}</div>
                     <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 4 }}>
                       {fmtINR(parseFloat(monthlySalary))} − {fmtINR(salaryCalc.totalDeduction)}
+                      {salaryCalc.leavePayoutAmt > 0 && ` + ${fmtINR(salaryCalc.leavePayoutAmt)} leave encashment`}
                     </div>
                   </Card>
                 </Col>
               </Row>
 
-              <Divider style={{ margin: '16px 0 12px' }} />
+              {/* ── Leave Balance ── */}
+              <Divider orientation="left" style={{ margin: '16px 0 12px', fontSize: 13 }}>Leave Balance</Divider>
+              <Row gutter={12} style={{ marginBottom: 12 }} align="middle">
+                <Col xs={24} sm={14}>
+                  <div style={{ background: '#f0f5ff', border: '1px solid #adc6ff', borderRadius: 8, padding: '12px 16px', fontSize: 13 }}>
+                    <Space size={16} wrap>
+                      <span>Opening: <b>{leaveCalc.opening}</b></span>
+                      <span>+ Accrued: <b>1</b></span>
+                      <span>= Available: <b style={{ color: '#1890ff' }}>{leaveCalc.available}</b></span>
+                      {leaveCalc.payoutDays > 0 && (
+                        <span style={{ color: '#389e0d', fontWeight: 600 }}>
+                          ⚠ {leaveCalc.payoutDays} day(s) encashed ({fmtINR(salaryCalc.leavePayoutAmt)})
+                        </span>
+                      )}
+                    </Space>
+                    <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 6 }}>
+                      Closing balance: <b>{leaveCalc.closing}</b>/3 max carry-forward
+                    </div>
+                  </div>
+                </Col>
+                <Col xs={24} sm={10}>
+                  <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Leaves used this month (paid, no deduction)</div>
+                  <InputNumber
+                    style={{ width: '100%' }} min={0} max={leaveCalc.available}
+                    value={leavesUsed} onChange={v => setLeavesUsed(v ?? 0)}
+                    placeholder="0" size="large"
+                  />
+                </Col>
+              </Row>
+
+              {/* ── Advance Deduction ── */}
+              <Divider orientation="left" style={{ margin: '12px 0 12px', fontSize: 13 }}>Advance Deduction</Divider>
+              <Row gutter={12} style={{ marginBottom: 12 }} align="middle">
+                {pendingAdvances.length > 0 && (
+                  <Col xs={24} sm={14} style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Select a pending advance to deduct</div>
+                    <Select
+                      style={{ width: '100%' }} allowClear placeholder="No advance"
+                      value={selectedAdvanceId}
+                      onChange={(val, opt) => {
+                        setSelectedAdvanceId(val || null);
+                        const adv = pendingAdvances.find(a => a.id === val);
+                        setAdvanceDeduction(adv ? adv.amount : 0);
+                      }}
+                    >
+                      {pendingAdvances.map(a => (
+                        <Option key={a.id} value={a.id}>
+                          {fmtINR(a.amount)} — given {dayjs(a.given_date).format('DD MMM YYYY')}
+                          {a.notes ? ` (${a.notes})` : ''}
+                        </Option>
+                      ))}
+                    </Select>
+                  </Col>
+                )}
+                <Col xs={24} sm={10} style={{ marginBottom: 8 }}>
+                  <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Advance amount to deduct (₹)</div>
+                  <InputNumber
+                    style={{ width: '100%' }} min={0}
+                    value={advanceDeduction} onChange={v => { setAdvanceDeduction(v ?? 0); setSelectedAdvanceId(null); }}
+                    formatter={v => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+                    parser={v => v.replace(/,/g, '')} size="large" placeholder="0"
+                  />
+                </Col>
+              </Row>
+
+              <Divider style={{ margin: '12px 0 12px' }} />
               <Space>
                 <Button
                   type="primary" icon={<SaveOutlined />}
-                  onClick={() => saveMutation.mutate(buildSlipPayload())}
+                  onClick={handleSaveSlipFull}
                   loading={saveMutation.isPending}
                   disabled={!selectedUser && isAdmin}
                 >
@@ -857,6 +976,154 @@ function AttendanceReport() {
   );
 }
 
+// ── Advances Panel (admin) ────────────────────────────────────────────────────
+function AdvancesPanel() {
+  const queryClient = useQueryClient();
+  const [filterUser,   setFilterUser]   = useState(null);
+  const [filterStatus, setFilterStatus] = useState(null);
+  const [showForm,     setShowForm]     = useState(false);
+  const [formEmail,    setFormEmail]    = useState(null);
+  const [formAmount,   setFormAmount]   = useState('');
+  const [formDate,     setFormDate]     = useState(dayjs());
+  const [formNotes,    setFormNotes]    = useState('');
+
+  const { data: usersData = [] } = useQuery({
+    queryKey: ['users-all'],
+    queryFn: () => usersAPI.getAll().then(r => r.data?.users || r.data || []),
+  });
+
+  const { data: advances = [], isLoading } = useQuery({
+    queryKey: ['advances-all', filterUser, filterStatus],
+    queryFn: () => attendanceAPI.listAdvances(filterUser || undefined, filterStatus || undefined).then(r => r.data),
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (payload) => attendanceAPI.createAdvance(payload),
+    onSuccess: () => {
+      message.success('Advance recorded.');
+      setShowForm(false);
+      setFormEmail(null);
+      setFormAmount('');
+      setFormNotes('');
+      setFormDate(dayjs());
+      queryClient.invalidateQueries({ queryKey: ['advances-all'] });
+      queryClient.invalidateQueries({ queryKey: ['advances-pending'] });
+    },
+    onError: (e) => message.error('Failed: ' + (e?.response?.data?.detail || e.message)),
+  });
+
+  const handleCreate = () => {
+    if (!formEmail) { message.warning('Select an employee.'); return; }
+    if (!formAmount || parseFloat(formAmount) <= 0) { message.warning('Enter a valid amount.'); return; }
+    const emp = usersData.find(u => u.email === formEmail);
+    createMutation.mutate({
+      user_email: formEmail,
+      user_name:  emp?.full_name || formEmail,
+      amount:     parseFloat(String(formAmount).replace(/,/g, '')),
+      given_date: formDate.format('YYYY-MM-DD'),
+      notes:      formNotes || null,
+    });
+  };
+
+  const columns = [
+    { title: 'Employee',    dataIndex: 'user_name',      key: 'user_name',  width: 160 },
+    { title: 'Amount',      dataIndex: 'amount',         key: 'amount',     width: 120, render: v => fmtINR(v) },
+    { title: 'Given Date',  dataIndex: 'given_date',     key: 'given_date', width: 130, render: d => dayjs(d).format('DD MMM YYYY') },
+    {
+      title: 'Status', dataIndex: 'status', key: 'status', width: 110,
+      render: s => <Tag color={s === 'pending' ? 'orange' : 'green'}>{s === 'pending' ? 'Pending' : 'Deducted'}</Tag>,
+    },
+    { title: 'Notes',       dataIndex: 'notes',          key: 'notes' },
+    { title: 'Deducted On', dataIndex: 'deducted_date',  key: 'deducted_date', width: 130, render: d => d ? dayjs(d).format('DD MMM YYYY') : '—' },
+  ];
+
+  return (
+    <div>
+      <Card
+        title={<Space><DollarOutlined />Salary Advances</Space>}
+        extra={
+          <Button
+            type={showForm ? 'default' : 'primary'}
+            icon={<PlusOutlined />}
+            onClick={() => setShowForm(v => !v)}
+          >
+            {showForm ? 'Cancel' : 'Record Advance'}
+          </Button>
+        }
+        style={{ marginBottom: 16 }}
+      >
+        {showForm && (
+          <>
+            <Row gutter={12} style={{ marginBottom: 12 }}>
+              <Col xs={24} sm={6}>
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Employee</div>
+                <Select
+                  style={{ width: '100%' }} placeholder="Select employee"
+                  value={formEmail} onChange={setFormEmail}
+                  showSearch optionFilterProp="label"
+                >
+                  {usersData.map(u => (
+                    <Option key={u.email} value={u.email} label={u.full_name}>{u.full_name}</Option>
+                  ))}
+                </Select>
+              </Col>
+              <Col xs={24} sm={5}>
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Amount (₹)</div>
+                <InputNumber
+                  style={{ width: '100%' }} min={1} placeholder="e.g. 5000"
+                  value={formAmount} onChange={setFormAmount}
+                  formatter={v => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+                  parser={v => v.replace(/,/g, '')}
+                />
+              </Col>
+              <Col xs={24} sm={5}>
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Given Date</div>
+                <DatePicker style={{ width: '100%' }} value={formDate} onChange={d => d && setFormDate(d)} />
+              </Col>
+              <Col xs={24} sm={5}>
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Notes</div>
+                <Input placeholder="Optional notes" value={formNotes} onChange={e => setFormNotes(e.target.value)} />
+              </Col>
+              <Col xs={24} sm={3} style={{ display: 'flex', alignItems: 'flex-end' }}>
+                <Button type="primary" onClick={handleCreate} loading={createMutation.isPending} block>Save</Button>
+              </Col>
+            </Row>
+            <Divider style={{ margin: '4px 0 16px' }} />
+          </>
+        )}
+
+        <Space wrap style={{ marginBottom: 12 }}>
+          <Select
+            style={{ width: 200 }} placeholder="Filter by employee" allowClear
+            value={filterUser} onChange={setFilterUser} showSearch optionFilterProp="label"
+          >
+            {usersData.map(u => (
+              <Option key={u.email} value={u.email} label={u.full_name}>{u.full_name}</Option>
+            ))}
+          </Select>
+          <Select
+            style={{ width: 150 }} placeholder="All statuses" allowClear
+            value={filterStatus} onChange={setFilterStatus}
+          >
+            <Option value="pending">Pending</Option>
+            <Option value="deducted">Deducted</Option>
+          </Select>
+        </Space>
+
+        {isLoading ? <Spin /> : advances.length === 0
+          ? <Empty description="No advances recorded yet." />
+          : (
+            <Table
+              columns={columns} dataSource={advances}
+              rowKey="id" size="small" pagination={{ pageSize: 20 }}
+            />
+          )
+        }
+      </Card>
+    </div>
+  );
+}
+
 // ── Page ─────────────────────────────────────────────────────────────────────
 export default function AttendancePage() {
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
@@ -869,9 +1136,12 @@ export default function AttendancePage() {
     items.push({ key: 'team', label: <Space><TeamOutlined />Team Attendance</Space>, children: <TeamAttendance /> });
   }
   items.push(
-    { key: 'reports', label: <Space><FileTextOutlined />Reports</Space>,      children: <AttendanceReport /> },
-    { key: 'slips',   label: <Space><DollarOutlined />Salary Slips</Space>,   children: <SalarySlips /> },
+    { key: 'reports',   label: <Space><FileTextOutlined />Reports</Space>,      children: <AttendanceReport /> },
+    { key: 'slips',     label: <Space><DollarOutlined />Salary Slips</Space>,   children: <SalarySlips /> },
   );
+  if (isAdmin) {
+    items.push({ key: 'advances', label: <Space><DollarOutlined />Advances</Space>, children: <AdvancesPanel /> });
+  }
 
   return (
     <div>

@@ -440,3 +440,177 @@ async def list_salary_slips(
     except Exception as e:
         logger.error("Failed to list salary slips: {}", e)
         raise HTTPException(status_code=500, detail="Failed to list salary slips")
+
+
+# ── Leave Balances ────────────────────────────────────────────────────────────
+
+class LeaveBalancePayload(BaseModel):
+    user_email: str
+    user_name: str
+    month: str  # YYYY-MM
+    opening_balance: float = 0
+    used: float = 0
+    payout_amount: float = 0
+
+@router.get("/leave-balance")
+async def get_leave_balance(request: Request, user_email: str, month: str):
+    """Return leave balance record for a specific employee + month.
+    If none exists, derive opening_balance from the previous month's closing."""
+    current = _current_user(request)
+    is_admin = current["role"] in ("Super Admin", "Manager", "Team Leader")
+    if not is_admin and current["email"] != user_email:
+        raise HTTPException(status_code=403, detail="Access denied")
+    try:
+        resp = (supabase_data.client.table("leave_balances")
+                .select("*").eq("user_email", user_email).eq("month", month).execute())
+        if resp.data:
+            return resp.data[0]
+        # No record yet — look up previous month's closing
+        from datetime import date as date_cls
+        year, mon = map(int, month.split("-"))
+        if mon == 1:
+            prev = f"{year-1}-12"
+        else:
+            prev = f"{year}-{mon-1:02d}"
+        prev_resp = (supabase_data.client.table("leave_balances")
+                     .select("closing_balance,carry_forward_months")
+                     .eq("user_email", user_email).eq("month", prev).execute())
+        if prev_resp.data:
+            pb = prev_resp.data[0]
+            opening = float(pb.get("closing_balance") or 0)
+            cfm     = int(pb.get("carry_forward_months") or 0)
+        else:
+            opening = 0
+            cfm     = 0
+        # Cap carry-forward: if already at 3 months, opening stays at closing (already paid out)
+        available = min(opening + 1, 3)
+        return {
+            "user_email": user_email, "month": month,
+            "opening_balance": opening, "accrued": 1,
+            "available": available, "used": 0,
+            "closing_balance": available, "carry_forward_months": cfm,
+            "payout_days": 0, "payout_amount": 0, "id": None,
+        }
+    except Exception as e:
+        logger.error("Failed to fetch leave balance: {}", e)
+        raise HTTPException(status_code=500, detail="Failed to fetch leave balance")
+
+
+@router.post("/leave-balance")
+async def save_leave_balance(payload: LeaveBalancePayload, request: Request):
+    current = _current_user(request)
+    if current["role"] not in ("Super Admin", "Manager", "Team Leader"):
+        raise HTTPException(status_code=403, detail="Admin role required")
+    try:
+        opening  = float(payload.opening_balance)
+        used     = float(payload.used)
+        accrued  = 1.0
+        raw_closing = opening + accrued - used
+        # Cap at 3; excess → payout
+        payout_days = max(0.0, raw_closing - 3)
+        closing  = min(raw_closing, 3.0)
+        closing  = max(closing, 0.0)
+        # carry_forward_months: how many consecutive months this balance has been >0 without use
+        year, mon = map(int, payload.month.split("-"))
+        if mon == 1:
+            prev = f"{year-1}-12"
+        else:
+            prev = f"{year}-{mon-1:02d}"
+        prev_resp = (supabase_data.client.table("leave_balances")
+                     .select("carry_forward_months,closing_balance")
+                     .eq("user_email", payload.user_email).eq("month", prev).execute())
+        if prev_resp.data and float(prev_resp.data[0].get("closing_balance") or 0) > 0 and used == 0:
+            cfm = int(prev_resp.data[0].get("carry_forward_months") or 0) + 1
+        else:
+            cfm = 0 if used > 0 else 0
+
+        record = {
+            "user_email": payload.user_email, "user_name": payload.user_name,
+            "month": payload.month, "opening_balance": opening, "accrued": accrued,
+            "used": used, "closing_balance": closing, "carry_forward_months": cfm,
+            "payout_days": payout_days, "payout_amount": float(payload.payout_amount),
+            "updated_by": current["email"],
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        existing = (supabase_data.client.table("leave_balances")
+                    .select("id").eq("user_email", payload.user_email)
+                    .eq("month", payload.month).execute())
+        if existing.data:
+            resp = (supabase_data.client.table("leave_balances")
+                    .update(record).eq("id", existing.data[0]["id"]).execute())
+        else:
+            resp = supabase_data.client.table("leave_balances").insert(record).execute()
+        return resp.data[0] if resp.data else record
+    except Exception as e:
+        logger.error("Failed to save leave balance: {}", e)
+        raise HTTPException(status_code=500, detail="Failed to save leave balance")
+
+
+# ── Salary Advances ───────────────────────────────────────────────────────────
+
+class AdvancePayload(BaseModel):
+    user_email: str
+    user_name: str
+    amount: float
+    given_date: Optional[str] = None
+    deduct_month: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@router.get("/advances")
+async def list_advances(request: Request, user_email: Optional[str] = None,
+                        status: Optional[str] = None):
+    current = _current_user(request)
+    is_admin = current["role"] in ("Super Admin", "Manager", "Team Leader")
+    if not is_admin:
+        user_email = current["email"]
+    try:
+        q = supabase_data.client.table("salary_advances").select("*")
+        if user_email:
+            q = q.eq("user_email", user_email)
+        if status:
+            q = q.eq("status", status)
+        resp = q.order("created_at", desc=True).execute()
+        return resp.data or []
+    except Exception as e:
+        logger.error("Failed to list advances: {}", e)
+        raise HTTPException(status_code=500, detail="Failed to list advances")
+
+
+@router.post("/advances")
+async def create_advance(payload: AdvancePayload, request: Request):
+    current = _current_user(request)
+    if current["role"] not in ("Super Admin", "Manager", "Team Leader"):
+        raise HTTPException(status_code=403, detail="Admin role required")
+    try:
+        record = {
+            "user_email":   payload.user_email,
+            "user_name":    payload.user_name,
+            "amount":       payload.amount,
+            "given_date":   payload.given_date or _today_ist().isoformat(),
+            "deduct_month": payload.deduct_month,
+            "notes":        payload.notes,
+            "status":       "pending",
+            "created_by":   current["email"],
+        }
+        resp = supabase_data.client.table("salary_advances").insert(record).execute()
+        logger.info("Advance recorded: {} ₹{} for {}", current["email"], payload.amount, payload.user_email)
+        return resp.data[0] if resp.data else record
+    except Exception as e:
+        logger.error("Failed to create advance: {}", e)
+        raise HTTPException(status_code=500, detail="Failed to create advance")
+
+
+@router.patch("/advances/{advance_id}")
+async def update_advance(advance_id: int, request: Request):
+    """Mark an advance as deducted (called when saving the salary slip)."""
+    current = _current_user(request)
+    if current["role"] not in ("Super Admin", "Manager", "Team Leader"):
+        raise HTTPException(status_code=403, detail="Admin role required")
+    try:
+        resp = (supabase_data.client.table("salary_advances")
+                .update({"status": "deducted"}).eq("id", advance_id).execute())
+        return resp.data[0] if resp.data else {}
+    except Exception as e:
+        logger.error("Failed to update advance: {}", e)
+        raise HTTPException(status_code=500, detail="Failed to update advance")
