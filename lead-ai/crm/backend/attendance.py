@@ -379,3 +379,64 @@ async def export_attendance_csv(
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ── Salary Slips ─────────────────────────────────────────────────────────────
+
+class SalarySlipPayload(BaseModel):
+    user_email: str
+    user_name: str
+    month: str  # YYYY-MM
+    gross_salary: float
+    working_days: int
+    days_present: int = 0
+    days_late: int = 0
+    days_left_early: int = 0
+    days_absent: int = 0
+    paid_leaves_allowed: int = 0
+    effective_absent: int = 0
+    late_deduction_per_day: float = 0
+    late_deduction_total: float = 0
+    absent_deduction: float = 0
+    total_deduction: float = 0
+    net_salary: float
+    notes: Optional[str] = None
+
+
+@router.post("/salary-slips")
+async def save_salary_slip(payload: SalarySlipPayload, request: Request):
+    current = _current_user(request)
+    if current["role"] not in ("Super Admin", "Manager", "Team Leader"):
+        raise HTTPException(status_code=403, detail="Admin role required to save salary slips")
+    try:
+        data = payload.dict()
+        data["generated_by"] = current["email"]
+        resp = supabase_data.client.table("salary_slips").insert(data).execute()
+        logger.info("Salary slip saved for {} ({}) by {}", payload.user_email, payload.month, current["email"])
+        return resp.data[0] if resp.data else {}
+    except Exception as e:
+        logger.error("Failed to save salary slip: {}", e)
+        raise HTTPException(status_code=500, detail="Failed to save salary slip")
+
+
+@router.get("/salary-slips")
+async def list_salary_slips(
+    request: Request,
+    month: Optional[str] = None,
+    user_email: Optional[str] = None,
+):
+    current = _current_user(request)
+    is_admin = current["role"] in ("Super Admin", "Manager", "Team Leader")
+    if not is_admin:
+        user_email = current["email"]
+    try:
+        q = supabase_data.client.table("salary_slips").select("*")
+        if month:
+            q = q.eq("month", month)
+        if user_email:
+            q = q.eq("user_email", user_email)
+        resp = q.order("created_at", desc=True).execute()
+        return resp.data or []
+    except Exception as e:
+        logger.error("Failed to list salary slips: {}", e)
+        raise HTTPException(status_code=500, detail="Failed to list salary slips")

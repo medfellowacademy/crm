@@ -318,6 +318,8 @@ export const attendanceAPI = {
   team:       (date)         => api.get('/api/attendance/team', date ? { params: { date } } : {}),
   report:     (dateFrom, dateTo, userEmail) => api.get('/api/attendance/report', { params: { date_from: dateFrom, date_to: dateTo, ...(userEmail ? { user_email: userEmail } : {}) } }),
   exportCsv:  (dateFrom, dateTo, userEmail) => api.get('/api/attendance/export-csv', { params: { date_from: dateFrom, date_to: dateTo, ...(userEmail ? { user_email: userEmail } : {}) }, responseType: 'blob' }),
+  saveSlip:   (payload)                    => api.post('/api/attendance/salary-slips', payload),
+  listSlips:  (month, userEmail)           => api.get('/api/attendance/salary-slips', { params: { ...(month ? { month } : {}), ...(userEmail ? { user_email: userEmail } : {}) } }),
 };
 
 // Audit Logs API
