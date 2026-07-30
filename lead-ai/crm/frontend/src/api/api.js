@@ -325,6 +325,7 @@ export const attendanceAPI = {
   listAdvances:  (userEmail, status)             => api.get('/api/attendance/advances', { params: { ...(userEmail ? { user_email: userEmail } : {}), ...(status ? { status } : {}) } }),
   createAdvance: (payload)                       => api.post('/api/attendance/advances', payload),
   markAdvanceDeducted: (id)                      => api.patch(`/api/attendance/advances/${id}`),
+  adminMark:           (payload)                  => api.put('/api/attendance/admin-mark', payload),
 };
 
 // Audit Logs API

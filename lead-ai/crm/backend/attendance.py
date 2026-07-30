@@ -276,6 +276,55 @@ async def monthly_report(
         raise HTTPException(status_code=500, detail="Failed to fetch attendance report")
 
 
+class AdminMarkPayload(BaseModel):
+    user_email: str
+    user_name: str
+    date: str           # YYYY-MM-DD
+    status: str         # present | late | left_early | late_and_left_early | absent
+    check_in_at: Optional[str] = None   # full ISO string (UTC) or null
+    check_out_at: Optional[str] = None  # full ISO string (UTC) or null
+
+
+@router.put("/admin-mark")
+async def admin_mark_attendance(payload: AdminMarkPayload, request: Request):
+    """Admin override: upsert an attendance record for any user on any date."""
+    current = _current_user(request)
+    if current["role"] not in ("Super Admin", "Manager", "Team Leader"):
+        raise HTTPException(status_code=403, detail="Admin role required")
+
+    VALID_STATUSES = {"present", "late", "left_early", "late_and_left_early", "absent"}
+    if payload.status not in VALID_STATUSES:
+        raise HTTPException(status_code=400, detail=f"status must be one of {VALID_STATUSES}")
+
+    try:
+        record = {
+            "user_email": payload.user_email,
+            "user_name":  payload.user_name,
+            "date":       payload.date,
+            "status":     payload.status,
+            "check_in_at":  payload.check_in_at,
+            "check_out_at": payload.check_out_at,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        existing = (supabase_data.client.table("attendance")
+                    .select("id")
+                    .eq("user_email", payload.user_email)
+                    .eq("date", payload.date)
+                    .execute())
+        if existing.data:
+            resp = (supabase_data.client.table("attendance")
+                    .update(record)
+                    .eq("id", existing.data[0]["id"])
+                    .execute())
+        else:
+            resp = supabase_data.client.table("attendance").insert(record).execute()
+        logger.info("Admin mark: {} → {} {} on {}", current["email"], payload.user_email, payload.status, payload.date)
+        return resp.data[0] if resp.data else record
+    except Exception as e:
+        logger.error("Admin mark failed: {}", e)
+        raise HTTPException(status_code=500, detail="Failed to mark attendance")
+
+
 @router.get("/export-csv")
 async def export_attendance_csv(
     request: Request,

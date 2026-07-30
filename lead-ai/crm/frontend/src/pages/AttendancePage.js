@@ -3,11 +3,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Card, Button, Tag, Table, Typography, Space, Alert, Spin, Tabs, DatePicker,
   Empty, Select, InputNumber, Row, Col, Statistic, Divider, Tooltip, message, Input,
+  Modal, TimePicker,
 } from 'antd';
 import {
   LoginOutlined, LogoutOutlined, EnvironmentOutlined, ClockCircleOutlined,
   CheckCircleOutlined, WarningOutlined, DownloadOutlined, FileTextOutlined,
-  DollarOutlined, TeamOutlined, CalendarOutlined, SaveOutlined, FilePdfOutlined, PlusOutlined,
+  DollarOutlined, TeamOutlined, CalendarOutlined, SaveOutlined, FilePdfOutlined, PlusOutlined, EditOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { attendanceAPI, usersAPI } from '../api/api';
@@ -238,24 +239,71 @@ function SelfAttendance() {
   );
 }
 
+// helper: combine YYYY-MM-DD + HH:mm dayjs object → UTC ISO string (IST = UTC+5:30)
+function istToUTCIso(dateStr, timeDayjs) {
+  if (!timeDayjs) return null;
+  return `${dateStr}T${timeDayjs.format('HH:mm:ss')}+05:30`;
+}
+
+const STATUSES = [
+  { value: 'present',             label: 'Present' },
+  { value: 'late',                label: 'Late' },
+  { value: 'left_early',          label: 'Left Early' },
+  { value: 'late_and_left_early', label: 'Late & Left Early' },
+  { value: 'absent',              label: 'Absent' },
+];
+
 // ── Team Attendance ─────────────────────────────────────────────────────────
 function TeamAttendance() {
+  const queryClient = useQueryClient();
   const [date, setDate] = useState(dayjs());
+
+  // edit modal state
+  const [editRow,     setEditRow]     = useState(null);
+  const [editStatus,  setEditStatus]  = useState('present');
+  const [editCheckIn, setEditCheckIn] = useState(null);
+  const [editCheckOut,setEditCheckOut]= useState(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['attendance-team', date.format('YYYY-MM-DD')],
     queryFn: () => attendanceAPI.team(date.format('YYYY-MM-DD')).then(res => res.data),
   });
 
+  const markMutation = useMutation({
+    mutationFn: (payload) => attendanceAPI.adminMark(payload),
+    onSuccess: () => {
+      message.success('Attendance updated.');
+      setEditRow(null);
+      queryClient.invalidateQueries({ queryKey: ['attendance-team'] });
+    },
+    onError: (e) => message.error('Failed: ' + (e?.response?.data?.detail || e.message)),
+  });
+
+  const openEdit = (row) => {
+    setEditRow(row);
+    setEditStatus(row.status || 'present');
+    setEditCheckIn(row.check_in_at  ? dayjs(row.check_in_at)  : null);
+    setEditCheckOut(row.check_out_at ? dayjs(row.check_out_at) : null);
+  };
+
+  const handleSave = () => {
+    const dateStr = date.format('YYYY-MM-DD');
+    markMutation.mutate({
+      user_email:   editRow.user_email,
+      user_name:    editRow.user_name,
+      date:         dateStr,
+      status:       editStatus,
+      check_in_at:  istToUTCIso(dateStr, editCheckIn),
+      check_out_at: istToUTCIso(dateStr, editCheckOut),
+    });
+  };
+
   const columns = [
     { title: 'Name', dataIndex: 'user_name', key: 'user_name' },
     { title: 'Role', dataIndex: 'role',      key: 'role' },
     { title: 'Check In',  dataIndex: 'check_in_at',  key: 'check_in_at',  render: fmtTime },
     { title: 'Check Out', dataIndex: 'check_out_at', key: 'check_out_at', render: fmtTime },
-    {
-      title: 'Hours', key: 'hours',
-      render: (_, r) => hoursWorked(r.check_in_at, r.check_out_at),
-    },
+    { title: 'Hours', key: 'hours', render: (_, r) => hoursWorked(r.check_in_at, r.check_out_at) },
     {
       title: 'Status', dataIndex: 'status', key: 'status',
       render: (s) => (
@@ -265,18 +313,80 @@ function TeamAttendance() {
         </Tag>
       ),
     },
+    {
+      title: '', key: 'actions', width: 70, fixed: 'right',
+      render: (_, row) => (
+        <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)}>Edit</Button>
+      ),
+    },
   ];
 
   return (
-    <Card
-      title="Team Attendance"
-      extra={<DatePicker value={date} onChange={(d) => d && setDate(d)} disabledDate={(d) => d && d > dayjs().endOf('day')} />}
-    >
-      {isLoading
-        ? <Spin />
-        : <Table columns={columns} dataSource={data?.rows || []} rowKey="user_email" pagination={false} size="small" />
-      }
-    </Card>
+    <>
+      <Card
+        title="Team Attendance"
+        extra={<DatePicker value={date} onChange={(d) => d && setDate(d)} disabledDate={(d) => d && d > dayjs().endOf('day')} />}
+      >
+        {isLoading
+          ? <Spin />
+          : <Table columns={columns} dataSource={data?.rows || []} rowKey="user_email" pagination={false} size="small" scroll={{ x: 700 }} />
+        }
+      </Card>
+
+      <Modal
+        title={editRow ? `Edit Attendance — ${editRow.user_name} (${date.format('DD MMM YYYY')})` : ''}
+        open={!!editRow}
+        onCancel={() => setEditRow(null)}
+        onOk={handleSave}
+        okText="Save"
+        confirmLoading={markMutation.isPending}
+        destroyOnClose
+      >
+        {editRow && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, paddingTop: 8 }}>
+            <div>
+              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Status</div>
+              <Select style={{ width: '100%' }} value={editStatus} onChange={setEditStatus}>
+                {STATUSES.map(s => (
+                  <Option key={s.value} value={s.value}>
+                    <Tag color={STATUS_TAG[s.value]?.color}>{s.label}</Tag>
+                  </Option>
+                ))}
+              </Select>
+            </div>
+            <Row gutter={12}>
+              <Col span={12}>
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Check-in Time (IST)</div>
+                <TimePicker
+                  style={{ width: '100%' }}
+                  format="hh:mm A"
+                  use12Hours
+                  value={editCheckIn}
+                  onChange={setEditCheckIn}
+                  allowClear
+                  placeholder="Not set"
+                />
+              </Col>
+              <Col span={12}>
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Check-out Time (IST)</div>
+                <TimePicker
+                  style={{ width: '100%' }}
+                  format="hh:mm A"
+                  use12Hours
+                  value={editCheckOut}
+                  onChange={setEditCheckOut}
+                  allowClear
+                  placeholder="Not set"
+                />
+              </Col>
+            </Row>
+            <div style={{ fontSize: 12, color: '#8c8c8c' }}>
+              Times are in Indian Standard Time (IST). Leave blank to clear check-in/out.
+            </div>
+          </div>
+        )}
+      </Modal>
+    </>
   );
 }
 
