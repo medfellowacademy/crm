@@ -8522,9 +8522,21 @@ async def trigger_sheet_sync(background_tasks: BackgroundTasks, current_user: di
 
     try:
         client = supabase_manager.get_client()
-        existing = client.table("sheet_sync_config").select("sync_status").eq("id", 1).execute()
+        existing = client.table("sheet_sync_config").select("sync_status,sync_started_at").eq("id", 1).execute()
         if existing.data and existing.data[0].get("sync_status") == "running":
-            raise HTTPException(status_code=409, detail="A sync is already in progress. Please wait for it to finish.")
+            # Allow override if the running state is stale (older than timeout)
+            started_raw = existing.data[0].get("sync_started_at")
+            is_stale = False
+            if started_raw:
+                try:
+                    started_at = datetime.fromisoformat(started_raw.replace("Z", "+00:00"))
+                    elapsed = (datetime.now(started_at.tzinfo) - started_at).total_seconds() / 60
+                    is_stale = elapsed > _SYNC_TIMEOUT_MINUTES
+                except Exception:
+                    pass
+            if not is_stale:
+                raise HTTPException(status_code=409, detail="A sync is already in progress. Please wait for it to finish.")
+            logger.warning("Overriding stale 'running' sync status to start a fresh sync")
     except HTTPException:
         raise
     except Exception as e:
@@ -8535,6 +8547,8 @@ async def trigger_sheet_sync(background_tasks: BackgroundTasks, current_user: di
     return {"status": "started", "message": "Sync started in the background. Check /api/sheets/status for progress."}
 
 
+_SYNC_TIMEOUT_MINUTES = 20  # auto-reset if stuck in 'running' longer than this
+
 @app.get("/api/sheets/status")
 async def get_sheet_sync_status(current_user: dict = Depends(get_current_user)):
     """Return last sync time, in-progress status, and config."""
@@ -8542,6 +8556,25 @@ async def get_sheet_sync_status(current_user: dict = Depends(get_current_user)):
         client = supabase_manager.get_client()
         result = client.table("sheet_sync_config").select("*").eq("id", 1).execute()
         config = result.data[0] if result.data else {}
+
+        # Auto-reset a sync that has been 'running' for too long (server crash / redeploy)
+        sync_status = config.get("sync_status", "idle")
+        if sync_status == "running":
+            started_raw = config.get("sync_started_at")
+            if started_raw:
+                try:
+                    started_at = datetime.fromisoformat(started_raw.replace("Z", "+00:00"))
+                    elapsed = (datetime.now(started_at.tzinfo) - started_at).total_seconds() / 60
+                    if elapsed > _SYNC_TIMEOUT_MINUTES:
+                        logger.warning(f"Sync stuck for {elapsed:.0f} min — auto-resetting to idle")
+                        client.table("sheet_sync_config").update({
+                            "sync_status": "idle",
+                            "last_sync_error": f"Sync timed out after {elapsed:.0f} minutes (auto-reset)",
+                        }).eq("id", 1).execute()
+                        sync_status = "idle"
+                        config["sync_status"] = "idle"
+                except Exception as te:
+                    logger.warning(f"Sync timeout check failed: {te}")
 
         import os
         return {
@@ -8551,7 +8584,7 @@ async def get_sheet_sync_status(current_user: dict = Depends(get_current_user)):
             "last_synced_at": config.get("last_synced_at"),
             "tabs_count": config.get("tabs_count", 0),
             "api_key_configured": bool(os.getenv("GOOGLE_SHEETS_API_KEY")),
-            "sync_status": config.get("sync_status", "idle"),
+            "sync_status": sync_status,
             "sync_started_at": config.get("sync_started_at"),
             "last_sync_stats": config.get("last_sync_stats"),
             "last_sync_error": config.get("last_sync_error"),
