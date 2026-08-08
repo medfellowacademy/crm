@@ -8615,6 +8615,91 @@ async def get_sheet_tabs_endpoint(current_user: dict = Depends(get_current_user)
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/sheets/diagnose")
+async def diagnose_sheet_sync(current_user: dict = Depends(get_current_user)):
+    """
+    Dry-run diagnostic — does NOT import any data.
+    Returns step-by-step info about why the sync may not be picking up leads:
+      - API key configured?
+      - How many tabs found?
+      - How many rows per tab?
+      - What column headers does the sheet have?
+      - Does row_to_lead parse the first row successfully?
+      - How many meta_lead_ids are already in the CRM?
+    """
+    import os
+    from google_sheets_sync import (
+        get_sheet_tabs, _fetch_rows_for_tab, row_to_lead,
+        get_synced_meta_ids, SHEET_ID,
+    )
+
+    report: dict = {
+        "sheet_id": SHEET_ID,
+        "api_key_configured": bool(os.getenv("GOOGLE_SHEETS_API_KEY")),
+        "tabs": [],
+        "synced_ids_in_crm": 0,
+        "issues": [],
+    }
+
+    # 1 — tabs
+    try:
+        tabs = get_sheet_tabs()
+        report["tabs_found"] = len(tabs)
+        if len(tabs) <= 1 and not os.getenv("GOOGLE_SHEETS_API_KEY"):
+            report["issues"].append(
+                "GOOGLE_SHEETS_API_KEY is not set — only the first tab (Sheet1) "
+                "is being read. All other tabs (ad sets) are missed. "
+                "Set the env var to fix this."
+            )
+    except Exception as e:
+        report["tabs_found"] = 0
+        report["issues"].append(f"get_sheet_tabs() failed: {e}")
+        tabs = []
+
+    # 2 — rows per tab (sample first 3 tabs)
+    for tab in tabs[:3]:
+        tab_info: dict = {"name": tab["name"], "gid": tab.get("gid")}
+        try:
+            rows = _fetch_rows_for_tab(tab)
+            tab_info["row_count"] = len(rows)
+            if rows:
+                tab_info["headers"] = list(rows[0].keys())
+                # Try parsing first row
+                sample = row_to_lead(rows[0], tab["name"])
+                tab_info["first_row_parsed"] = bool(sample)
+                if sample:
+                    tab_info["sample_meta_lead_id"] = sample.get("meta_lead_id")
+                    tab_info["sample_name"] = sample.get("full_name")
+                else:
+                    tab_info["first_row_raw"] = {k: v for k, v in list(rows[0].items())[:8]}
+                    report["issues"].append(
+                        f"Tab '{tab['name']}': row_to_lead() returned None for the first row. "
+                        f"Headers found: {list(rows[0].keys())[:10]}. "
+                        f"Check that 'id'/'lead_id' and 'full_name'/'name' columns exist."
+                    )
+            else:
+                report["issues"].append(
+                    f"Tab '{tab['name']}': 0 rows fetched. "
+                    "Sheet may not be publicly accessible, or the API key is invalid."
+                )
+        except Exception as e:
+            tab_info["error"] = str(e)
+            report["issues"].append(f"Tab '{tab['name']}' fetch failed: {e}")
+        report["tabs"].append(tab_info)
+
+    # 3 — how many IDs already synced
+    try:
+        synced = get_synced_meta_ids()
+        report["synced_ids_in_crm"] = len(synced)
+    except Exception as e:
+        report["issues"].append(f"get_synced_meta_ids() failed: {e}")
+
+    if not report["issues"]:
+        report["issues"].append("No obvious issues detected — check server logs for per-row errors.")
+
+    return report
+
+
 @app.post("/api/leads/cleanup-duplicates")
 async def cleanup_duplicate_leads_endpoint(current_user: dict = Depends(get_current_user)):
     """

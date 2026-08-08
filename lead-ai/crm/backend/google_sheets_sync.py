@@ -248,8 +248,12 @@ def fetch_tab_rows(tab_name: str) -> List[Dict]:
 def _fetch_rows_for_tab(tab: Dict) -> List[Dict]:
     """Pick the best fetch method based on what credentials are available."""
     if SHEETS_API_KEY:
-        return fetch_tab_rows(tab["name"])
+        rows = fetch_tab_rows(tab["name"])
+        if not rows:
+            logger.warning(f"Tab '{tab['name']}': 0 rows returned from Sheets API — API key may be invalid or sheet not shared")
+        return rows
     # Fallback: CSV export (only works for fully public sheets)
+    logger.warning("GOOGLE_SHEETS_API_KEY not set — using CSV fallback (only works for public sheets)")
     url = (
         f"https://docs.google.com/spreadsheets/d/{SHEET_ID}"
         f"/export?format=csv&gid={tab['gid']}"
@@ -257,9 +261,13 @@ def _fetch_rows_for_tab(tab: Dict) -> List[Dict]:
     try:
         resp = requests.get(url, timeout=30, allow_redirects=True)
         if resp.status_code != 200:
+            logger.error(f"CSV export returned HTTP {resp.status_code} for tab gid={tab['gid']}")
             return []
         content = resp.content.decode("utf-8-sig")
-        return list(csv.DictReader(io.StringIO(content)))
+        rows = list(csv.DictReader(io.StringIO(content)))
+        if not rows:
+            logger.warning(f"Tab gid={tab['gid']}: CSV returned 0 rows")
+        return rows
     except Exception as e:
         logger.error(f"CSV fallback failed (gid={tab['gid']}): {e}")
         return []
@@ -267,15 +275,26 @@ def _fetch_rows_for_tab(tab: Dict) -> List[Dict]:
 
 # ── row → lead ─────────────────────────────────────────────────────────────────
 
+def _pick(row: Dict, *keys: str) -> str:
+    """Return the first non-empty value found across the given keys."""
+    for k in keys:
+        v = row.get(k) or row.get(k.replace("_", " ")) or ""
+        if str(v).strip():
+            return str(v).strip()
+    return ""
+
+
 def row_to_lead(row: Dict, tab_name: str) -> Optional[Dict]:
     """Convert a sheet row dict to a CRM lead dict. Returns None to skip."""
-    meta_id = _clean_meta_id(row.get("id", ""))
+    # Meta has used several column names for the lead ID over time
+    raw_id = _pick(row, "id", "lead_id", "meta_lead_id", "form_lead_id", "leadgen_id")
+    meta_id = _clean_meta_id(raw_id)
     if not meta_id:
         return None
 
-    full_name = (row.get("full_name") or "").strip()
-    email = (row.get("email") or "").strip().lower()
-    phone = _clean_phone(row.get("phone") or row.get("phone_number") or "")
+    full_name = _pick(row, "full_name", "name", "full name", "contact_name")
+    email     = _pick(row, "email", "email_address", "e_mail").lower()
+    phone     = _clean_phone(_pick(row, "phone", "phone_number", "mobile", "mobile_number", "contact_number"))
 
     if not full_name and not email and not phone:
         return None
