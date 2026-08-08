@@ -224,25 +224,33 @@ def fetch_tab_rows(tab_name: str) -> List[Dict]:
         f"&valueRenderOption=UNFORMATTED_VALUE"
         f"&dateTimeRenderOption=FORMATTED_STRING"
     )
-    try:
-        resp = requests.get(url, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        raw_rows = data.get("values", [])
-        if not raw_rows:
-            return []
+    for attempt in range(2):
+        try:
+            resp = requests.get(url, timeout=90)
+            resp.raise_for_status()
+            data = resp.json()
+            raw_rows = data.get("values", [])
+            if not raw_rows:
+                logger.warning(f"Tab '{tab_name}': API returned 0 rows (attempt {attempt+1})")
+                return []
 
-        headers = [str(h).strip().lower() for h in raw_rows[0]]
-        rows = []
-        for row_vals in raw_rows[1:]:
-            # Pad short rows with empty strings
-            padded = row_vals + [""] * (len(headers) - len(row_vals))
-            rows.append(dict(zip(headers, padded)))
-        logger.info(f"Tab '{tab_name}': fetched {len(rows)} rows")
-        return rows
-    except Exception as e:
-        logger.error(f"Sheets API values fetch failed for tab '{tab_name}': {e}")
-        return []
+            headers = [str(h).strip().lower() for h in raw_rows[0]]
+            rows = []
+            for row_vals in raw_rows[1:]:
+                # Pad short rows with empty strings
+                padded = row_vals + [""] * (len(headers) - len(row_vals))
+                rows.append(dict(zip(headers, padded)))
+            logger.info(f"Tab '{tab_name}': fetched {len(rows)} data rows, headers={headers[:6]}")
+            return rows
+        except requests.exceptions.Timeout:
+            logger.warning(f"Tab '{tab_name}': timeout on attempt {attempt+1}")
+            if attempt == 0:
+                continue
+            return []
+        except Exception as e:
+            logger.error(f"Sheets API values fetch failed for tab '{tab_name}': {e}")
+            return []
+    return []
 
 
 def _fetch_rows_for_tab(tab: Dict) -> List[Dict]:
@@ -450,15 +458,21 @@ def sync_sheet_to_crm() -> Dict:
 
     for tab in tabs:
         rows = _fetch_rows_for_tab(tab)
+        if not rows:
+            logger.warning(f"Tab '{tab['name']}': skipped (0 rows returned)")
+            continue
+        tab_new = tab_upd = tab_skip = tab_err = 0
         for row in rows:
             lead = row_to_lead(row, tab["name"])
             if not lead:
                 skip_count += 1
+                tab_skip += 1
                 continue
 
             meta_id = lead["meta_lead_id"]
             if meta_id in synced_ids:
                 skip_count += 1
+                tab_skip += 1
                 continue
 
             lead = _normalize(lead)
@@ -509,12 +523,14 @@ def sync_sheet_to_crm() -> Dict:
                             pass  # Non-critical
                     synced_ids.add(meta_id)
                     updated_count += 1
+                    tab_upd += 1
                     logger.info(
                         f"Updated existing lead {existing_uuid} with meta_id={meta_id}"
                     )
                 except Exception as e:
                     logger.error(f"Meta-update failed for {existing_uuid}: {e}")
                     error_count += 1
+                    tab_err += 1
             else:
                 # New person — insert fresh lead
                 try:
@@ -523,12 +539,22 @@ def sync_sheet_to_crm() -> Dict:
                     _rnd = ''.join(random.choices(_string.ascii_uppercase + _string.digits, k=4))
                     lead['lead_id'] = f"LEAD{_ts}{_rnd}"
                     result = client.table("leads").insert(lead).execute()
-                    if result.data:
-                        synced_ids.add(meta_id)
-                        new_count += 1
+                    # result.data may be empty if Supabase returns no rows (e.g. RLS),
+                    # but we treat any non-exception as a successful insert.
+                    synced_ids.add(meta_id)
+                    new_count += 1
+                    tab_new += 1
+                    if not result.data:
+                        logger.warning(f"Insert returned empty data for meta_id={meta_id} (lead may still be saved)")
                 except Exception as e:
                     logger.error(f"Insert failed for meta_id={meta_id}: {e}")
                     error_count += 1
+                    tab_err += 1
+
+        logger.info(
+            f"Tab '{tab['name']}': rows={len(rows)} new={tab_new} updated={tab_upd} "
+            f"skipped={tab_skip} errors={tab_err}"
+        )
 
     # Persist last-synced timestamp
     try:
