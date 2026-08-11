@@ -204,7 +204,14 @@ def fetch_tab_rows(tab_name: str) -> List[Dict]:
     This works for any publicly-accessible sheet + API key — no CSV/browser needed.
     """
     import urllib.parse
-    encoded_name = urllib.parse.quote(tab_name)
+    # Wrap in single quotes so the Sheets API treats the whole string as a sheet
+    # name (required for names containing special characters like '/' or spaces).
+    # Use safe='' so '/' is encoded as '%2F' and not treated as a URL path separator
+    # — without this, "Obs/Gyne Leads form final asian" splits into two URL path
+    # segments and the API returns 0 rows.
+    safe_name = tab_name.replace("'", "''")   # escape any literal ' inside the name
+    range_spec = f"'{safe_name}'"
+    encoded_name = urllib.parse.quote(range_spec, safe='')
     url = (
         f"https://sheets.googleapis.com/v4/spreadsheets/{SHEET_ID}"
         f"/values/{encoded_name}?key={SHEETS_API_KEY}"
