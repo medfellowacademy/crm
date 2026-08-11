@@ -33,6 +33,9 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    // Only clear session on a genuine auth failure (invalid/expired token).
+    // 503 means the server is temporarily unavailable (e.g. DB under load during sync)
+    // — do NOT log the user out for transient server errors.
     if (error.response?.status === 401) {
       localStorage.removeItem('user');
       window.location.href = '/login';

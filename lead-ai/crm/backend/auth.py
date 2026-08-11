@@ -117,28 +117,37 @@ def authenticate_user(email: str, password: str):
 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
     """Validate the Bearer token and return the authenticated user - SUPABASE VERSION"""
-    
+
     if not supabase_data.client:
         raise HTTPException(status_code=500, detail="Database not configured")
-    
+
     token_data = decode_access_token(token)
-    
-    user = supabase_data.get_user_by_email(token_data.email)
-    
+
+    try:
+        user = supabase_data.get_user_by_email(token_data.email)
+    except Exception as e:
+        # DB unavailable (e.g. Supabase cold-start, sync load) — return 503 so the
+        # frontend does NOT interpret this as an expired token and log the user out.
+        logger.warning(f"get_current_user DB lookup failed (transient): {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Service temporarily unavailable — please retry",
+        )
+
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     if not user.get('is_active', True):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Account is inactive",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     return user
 
 

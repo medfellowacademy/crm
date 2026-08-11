@@ -137,47 +137,31 @@ def _phone_tail(phone: str) -> str:
 
 def find_existing_lead_by_contact(phone: str, email: str) -> Optional[Dict]:
     """
-    Look up an existing CRM lead matching this phone (last-9-digit) or email.
-    Returns lead dict with id (int), lead_id (uuid), status, meta_lead_id, etc.
-    or None if no match found.
+    Look up an existing CRM lead matching this email address ONLY.
+    Phone-tail matching was removed because last-N-digit matching causes
+    false positives for international numbers (e.g. an Indian +91 number
+    and a Saudi +966 number can share the same last 10 digits), causing new
+    leads to silently update the wrong existing record instead of being inserted.
     """
+    if not email or '@' not in email:
+        return None
+
     from supabase_client import supabase_manager
     client = supabase_manager.get_client()
     SELECT = "id,lead_id,full_name,email,phone,status,meta_lead_id,adset_name,source"
 
-    # Email match (most reliable — try first)
-    if email and '@' in email:
-        try:
-            result = (
-                client.table("leads")
-                .select(SELECT)
-                .ilike("email", email.strip())
-                .limit(1)
-                .execute()
-            )
-            if result.data:
-                return result.data[0]
-        except Exception as e:
-            logger.warning(f"Email dedup lookup failed: {e}")
-
-    # Phone tail match
-    tail = _phone_tail(phone)
-    if tail:
-        try:
-            result = (
-                client.table("leads")
-                .select(SELECT)
-                .like("phone", f"%{tail}")
-                .limit(10)
-                .execute()
-            )
-            for lead in (result.data or []):
-                if _phone_tail(lead.get('phone', '')) == tail:
-                    return lead
-        except Exception as e:
-            logger.warning(f"Phone dedup lookup failed: {e}")
-
-    return None
+    try:
+        result = (
+            client.table("leads")
+            .select(SELECT)
+            .ilike("email", email.strip())
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+    except Exception as e:
+        logger.warning(f"Email dedup lookup failed: {e}")
+        return None
 
 
 # ── sheet fetching ─────────────────────────────────────────────────────────────
@@ -465,9 +449,10 @@ def sync_sheet_to_crm() -> Dict:
         rows = _fetch_rows_for_tab(tab)
         if not rows:
             logger.warning(f"Tab '{tab['name']}': skipped (0 rows returned)")
-            tab_stats.append({"tab": tab["name"], "rows": 0, "new": 0, "updated": 0, "skipped": 0, "errors": 0, "status": "empty"})
+            tab_stats.append({"tab": tab["name"], "rows": 0, "new": 0, "updated": 0, "skipped": 0, "errors": 0, "status": "empty", "sample_error": None})
             continue
         tab_new = tab_upd = tab_skip = tab_err = 0
+        tab_sample_err = None
         for row in rows:
             lead = row_to_lead(row, tab["name"])
             if not lead:
@@ -534,9 +519,12 @@ def sync_sheet_to_crm() -> Dict:
                         f"Updated existing lead {existing_uuid} with meta_id={meta_id}"
                     )
                 except Exception as e:
-                    logger.error(f"Meta-update failed for {existing_uuid}: {e}")
+                    err_str = str(e)
+                    logger.error(f"Meta-update failed for {existing_uuid}: {err_str}")
                     error_count += 1
                     tab_err += 1
+                    if tab_sample_err is None:
+                        tab_sample_err = err_str[:200]
             else:
                 # New person — insert fresh lead
                 try:
@@ -553,9 +541,12 @@ def sync_sheet_to_crm() -> Dict:
                     if not result.data:
                         logger.warning(f"Insert returned empty data for meta_id={meta_id} (lead may still be saved)")
                 except Exception as e:
-                    logger.error(f"Insert failed for meta_id={meta_id}: {e}")
+                    err_str = str(e)
+                    logger.error(f"Insert failed for meta_id={meta_id}: {err_str}")
                     error_count += 1
                     tab_err += 1
+                    if tab_sample_err is None:
+                        tab_sample_err = err_str[:200]
 
         logger.info(
             f"Tab '{tab['name']}': rows={len(rows)} new={tab_new} updated={tab_upd} "
@@ -569,6 +560,7 @@ def sync_sheet_to_crm() -> Dict:
             "skipped": tab_skip,
             "errors": tab_err,
             "status": "ok" if tab_err == 0 else "errors",
+            "sample_error": tab_sample_err,
         })
 
     # Persist last-synced timestamp
