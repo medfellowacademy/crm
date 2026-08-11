@@ -127,9 +127,12 @@ def _map_course_from_ad_name(ad_name: str) -> str:
 # ── contact deduplication ──────────────────────────────────────────────────────
 
 def _phone_tail(phone: str) -> str:
-    """Return the last 9 digits of a phone number (country-code-safe)."""
+    """Return the last 10 digits of a phone number (country-code-safe).
+    10 digits distinguishes Indian numbers differing only in the 10th-from-end
+    digit (e.g. +91-9236656131 vs +91-8236656131 both ended in 236656131 at 9
+    digits, causing false-positive dedup matches)."""
     digits = _re.sub(r'[^0-9]', '', str(phone or ''))
-    return digits[-9:] if len(digits) >= 9 else ''
+    return digits[-10:] if len(digits) >= 10 else ''
 
 
 def find_existing_lead_by_contact(phone: str, email: str) -> Optional[Dict]:
@@ -456,10 +459,13 @@ def sync_sheet_to_crm() -> Dict:
     skip_count = 0
     error_count = 0
 
+    tab_stats: List[Dict] = []
+
     for tab in tabs:
         rows = _fetch_rows_for_tab(tab)
         if not rows:
             logger.warning(f"Tab '{tab['name']}': skipped (0 rows returned)")
+            tab_stats.append({"tab": tab["name"], "rows": 0, "new": 0, "updated": 0, "skipped": 0, "errors": 0, "status": "empty"})
             continue
         tab_new = tab_upd = tab_skip = tab_err = 0
         for row in rows:
@@ -555,6 +561,15 @@ def sync_sheet_to_crm() -> Dict:
             f"Tab '{tab['name']}': rows={len(rows)} new={tab_new} updated={tab_upd} "
             f"skipped={tab_skip} errors={tab_err}"
         )
+        tab_stats.append({
+            "tab": tab["name"],
+            "rows": len(rows),
+            "new": tab_new,
+            "updated": tab_upd,
+            "skipped": tab_skip,
+            "errors": tab_err,
+            "status": "ok" if tab_err == 0 else "errors",
+        })
 
     # Persist last-synced timestamp
     try:
@@ -588,6 +603,7 @@ def sync_sheet_to_crm() -> Dict:
         "errors":        error_count,
         "tabs_synced":   len(tabs),
         "synced_at":     datetime.utcnow().isoformat(),
+        "per_tab":       tab_stats,
     }
     logger.info(f"Sheet sync complete: {stats}")
     _mark_sync_status("completed", last_sync_stats=stats)
