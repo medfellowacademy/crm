@@ -148,7 +148,11 @@ def find_existing_lead_by_contact(phone: str, email: str) -> Optional[Dict]:
 
     from supabase_client import supabase_manager
     client = supabase_manager.get_client()
-    SELECT = "id,lead_id,full_name,email,phone,status,meta_lead_id,adset_name,source"
+    SELECT = (
+        "id,lead_id,full_name,email,phone,status,meta_lead_id,"
+        "adset_name,source,assigned_to,created_at,"
+        "submission_count,meta_submission_ids"
+    )
 
     try:
         result = (
@@ -365,11 +369,13 @@ def row_to_lead(row: Dict, tab_name: str) -> Optional[Dict]:
 def get_synced_meta_ids() -> set:
     """Return the set of meta_lead_id values already in the CRM.
 
-    Paginates past Supabase's 1000-row response cap - without this, any
-    account with more than 1000 synced leads would fail to recognize
-    already-synced rows past the 1000th as synced, causing every sync to
-    needlessly re-process them (slower syncs, and undercounted "skipped"
-    stats) instead of skipping them via the fast synced_ids check.
+    Reads both the primary meta_lead_id AND the meta_submission_ids column
+    (comma-separated list of all submission IDs ever seen for repeated leads).
+    Without reading meta_submission_ids, repeated submissions cycle every sync:
+    the original meta_lead_id stays on the lead record while each subsequent
+    submission ID is only tracked in memory during that sync run.
+
+    Also paginates past Supabase's 1000-row response cap.
     """
     from supabase_client import supabase_manager
     try:
@@ -380,13 +386,20 @@ def get_synced_meta_ids() -> set:
         while True:
             batch = (
                 client.table("leads")
-                .select("meta_lead_id")
+                .select("meta_lead_id,meta_submission_ids")
                 .not_.is_("meta_lead_id", "null")
                 .range(offset, offset + page_size - 1)
                 .execute()
             )
             page = batch.data or []
-            ids.update(r["meta_lead_id"] for r in page if r.get("meta_lead_id"))
+            for r in page:
+                if r.get("meta_lead_id"):
+                    ids.add(r["meta_lead_id"])
+                # Also add every submission ID for repeated leads
+                for mid in (r.get("meta_submission_ids") or "").split(","):
+                    mid = mid.strip()
+                    if mid:
+                        ids.add(mid)
             if len(page) < page_size:
                 break
             offset += page_size
@@ -482,18 +495,38 @@ def sync_sheet_to_crm() -> Dict:
             )
 
             if existing:
-                # Person already in CRM — update Meta fields, add note
+                # Person already in CRM — track re-submission, add note.
+                # Do NOT overwrite adset_name/campaign_name/assigned_to so the
+                # original counselor assignment and first ad-set are preserved.
                 existing_uuid = existing['lead_id']
                 existing_int_id = existing.get('id')
 
+                # Build the union of all meta IDs seen for this lead
+                prev_ids_str = existing.get('meta_submission_ids') or existing.get('meta_lead_id') or ''
+                all_ids = set(i.strip() for i in prev_ids_str.split(',') if i.strip())
+                all_ids.add(existing.get('meta_lead_id') or '')
+                all_ids.add(meta_id)
+                all_ids.discard('')
+
+                old_count = existing.get('submission_count') or 1
+
+                # Determine the timestamp for this submission
+                sub_date = lead.get('created_at') or datetime.utcnow().isoformat()
+
                 meta_update = {k: v for k, v in {
-                    'meta_lead_id':  meta_id,
-                    'adset_name':    lead.get('adset_name'),
-                    'campaign_name': lead.get('campaign_name'),
-                    'ad_name':       lead.get('ad_name'),
-                    'utm_source':    lead.get('utm_source'),
-                    'utm_medium':    lead.get('utm_medium'),
-                    'utm_campaign':  lead.get('utm_campaign'),
+                    # Keep original meta_lead_id — track the new one via submission_ids
+                    'meta_submission_ids': ','.join(sorted(all_ids)),
+                    # Repeated-lead tracking fields
+                    'is_repeated':             True,
+                    'submission_count':        old_count + 1,
+                    'last_submission_adset':   lead.get('adset_name'),
+                    'last_submission_campaign':lead.get('campaign_name'),
+                    'last_submission_date':    sub_date,
+                    'last_submission_tab':     tab['name'],
+                    # UTM fields — update to latest submission
+                    'utm_source':   lead.get('utm_source'),
+                    'utm_medium':   lead.get('utm_medium'),
+                    'utm_campaign': lead.get('utm_campaign'),
                     # Fill empty contact fields if missing on the existing lead
                     'email':  lead.get('email') if not existing.get('email') else None,
                     'phone':  lead.get('phone') if not existing.get('phone') else None,
@@ -509,10 +542,11 @@ def sync_sheet_to_crm() -> Dict:
                             client.table("notes").insert({
                                 "lead_id":    existing_int_id,
                                 "content": (
-                                    f"[META SYNC] Re-submitted via Meta ad · "
-                                    f"Ad Set: {lead.get('adset_name') or 'Unknown'} · "
+                                    f"[META SYNC] Re-submission #{old_count + 1} via Meta ad · "
+                                    f"New Ad Set: {lead.get('adset_name') or 'Unknown'} · "
                                     f"Campaign: {lead.get('campaign_name') or ''} · "
-                                    f"Tab: {tab['name']}"
+                                    f"Tab: {tab['name']} · "
+                                    f"Original Ad Set: {existing.get('adset_name') or 'Unknown'}"
                                 ),
                                 "channel":    "system",
                                 "created_by": "Sheet Sync",
@@ -641,7 +675,7 @@ def get_adset_stats() -> List[Dict]:
         while True:
             batch = (
                 client.table("leads")
-                .select("adset_name,campaign_name,source,status,created_at,meta_lead_id")
+                .select("adset_name,campaign_name,source,status,created_at,meta_lead_id,is_repeated")
                 .not_.is_("meta_lead_id", "null")
                 .range(offset, offset + page_size - 1)
                 .execute()
@@ -666,6 +700,7 @@ def get_adset_stats() -> List[Dict]:
         "enrolled": 0,
         "not_interested": 0,
         "junk": 0,
+        "repeated": 0,
         "latest": None,
     })
 
@@ -691,6 +726,8 @@ def get_adset_stats() -> List[Dict]:
             s["not_interested"] += 1
         elif st in ("junk", "not answering", "not_answering"):
             s["junk"] += 1
+        if r.get("is_repeated"):
+            s["repeated"] += 1
         c = r.get("created_at")
         if c and (not s["latest"] or c > s["latest"]):
             s["latest"] = c

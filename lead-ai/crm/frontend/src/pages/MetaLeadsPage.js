@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Table, Card, Button, Tag, Statistic, Row, Col, Space, Typography,
-  Tooltip, Badge, Alert, Spin, Modal, message, Divider, Tabs, DatePicker,
+  Tooltip, Badge, Alert, Spin, Modal, message, Tabs, DatePicker,
 } from 'antd';
 import {
   SyncOutlined, CheckCircleOutlined, ClockCircleOutlined,
   ExclamationCircleOutlined, InstagramOutlined, FacebookOutlined,
   BarChartOutlined, TeamOutlined, DollarCircleOutlined,
-  MergeCellsOutlined,
+  MergeCellsOutlined, RetweetOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { sheetsAPI, leadsAPI, duplicatesAPI } from '../api/api';
@@ -48,10 +48,7 @@ const AdSetLeadsModal = ({ adset, open, onClose }) => {
     { title: 'Name', dataIndex: 'full_name', key: 'name', width: 160 },
     { title: 'Phone', dataIndex: 'phone', key: 'phone', width: 140 },
     { title: 'Email', dataIndex: 'email', key: 'email', ellipsis: true },
-    {
-      title: 'Course', dataIndex: 'course_interested', key: 'course',
-      ellipsis: true, width: 200,
-    },
+    { title: 'Course', dataIndex: 'course_interested', key: 'course', ellipsis: true, width: 200 },
     {
       title: 'Status', dataIndex: 'status', key: 'status', width: 110,
       render: s => <Tag color={STATUS_COLORS[s] || 'default'}>{s}</Tag>,
@@ -144,6 +141,157 @@ const AllMetaLeadsTable = () => {
   );
 };
 
+// ── Repeated Leads table ───────────────────────────────────────────────────────
+const RepeatedLeadsTable = () => {
+  const { data: result, isLoading } = useQuery({
+    queryKey: ['repeated-leads'],
+    queryFn: () => duplicatesAPI.repeated().then(r => r.data),
+    staleTime: 2 * 60 * 1000,
+  });
+
+  const leads = result?.repeated || [];
+
+  const cols = [
+    {
+      title: 'Lead',
+      key: 'lead',
+      width: 200,
+      render: (_, r) => (
+        <div>
+          <Text strong>{r.full_name}</Text>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>{r.email || r.phone}</div>
+        </div>
+      ),
+    },
+    {
+      title: 'Owner (Counselor)',
+      dataIndex: 'assigned_to',
+      key: 'owner',
+      width: 150,
+      render: v => v
+        ? <Tag color="geekblue" style={{ fontWeight: 600 }}>{v}</Tag>
+        : <Text type="secondary">Unassigned</Text>,
+    },
+    {
+      title: 'First Submission',
+      key: 'first',
+      width: 220,
+      render: (_, r) => (
+        <div>
+          <div>
+            <Tag color="purple" style={{ maxWidth: 190, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {r.adset_name || 'Unknown adset'}
+            </Tag>
+          </div>
+          <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+            {r.campaign_name || ''}
+          </div>
+          <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 1 }}>
+            {r.created_at ? dayjs(r.created_at).format('DD MMM YYYY') : '—'}
+          </div>
+        </div>
+      ),
+    },
+    {
+      title: 'Latest Re-submission',
+      key: 'latest',
+      width: 240,
+      render: (_, r) => r.last_submission_adset ? (
+        <div>
+          <div>
+            <Tag color="volcano" style={{ maxWidth: 210, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {r.last_submission_adset}
+            </Tag>
+          </div>
+          <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+            {r.last_submission_campaign || ''}
+          </div>
+          <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 1 }}>
+            {r.last_submission_tab ? `Tab: ${r.last_submission_tab}` : ''}
+            {r.last_submission_date
+              ? ` · ${dayjs(r.last_submission_date).format('DD MMM YYYY')}`
+              : ''}
+          </div>
+        </div>
+      ) : <Text type="secondary">—</Text>,
+    },
+    {
+      title: 'Submissions',
+      dataIndex: 'submission_count',
+      key: 'count',
+      width: 100,
+      sorter: (a, b) => (a.submission_count || 1) - (b.submission_count || 1),
+      defaultSortOrder: 'descend',
+      render: v => (
+        <Badge
+          count={v || 1}
+          style={{ backgroundColor: (v || 1) >= 3 ? '#ef4444' : '#f59e0b', fontWeight: 700 }}
+          overflowCount={99}
+        />
+      ),
+    },
+    {
+      title: 'Status',
+      dataIndex: 'status',
+      key: 'status',
+      width: 100,
+      render: s => <Tag color={STATUS_COLORS[s] || 'default'}>{s}</Tag>,
+    },
+    {
+      title: 'Course',
+      dataIndex: 'course_interested',
+      key: 'course',
+      ellipsis: true,
+      width: 180,
+    },
+    {
+      title: 'Action',
+      key: 'action',
+      width: 80,
+      render: (_, r) => (
+        <Button
+          size="small"
+          href={`/leads/${r.lead_id}`}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          View
+        </Button>
+      ),
+    },
+  ];
+
+  return (
+    <>
+      {leads.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={
+            <>
+              <Text strong>{leads.length} leads</Text> submitted via Meta ads multiple times.
+              Each row shows the original owner and ad set, plus where the lead re-submitted from.
+              The counselor's assignment is preserved — only the latest ad set changes.
+            </>
+          }
+        />
+      )}
+      <Table
+        dataSource={leads}
+        columns={cols}
+        rowKey="lead_id"
+        loading={isLoading}
+        size="small"
+        pagination={{ pageSize: 25, showSizeChanger: true }}
+        scroll={{ x: 1200 }}
+        locale={{ emptyText: 'No repeated leads found. Leads who submit via multiple Meta ads will appear here.' }}
+        rowClassName={r => (r.submission_count || 1) >= 3 ? 'repeated-lead-high' : ''}
+      />
+    </>
+  );
+};
+
 // ── Main page ──────────────────────────────────────────────────────────────────
 const MetaLeadsPage = () => {
   const queryClient = useQueryClient();
@@ -153,11 +301,6 @@ const MetaLeadsPage = () => {
   );
   const [selectedAdset, setSelectedAdset] = useState(null);
 
-  // Syncing a large sheet (many tabs x rows, each needing a dedup lookup)
-  // can take several minutes — far longer than any HTTP client should hold
-  // a connection open for, which is what caused the 60s timeout errors.
-  // The backend now runs the sync in the background and reports progress
-  // via sync_status, so poll while it's running.
   const { data: status, isLoading: statusLoading } = useQuery({
     queryKey: ['sheets-status'],
     queryFn: () => sheetsAPI.status().then(r => r.data),
@@ -170,6 +313,13 @@ const MetaLeadsPage = () => {
     queryFn: () => sheetsAPI.adsets().then(r => r.data),
     staleTime: 2 * 60 * 1000,
   });
+
+  const { data: repeatedResult } = useQuery({
+    queryKey: ['repeated-leads'],
+    queryFn: () => duplicatesAPI.repeated().then(r => r.data),
+    staleTime: 2 * 60 * 1000,
+  });
+  const repeatedCount = repeatedResult?.total || 0;
 
   const syncMutation = useMutation({
     mutationFn: () => sheetsAPI.sync(),
@@ -186,9 +336,6 @@ const MetaLeadsPage = () => {
     },
   });
 
-  // Detect the running → completed/error transition (via polling above) and
-  // surface the final result, since the sync response itself no longer
-  // carries the final counts.
   const prevSyncStatus = useRef(status?.sync_status);
   useEffect(() => {
     const prev = prevSyncStatus.current;
@@ -203,6 +350,7 @@ const MetaLeadsPage = () => {
       queryClient.invalidateQueries({ queryKey: ['sheets-adsets'] });
       queryClient.invalidateQueries({ queryKey: ['leads'] });
       queryClient.invalidateQueries({ queryKey: ['all-meta-leads'] });
+      queryClient.invalidateQueries({ queryKey: ['repeated-leads'] });
     } else if (prev === 'running' && curr === 'error') {
       message.error(`Sync failed: ${status.last_sync_error || 'Unknown error'}`);
     }
@@ -230,13 +378,12 @@ const MetaLeadsPage = () => {
     onError: (e) => message.error(`Cleanup failed: ${e?.response?.data?.detail || e.message}`),
   });
 
-  // Totals
   const total      = adsets.reduce((s, a) => s + a.total,        0);
   const freshLeads = adsets.reduce((s, a) => s + (a.fresh || 0), 0);
   const enrolled   = adsets.reduce((s, a) => s + a.enrolled,     0);
   const adSetCount = adsets.length;
 
-  const columns = [
+  const adsetColumns = [
     {
       title: 'Ad Set Name',
       dataIndex: 'adset_name',
@@ -306,6 +453,15 @@ const MetaLeadsPage = () => {
       key: 'not_interested',
       width: 80,
       render: v => (v || 0) > 0 ? <Badge count={v} color="#ef4444" /> : <Text type="secondary">0</Text>,
+    },
+    {
+      title: 'Repeated',
+      dataIndex: 'repeated',
+      key: 'repeated',
+      width: 90,
+      render: v => (v || 0) > 0
+        ? <Badge count={v} color="#f97316" style={{ fontWeight: 600 }} />
+        : <Text type="secondary">0</Text>,
     },
     {
       title: 'Latest Lead',
@@ -432,13 +588,14 @@ const MetaLeadsPage = () => {
       {/* Summary stats */}
       <Row gutter={16} style={{ marginBottom: 24 }}>
         {[
-          { title: 'Total Meta Leads', value: total, icon: <TeamOutlined />, color: '#1877f2' },
-          { title: 'Ad Sets', value: adSetCount, icon: <BarChartOutlined />, color: '#8b5cf6' },
+          { title: 'Total Meta Leads', value: total,        icon: <TeamOutlined />,        color: '#1877f2' },
+          { title: 'Ad Sets',          value: adSetCount,   icon: <BarChartOutlined />,    color: '#8b5cf6' },
           { title: 'Fresh / Uncontacted', value: freshLeads, icon: <ClockCircleOutlined />, color: '#f59e0b' },
-          { title: 'Enrolled', value: enrolled, icon: <DollarCircleOutlined />, color: '#10b981' },
+          { title: 'Enrolled',         value: enrolled,     icon: <DollarCircleOutlined />, color: '#10b981' },
+          { title: 'Repeated Leads',   value: repeatedCount, icon: <RetweetOutlined />,     color: '#f97316' },
         ].map(({ title, value, icon, color }) => (
-          <Col xs={12} sm={6} key={title}>
-            <Card>
+          <Col xs={12} sm={8} md={5} key={title}>
+            <Card size="small">
               <Statistic
                 title={<Space size={4}>{icon}<span>{title}</span></Space>}
                 value={value}
@@ -449,7 +606,7 @@ const MetaLeadsPage = () => {
         ))}
       </Row>
 
-      {/* Tabs: Ad Sets + All Leads */}
+      {/* Tabs: Ad Sets + All Leads + Repeated */}
       <Card>
         <Tabs
           defaultActiveKey="adsets"
@@ -460,12 +617,12 @@ const MetaLeadsPage = () => {
               children: (
                 <Table
                   dataSource={adsets}
-                  columns={columns}
+                  columns={adsetColumns}
                   rowKey="adset_name"
                   loading={adsetsLoading}
                   size="middle"
                   pagination={{ pageSize: 20, showSizeChanger: true }}
-                  scroll={{ x: 900 }}
+                  scroll={{ x: 1000 }}
                   locale={{ emptyText: 'No Meta leads synced yet. Click "Sync Now" to import.' }}
                 />
               ),
@@ -474,6 +631,19 @@ const MetaLeadsPage = () => {
               key: 'all',
               label: `All Meta Leads (${total})`,
               children: <AllMetaLeadsTable />,
+            },
+            {
+              key: 'repeated',
+              label: (
+                <Space size={6}>
+                  <RetweetOutlined />
+                  <span>Repeated Leads</span>
+                  {repeatedCount > 0 && (
+                    <Badge count={repeatedCount} color="#f97316" overflowCount={999} />
+                  )}
+                </Space>
+              ),
+              children: <RepeatedLeadsTable />,
             },
           ]}
         />

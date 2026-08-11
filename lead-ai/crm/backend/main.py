@@ -7988,12 +7988,17 @@ async def get_repeated_leads(
     request: Request,
     current_user: dict = Depends(get_current_user)
 ):
-    """Return all leads marked is_repeated=true (phone or email shared with another lead)."""
+    """Return all leads marked is_repeated=true with full submission history."""
     _verify_token(request)
     try:
-        COLS = ("lead_id,full_name,phone,email,whatsapp,country,source,"
-                "course_interested,status,assigned_to,created_at,ai_score,"
-                "is_repeated")
+        COLS = (
+            "lead_id,full_name,phone,email,country,source,"
+            "course_interested,status,assigned_to,created_at,"
+            "adset_name,campaign_name,"
+            "is_repeated,submission_count,"
+            "last_submission_adset,last_submission_campaign,"
+            "last_submission_date,last_submission_tab"
+        )
 
         # Fetch all repeated leads in pages (no 1000-row cap)
         all_rows: list = []
@@ -8004,6 +8009,7 @@ async def get_repeated_leads(
                 supabase_data.client.table('leads')
                 .select(COLS)
                 .eq('is_repeated', True)
+                .order('last_submission_date', desc=True)
                 .range(offset, offset + page_size - 1)
                 .execute()
             )
@@ -8013,33 +8019,8 @@ async def get_repeated_leads(
                 break
             offset += page_size
 
-        # Compute repeat_reasons in Python for the drawer grouping
-        phone_seen: dict = {}
-        email_seen: dict = {}
-        for r in all_rows:
-            t = _strip_phone(r.get('phone') or r.get('whatsapp') or '')
-            if t:
-                phone_seen.setdefault(t, []).append(r['lead_id'])
-            em = (r.get('email') or '').strip().lower()
-            if em:
-                email_seen.setdefault(em, []).append(r['lead_id'])
-
-        reason_map: dict = {}
-        for t, ids in phone_seen.items():
-            if len(ids) > 1:
-                for lid in ids:
-                    reason_map.setdefault(lid, set()).add('same_phone')
-        for em, ids in email_seen.items():
-            if len(ids) > 1:
-                for lid in ids:
-                    reason_map.setdefault(lid, set()).add('same_email')
-
-        repeated = [
-            {**r, 'repeat_reasons': list(reason_map.get(r['lead_id'], ['same_phone']))}
-            for r in all_rows
-        ]
-        logger.info(f"Repeated leads: {len(repeated)} leads with is_repeated=true")
-        return {"repeated": repeated, "total": len(repeated)}
+        logger.info(f"Repeated leads: {len(all_rows)} leads with is_repeated=true")
+        return {"repeated": all_rows, "total": len(all_rows)}
     except Exception as e:
         logger.error(f"Error fetching repeated leads: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to fetch repeated leads")
