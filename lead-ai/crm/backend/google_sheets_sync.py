@@ -519,12 +519,16 @@ def sync_sheet_to_crm() -> Dict:
                 # Determine the timestamp for this submission
                 sub_date = lead.get('created_at') or datetime.utcnow().isoformat()
 
+                is_genuinely_repeated = len(all_ids) > 1
+
                 meta_update = {k: v for k, v in {
                     # Keep original meta_lead_id — track the new one via submission_ids
                     'meta_submission_ids': ','.join(sorted(all_ids)),
-                    # Repeated-lead tracking fields
-                    'is_repeated':             True,
-                    'submission_count':        old_count + 1,
+                    # Only mark as repeated when there are 2+ distinct submission IDs.
+                    # Using True unconditionally caused false positives when the same
+                    # meta_lead_id was re-processed (e.g. pagination gap in synced set).
+                    'is_repeated':             is_genuinely_repeated,
+                    'submission_count':        old_count + 1 if is_genuinely_repeated else old_count,
                     'last_submission_adset':   lead.get('adset_name'),
                     'last_submission_campaign':lead.get('campaign_name'),
                     'last_submission_date':    sub_date,
