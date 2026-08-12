@@ -2298,6 +2298,12 @@ async def create_website_lead(
     if not WEBSITE_LEAD_SECRET or x_webhook_secret != WEBSITE_LEAD_SECRET:
         raise HTTPException(status_code=401, detail="Invalid or missing webhook secret")
 
+    # Application form submissions must NOT enter the CRM — only enquiry forms do.
+    _ftype = (payload.form_type or "").strip().lower()
+    if _ftype == "application":
+        logger.info(f"Website webhook: skipped application form submission from {payload.phone}")
+        return {"status": "skipped", "reason": "application forms are not imported into the CRM"}
+
     lead = LeadCreate(
         full_name=payload.full_name,
         email=payload.email,
