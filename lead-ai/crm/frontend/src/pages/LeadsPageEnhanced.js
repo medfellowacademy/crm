@@ -399,6 +399,7 @@ const LeadsPageEnhanced = () => {
     if (quickFilter === 'fresh') params.status = 'Fresh';
     if (quickFilter === 'hot') params.status = 'Hot';
     if (quickFilter === 'warm') params.status = 'Warm';
+    if (quickFilter === 'followup') params.status = 'Follow Up';
     if (quickFilter === 'followup_today') {
       params.follow_up_from = dayjs().startOf('day').toISOString();
       params.follow_up_to   = dayjs().endOf('day').toISOString();
@@ -1458,6 +1459,7 @@ const LeadsPageEnhanced = () => {
                 { label: '🆕 Fresh', value: 'fresh' },
                 { label: '🔥 Hot', value: 'hot' },
                 { label: '⚡ Warm', value: 'warm' },
+                { label: '🔄 Follow Up', value: 'followup' },
                 { label: '📅 Created Today', value: 'today' },
                 { label: '📞 Follow-up Today', value: 'followup_today' },
                 { label: '⚠️ Overdue', value: 'overdue' },
