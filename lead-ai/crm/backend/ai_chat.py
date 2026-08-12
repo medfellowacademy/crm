@@ -73,6 +73,103 @@ def _search_knowledge_base(query: str, limit: int = 5) -> List[dict]:
         return []
 
 
+_ANALYTICS_KW = [
+    "how many", "total", "count", "lead", "leads", "pipeline",
+    "enrolled", "enrollment", "conversion", "convert", "rate",
+    "counselor", "counselors", "performance", "best", "top", "who",
+    "revenue", "income", "earning", "follow up", "follow-up", "overdue",
+    "today", "week", "month", "this week", "this month", "yesterday",
+    "fresh", "hot", "warm", "junk", "not interested", "status",
+    "source", "country", "course", "ad set", "adset", "meta",
+    "repeated", "duplicate", "unassigned", "statistic", "stats",
+    "report", "analytics", "analysis", "overview", "summary", "breakdown",
+    "trend", "growth", "compare", "versus", "vs", "which", "show me",
+    "what is", "what's", "how is", "percentage", "%",
+]
+
+
+def _build_crm_analytics_context() -> str:
+    """Fetch a comprehensive analytics snapshot from Supabase in one RPC call."""
+    try:
+        result = supabase_data.client.rpc("get_crm_analytics_snapshot", {}).execute()
+        d = result.data
+        if not d:
+            return ""
+
+        lines = [
+            f"--- Live CRM Analytics Snapshot ({d.get('snapshot_at', 'now')}) ---",
+            "",
+            f"OVERALL",
+            f"  Total leads: {d.get('total_leads', 0):,}",
+            f"  Enrolled:    {d.get('total_enrolled', 0):,}",
+            f"  Conversion rate: {round(d['total_enrolled'] / d['total_leads'] * 100, 1) if d.get('total_leads') else 0}%",
+            f"  Actual revenue:  ₹{d.get('total_revenue', 0):,.0f}",
+            f"  Expected revenue:₹{d.get('expected_revenue', 0):,.0f}",
+            f"  Repeated leads:  {d.get('repeated_leads', 0):,}",
+            f"  Overdue follow-ups: {d.get('overdue_followup', 0):,}",
+            "",
+            f"TIME TRENDS",
+            f"  Leads today:        {d.get('leads_today', 0):,}  (enrolled today: {d.get('enrolled_today', 0):,})",
+            f"  Leads this week:    {d.get('leads_this_week', 0):,}",
+            f"  Leads this month:   {d.get('leads_this_month', 0):,}  (enrolled this month: {d.get('enrolled_this_month', 0):,})",
+            "",
+            f"META / FACEBOOK ADS",
+            f"  Meta leads: {d.get('meta_total', 0):,}  (enrolled from Meta: {d.get('meta_enrolled', 0):,})",
+        ]
+
+        # Top ad sets
+        top_adsets = d.get("top_adsets") or []
+        if top_adsets:
+            lines.append("  Top ad sets:")
+            for a in top_adsets:
+                lines.append(f"    • {a.get('adset_name')}: {a.get('total'):,} leads, {a.get('enrolled'):,} enrolled")
+
+        # Status breakdown
+        by_status = d.get("by_status") or []
+        if by_status:
+            lines.append("\nSTATUS BREAKDOWN")
+            for s in by_status:
+                lines.append(f"  {s.get('status')}: {s.get('count'):,}")
+
+        # Source breakdown
+        by_source = d.get("by_source") or []
+        if by_source:
+            lines.append("\nSOURCE BREAKDOWN")
+            for s in by_source:
+                lines.append(f"  {s.get('source')}: {s.get('count'):,}")
+
+        # Country breakdown
+        by_country = d.get("by_country") or []
+        if by_country:
+            lines.append("\nTOP COUNTRIES")
+            for c in by_country:
+                lines.append(f"  {c.get('country')}: {c.get('count'):,}")
+
+        # Course interest
+        by_course = d.get("by_course") or []
+        if by_course:
+            lines.append("\nTOP COURSE INTERESTS")
+            for c in by_course:
+                lines.append(f"  {c.get('course')}: {c.get('count'):,}")
+
+        # Counselor performance
+        counselors = d.get("counselor_stats") or []
+        if counselors:
+            lines.append("\nCOUNSELOR PERFORMANCE")
+            for c in counselors:
+                lines.append(
+                    f"  {c.get('counselor')}: {c.get('total'):,} leads, "
+                    f"{c.get('enrolled'):,} enrolled ({c.get('conversion_pct') or 0}%), "
+                    f"₹{c.get('revenue') or 0:,.0f} revenue"
+                )
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        logger.warning("CRM analytics snapshot failed: {}", e)
+        return ""
+
+
 def _build_context(message: str, lead_id: Optional[str]) -> str:
     parts = []
     msg_lower = message.lower()
@@ -86,7 +183,13 @@ def _build_context(message: str, lead_id: Optional[str]) -> str:
         )
         parts.append(f"--- Knowledge base matches ---\n{kb_text}")
 
-    # ── 2. CRM course catalog (fetched directly from DB) ─────────────────────
+    # ── 2. Live CRM analytics (injected when the question is about data) ─────
+    if any(kw in msg_lower for kw in _ANALYTICS_KW):
+        crm_ctx = _build_crm_analytics_context()
+        if crm_ctx:
+            parts.insert(0, crm_ctx)  # put analytics first so it's seen first
+
+    # ── 3. CRM course catalog (fetched directly from DB) ─────────────────────
     COURSE_KW = [
         "course", "program", "programme", "study", "studies", "degree",
         "mbbs", "md ", " md ", "bds", "dental", "nursing", "pharmacy",
@@ -122,7 +225,7 @@ def _build_context(message: str, lead_id: Optional[str]) -> str:
         except Exception as e:
             logger.warning("Course context fetch failed: {}", e)
 
-    # ── 3. Partner hospitals/universities ─────────────────────────────────────
+    # ── 4. Partner hospitals/universities ─────────────────────────────────────
     HOSPITAL_KW = [
         "hospital", "university", "universities", "college", "institution",
         "partner", "ukraine", "russia", "georgia", "philippines", "china",
@@ -144,7 +247,7 @@ def _build_context(message: str, lead_id: Optional[str]) -> str:
         except Exception as e:
             logger.warning("Hospital context fetch failed: {}", e)
 
-    # ── 4. Lead-specific context ──────────────────────────────────────────────
+    # ── 5. Lead-specific context ──────────────────────────────────────────────
     if lead_id:
         lead = supabase_data.get_lead_by_id(lead_id)
         if lead:
