@@ -45,7 +45,8 @@ const WebsiteLeadsPage = () => {
           created_from: dateRange[0].startOf('day').toISOString(),
           created_to: dateRange[1].endOf('day').toISOString(),
         } : {}),
-      }).then(r => r.data?.leads || []),
+      // Exclude application form leads (company='MED') — keep enquiry leads only
+      }).then(r => (r.data?.leads || []).filter(l => l.company !== 'MED')),
     staleTime: 30 * 1000,
     refetchInterval: 60 * 1000,
   });
