@@ -325,7 +325,12 @@ const LeadsPageEnhanced = () => {
   const [quickFilter, setQuickFilter] = useState(() => {
     try { return sessionStorage.getItem('leadsEnhanced_quickFilter') || 'all'; } catch { return 'all'; }
   });
-  const [advFilters, setAdvFilters] = useState({});
+  const [advFilters, setAdvFilters] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem('leadsEnhanced_advFilters');
+      return saved ? JSON.parse(saved) : {};
+    } catch { return {}; }
+  });
   const [pageSize, setPageSize] = useState(50);
   const [currentPage, setCurrentPage] = useState(1);
   const [form] = Form.useForm();
@@ -371,6 +376,11 @@ const LeadsPageEnhanced = () => {
       }
     };
   }, [searchText]);
+
+  // Persist advFilters to sessionStorage so they survive navigation
+  React.useEffect(() => {
+    try { sessionStorage.setItem('leadsEnhanced_advFilters', JSON.stringify(advFilters)); } catch {}
+  }, [advFilters]);
 
   // Reset to first page when filters or search changes
   React.useEffect(() => {
@@ -1467,7 +1477,7 @@ const LeadsPageEnhanced = () => {
                   onClick={() => setFilterDrawerVisible(true)}>Filters</Button>
               </Badge>
             </Tooltip>
-            <Button icon={<SyncOutlined />} onClick={() => { setAdvFilters({}); setFilters({}); setSearchText(''); setQuickFilter('all'); setTableFilterState({}); setColumnFilters({}); try { sessionStorage.removeItem('leadsEnhanced_tableFilterState'); sessionStorage.removeItem('leadsEnhanced_quickFilter'); sessionStorage.removeItem('leadsEnhanced_searchText'); } catch {} message.success('Filters cleared'); }}>Clear</Button>
+            <Button icon={<SyncOutlined />} onClick={() => { setAdvFilters({}); setFilters({}); setSearchText(''); setQuickFilter('all'); setTableFilterState({}); setColumnFilters({}); try { sessionStorage.removeItem('leadsEnhanced_tableFilterState'); sessionStorage.removeItem('leadsEnhanced_quickFilter'); sessionStorage.removeItem('leadsEnhanced_searchText'); sessionStorage.removeItem('leadsEnhanced_advFilters'); } catch {} message.success('Filters cleared'); }}>Clear</Button>
             <Button icon={<DownloadOutlined />} onClick={downloadTemplate}>Template</Button>
             <Button icon={<ImportOutlined />} onClick={() => { resetImport(); setImportVisible(true); }}>Import</Button>
             <Dropdown
@@ -2111,7 +2121,7 @@ const LeadsPageEnhanced = () => {
         open={filterDrawerVisible}
         onClose={() => setFilterDrawerVisible(false)}
         extra={
-          <Button onClick={() => { setAdvFilters({}); setFilterDrawerVisible(false); message.success('Filters cleared'); }}>
+          <Button onClick={() => { setAdvFilters({}); try { sessionStorage.removeItem('leadsEnhanced_advFilters'); } catch {} setFilterDrawerVisible(false); message.success('Filters cleared'); }}>
             Clear All
           </Button>
         }
@@ -2171,6 +2181,7 @@ const LeadsPageEnhanced = () => {
             <Select mode="multiple" style={{ width: '100%', marginTop: 6 }} placeholder="Any counselor" showSearch
               disabled={isCounselor}
               value={advFilters.assigned || []} onChange={v => setAdvFilters(f => ({ ...f, assigned: v }))}>
+              <Option key="__none__" value="__none__">— Unassigned —</Option>
               {uniqueAssigned.map(u => <Option key={u} value={u}>{u}</Option>)}
             </Select>
           </div>

@@ -305,6 +305,12 @@ def row_to_lead(row: Dict, tab_name: str) -> Optional[Dict]:
     if not full_name and not email and not phone:
         return None
 
+    # Skip Meta's test/dummy leads — they cycle on every sync and inflate counts
+    _TEST_NAMES = ("<test lead", "dummy data", "test lead:")
+    _TEST_EMAILS = ("test@meta.com", "test@facebook.com")
+    if email in _TEST_EMAILS or any(t in (full_name or "").lower() for t in _TEST_NAMES):
+        return None
+
     adset    = (row.get("adset_name")    or "").strip()
     campaign = (row.get("campaign_name") or "").strip()
     ad       = (row.get("ad_name")       or "").strip()
@@ -561,11 +567,20 @@ def sync_sheet_to_crm() -> Dict:
                     )
                 except Exception as e:
                     err_str = str(e)
-                    logger.error(f"Meta-update failed for {existing_uuid}: {err_str}")
-                    error_count += 1
-                    tab_err += 1
-                    if tab_sample_err is None:
-                        tab_sample_err = err_str[:200]
+                    # 23505 = unique constraint violation on meta_lead_id:
+                    # the row already exists from a previous partial sync run.
+                    # Treat it as already-synced (skip), not an error.
+                    if '23505' in err_str and 'meta_lead_id' in err_str:
+                        synced_ids.add(meta_id)
+                        skip_count += 1
+                        tab_skip += 1
+                        logger.warning(f"Update skipped (already exists): meta_id={meta_id}")
+                    else:
+                        logger.error(f"Meta-update failed for {existing_uuid}: {err_str}")
+                        error_count += 1
+                        tab_err += 1
+                        if tab_sample_err is None:
+                            tab_sample_err = err_str[:200]
             else:
                 # New person — insert fresh lead
                 try:
@@ -583,11 +598,19 @@ def sync_sheet_to_crm() -> Dict:
                         logger.warning(f"Insert returned empty data for meta_id={meta_id} (lead may still be saved)")
                 except Exception as e:
                     err_str = str(e)
-                    logger.error(f"Insert failed for meta_id={meta_id}: {err_str}")
-                    error_count += 1
-                    tab_err += 1
-                    if tab_sample_err is None:
-                        tab_sample_err = err_str[:200]
+                    # 23505 = meta_lead_id already exists in DB but wasn't in
+                    # synced_ids (DB inconsistency from old sync runs). Skip it.
+                    if '23505' in err_str and 'meta_lead_id' in err_str:
+                        synced_ids.add(meta_id)
+                        skip_count += 1
+                        tab_skip += 1
+                        logger.warning(f"Insert skipped (already exists): meta_id={meta_id}")
+                    else:
+                        logger.error(f"Insert failed for meta_id={meta_id}: {err_str}")
+                        error_count += 1
+                        tab_err += 1
+                        if tab_sample_err is None:
+                            tab_sample_err = err_str[:200]
 
         logger.info(
             f"Tab '{tab['name']}': rows={len(rows)} new={tab_new} updated={tab_upd} "
@@ -619,15 +642,10 @@ def sync_sheet_to_crm() -> Dict:
     except Exception as e:
         logger.warning(f"Could not update sheet_sync_config: {e}")
 
-    # Refresh is_repeated marks after any changes
-    if new_count > 0 or updated_count > 0:
-        try:
-            from supabase_data_layer import SupabaseDataLayer
-            _dl = SupabaseDataLayer()
-            repeated_count = _dl.refresh_repeated_marks()
-            logger.info(f"Post-sync repeated refresh: {repeated_count} leads marked")
-        except Exception as e:
-            logger.warning(f"Post-sync repeated refresh failed: {e}")
+    # is_repeated is set precisely during the UPDATE path above when an email
+    # match is found. refresh_repeated_marks() is NOT called here because it
+    # resets ALL flags to False first (destroying correct flags) and then
+    # re-marks using broad phone matching which causes false positives.
 
     stats = {
         "new_leads":     new_count,
@@ -660,22 +678,48 @@ def run_sync_background() -> None:
 def get_adset_stats() -> List[Dict]:
     """
     Return per-adset aggregates for all Meta-sourced leads.
+    Uses get_meta_adset_stats() RPC for a single SQL aggregation query.
+    Falls back to paginated row fetch if the RPC is unavailable.
     """
     from supabase_client import supabase_manager
+    client = supabase_manager.get_client()
+
+    # Try the SQL aggregation RPC first (fast path)
     try:
-        client = supabase_manager.get_client()
-        # Supabase/PostgREST caps a single response at 1000 rows regardless
-        # of how many match the filter - without paginating via .range(),
-        # this silently dropped every meta lead past the first 1000, making
-        # ad-set totals (and the "Total Meta Leads" stat derived from them)
-        # wrong for any account with more than 1000 synced leads.
+        result = client.rpc('get_meta_adset_stats', {}).execute()
+        rows = result.data or []
+        if rows:
+            # RPC returns already-aggregated rows — just normalise field types
+            out = []
+            for r in rows:
+                out.append({
+                    "adset_name":     r.get("adset_name") or "Unknown",
+                    "campaign_name":  r.get("campaign_name") or "",
+                    "ad_name":        r.get("ad_name") or "",
+                    "source":         r.get("source") or "Facebook",
+                    "total":          int(r.get("total") or 0),
+                    "fresh":          int(r.get("fresh") or 0),
+                    "follow_up":      int(r.get("follow_up") or 0),
+                    "interested":     int(r.get("interested") or 0),
+                    "enrolled":       int(r.get("enrolled") or 0),
+                    "not_interested": int(r.get("not_interested") or 0),
+                    "junk":           int(r.get("junk") or 0),
+                    "repeated":       int(r.get("repeated") or 0),
+                    "latest":         r.get("latest"),
+                })
+            return out
+    except Exception as e:
+        logger.warning(f"get_meta_adset_stats RPC failed, using fallback: {e}")
+
+    # Fallback: paginated row fetch + Python-side aggregation
+    try:
         rows = []
         page_size = 1000
         offset = 0
         while True:
             batch = (
                 client.table("leads")
-                .select("adset_name,campaign_name,source,status,created_at,meta_lead_id,is_repeated")
+                .select("adset_name,campaign_name,ad_name,source,status,created_at,meta_lead_id,is_repeated")
                 .not_.is_("meta_lead_id", "null")
                 .range(offset, offset + page_size - 1)
                 .execute()
@@ -686,50 +730,31 @@ def get_adset_stats() -> List[Dict]:
                 break
             offset += page_size
     except Exception as e:
-        logger.error(f"get_adset_stats failed: {e}")
+        logger.error(f"get_adset_stats fallback failed: {e}")
         return []
 
     stats: Dict[str, Dict] = defaultdict(lambda: {
-        "adset_name": "Unknown",
-        "campaign_name": "",
-        "source": "Facebook",
-        "total": 0,
-        "fresh": 0,
-        "follow_up": 0,
-        "interested": 0,
-        "enrolled": 0,
-        "not_interested": 0,
-        "junk": 0,
-        "repeated": 0,
-        "latest": None,
+        "adset_name": "Unknown", "campaign_name": "", "ad_name": "",
+        "source": "Facebook", "total": 0, "fresh": 0, "follow_up": 0,
+        "interested": 0, "enrolled": 0, "not_interested": 0,
+        "junk": 0, "repeated": 0, "latest": None,
     })
-
     for r in rows:
         key = r.get("adset_name") or "Unknown"
         s = stats[key]
         s["adset_name"] = key
-        if r.get("campaign_name"):
-            s["campaign_name"] = r["campaign_name"]
-        if r.get("source"):
-            s["source"] = r["source"]
+        if r.get("campaign_name"): s["campaign_name"] = r["campaign_name"]
+        if r.get("ad_name"):      s["ad_name"]       = r["ad_name"]
+        if r.get("source"):       s["source"]        = r["source"]
         s["total"] += 1
         st = (r.get("status") or "").strip().lower()
-        if st in ("fresh", "new"):
-            s["fresh"] += 1
-        elif st in ("follow up", "follow-up", "followup", "warm", "hot"):
-            s["follow_up"] += 1
-        elif st == "interested":
-            s["interested"] += 1
-        elif st == "enrolled":
-            s["enrolled"] += 1
-        elif st in ("not interested", "not_interested"):
-            s["not_interested"] += 1
-        elif st in ("junk", "not answering", "not_answering"):
-            s["junk"] += 1
-        if r.get("is_repeated"):
-            s["repeated"] += 1
+        if st in ("fresh", "new"):                                    s["fresh"] += 1
+        elif st in ("follow up","follow-up","followup","warm","hot"): s["follow_up"] += 1
+        elif st == "interested":                                      s["interested"] += 1
+        elif st == "enrolled":                                        s["enrolled"] += 1
+        elif st in ("not interested","not_interested"):               s["not_interested"] += 1
+        elif st in ("junk","not answering","not_answering"):          s["junk"] += 1
+        if r.get("is_repeated"): s["repeated"] += 1
         c = r.get("created_at")
-        if c and (not s["latest"] or c > s["latest"]):
-            s["latest"] = c
-
+        if c and (not s["latest"] or c > s["latest"]): s["latest"] = c
     return sorted(stats.values(), key=lambda x: x["total"], reverse=True)

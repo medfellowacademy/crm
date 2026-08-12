@@ -165,9 +165,17 @@ class SupabaseDataLayer:
                 else:
                     q = q.ilike('ai_segment', _segment.strip())
             if _assigned:
+                _UNASSIGNED = {'__none__', '__unassigned__', 'unassigned'}
                 if ',' in _assigned:
-                    assignees = [a.strip() for a in _assigned.split(',') if a.strip()]
-                    q = q.or_(','.join([f"assigned_to.ilike.{a}" for a in assignees]))
+                    parts = [a.strip() for a in _assigned.split(',') if a.strip()]
+                    named = [a for a in parts if a.lower() not in _UNASSIGNED]
+                    wants_null = any(a.lower() in _UNASSIGNED for a in parts)
+                    or_clauses = ([f"assigned_to.ilike.{a}" for a in named]
+                                  + (['assigned_to.is.null'] if wants_null else []))
+                    if or_clauses:
+                        q = q.or_(','.join(or_clauses))
+                elif _assigned.strip().lower() in _UNASSIGNED:
+                    q = q.is_('assigned_to', 'null')
                 else:
                     q = q.ilike('assigned_to', _assigned.strip())
             if course_interested:
@@ -235,7 +243,7 @@ class SupabaseDataLayer:
             elif updated_before:
                 q = q.lt('updated_at', updated_before)
             if adset_name:
-                q = q.ilike('adset_name', adset_name.strip())
+                q = q.eq('adset_name', adset_name.strip())
             if meta_only:
                 q = q.not_.is_('meta_lead_id', 'null')
             effective_limit = min(limit, 10000)
@@ -535,65 +543,62 @@ class SupabaseDataLayer:
     
     def refresh_repeated_marks(self) -> int:
         """
-        Re-compute is_repeated for every lead using raw SQL via Supabase RPC.
-        Returns number of leads marked as repeated.
+        Re-sync is_repeated flags from the ground truth stored in meta_submission_ids.
+        A lead is repeated only when meta_submission_ids contains 2+ distinct IDs
+        (i.e. the sync confirmed at least one genuine second submission with a different
+        meta_lead_id). Does NOT reset existing correct flags — only corrects discrepancies.
+        Returns total number of leads currently marked as repeated.
         """
         try:
-            # Reset all first
-            self.client.table('leads').update({'is_repeated': False}).neq('lead_id', '00000000-0000-0000-0000-000000000000').execute()
-
-            # Fetch all leads with phone / email for grouping in Python
-            # (Supabase REST API doesn't support UPDATE with self-join)
             page_size = 1000
             offset = 0
-            all_rows = []
+            to_mark_true: list = []
+            to_mark_false: list = []
+
             while True:
                 batch = (
                     self.client.table('leads')
-                    .select('lead_id,phone,email')
+                    .select('lead_id,is_repeated,meta_submission_ids')
+                    .not_.is_('meta_lead_id', 'null')
                     .range(offset, offset + page_size - 1)
                     .execute()
                 )
                 rows = batch.data or []
-                all_rows.extend(rows)
+                for r in rows:
+                    ids_str = r.get('meta_submission_ids') or ''
+                    # Genuinely repeated = 2+ comma-separated IDs
+                    is_genuine = ',' in ids_str
+                    currently = r.get('is_repeated') or False
+                    if is_genuine and not currently:
+                        to_mark_true.append(r['lead_id'])
+                    elif not is_genuine and currently:
+                        to_mark_false.append(r['lead_id'])
                 if len(rows) < page_size:
                     break
                 offset += page_size
 
-            import re as _re
+            for i in range(0, len(to_mark_true), 100):
+                self.client.table('leads').update({'is_repeated': True}).in_(
+                    'lead_id', to_mark_true[i:i+100]).execute()
+            for i in range(0, len(to_mark_false), 100):
+                self.client.table('leads').update({'is_repeated': False}).in_(
+                    'lead_id', to_mark_false[i:i+100]).execute()
 
-            def _tail(p):
-                if not p:
-                    return ''
-                d = _re.sub(r'[^0-9]', '', str(p))
-                return d[-9:] if len(d) >= 9 else ''
-
-            phone_groups: dict = {}
-            email_groups: dict = {}
-            for r in all_rows:
-                t = _tail(r.get('phone'))
-                if t:
-                    phone_groups.setdefault(t, []).append(r['lead_id'])
-                e = (r.get('email') or '').strip().lower()
-                if e:
-                    email_groups.setdefault(e, []).append(r['lead_id'])
-
-            repeated_ids = set()
-            for grp in phone_groups.values():
-                if len(grp) > 1:
-                    repeated_ids.update(grp)
-            for grp in email_groups.values():
-                if len(grp) > 1:
-                    repeated_ids.update(grp)
-
-            # Batch update in chunks of 100
-            repeated_list = list(repeated_ids)
-            for i in range(0, len(repeated_list), 100):
-                chunk = repeated_list[i:i+100]
-                self.client.table('leads').update({'is_repeated': True}).in_('lead_id', chunk).execute()
-
-            logger.info(f"refresh_repeated_marks: marked {len(repeated_ids)} leads as repeated")
-            return len(repeated_ids)
+            total_repeated = len(to_mark_true) + sum(
+                1 for _ in to_mark_false  # those were already true, subtract
+            )
+            # Re-count actual total
+            result = (
+                self.client.table('leads')
+                .select('lead_id', count='exact')
+                .not_.is_('meta_lead_id', 'null')
+                .eq('is_repeated', True)
+                .execute()
+            )
+            total_repeated = result.count or 0
+            logger.info(f"refresh_repeated_marks: {total_repeated} leads marked as repeated "
+                        f"({len(to_mark_true)} newly added, {len(to_mark_false)} corrected to false)")
+            return total_repeated
         except Exception as e:
             logger.error(f"refresh_repeated_marks failed: {e}")
             return 0

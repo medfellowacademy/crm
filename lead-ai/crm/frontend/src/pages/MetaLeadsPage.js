@@ -79,8 +79,8 @@ const DailyLeadsModal = ({ date, adset, open, onClose }) => {
     queryFn: () => leadsAPI.getAll({
       limit: 500,
       adset_name: adset,
-      created_from: `${date}T00:00:00`,
-      created_to:   `${date}T23:59:59`,
+      created_from: `${date}T00:00:00+05:30`,
+      created_to:   `${date}T23:59:59+05:30`,
     }).then(r => r.data?.leads || []),
     enabled: open && !!date && !!adset,
     staleTime: 2 * 60 * 1000,
@@ -585,6 +585,10 @@ const MetaLeadsPage = () => {
       render: v => v ? <Text type="secondary">{v}</Text> : '—',
     },
     {
+      title: 'Ad Name', dataIndex: 'ad_name', key: 'ad_name', ellipsis: true,
+      render: v => v ? <Text style={{ fontSize: 12, color: '#6366f1' }}>{v}</Text> : <Text type="secondary">—</Text>,
+    },
+    {
       title: 'Platform', dataIndex: 'source', key: 'source', width: 110,
       render: v => <Space size={4}>{SOURCE_ICON[v] || null}<span>{v || 'Meta'}</span></Space>,
     },
@@ -735,7 +739,7 @@ const MetaLeadsPage = () => {
                   dataSource={adsets} columns={adsetColumns} rowKey="adset_name"
                   loading={adsetsLoading} size="middle"
                   pagination={{ pageSize: 20, showSizeChanger: true }}
-                  scroll={{ x: 1050 }}
+                  scroll={{ x: 1250 }}
                   locale={{ emptyText: 'No Meta leads synced yet. Click "Sync Now" to import.' }}
                 />
               ),

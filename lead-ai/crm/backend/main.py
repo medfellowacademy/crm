@@ -2632,12 +2632,19 @@ async def get_leads(
 @app.get("/api/leads/{lead_id}")
 async def get_lead(lead_id: str, request: Request):
     """Get single lead by ID - Supabase only"""
-    
+
     _counselor_name = _get_counselor_name(request)
 
-    # Use Supabase REST API
-    
     try:
+        # ── 30-second in-memory cache for single lead fetches ──────────────
+        _single_key = f"lead:{lead_id}"
+        cached = LEAD_CACHE.get(_single_key)
+        if cached is not None:
+            # Still enforce counselor visibility on cached data
+            if _counselor_name and cached.get("assigned_to") != _counselor_name:
+                raise HTTPException(status_code=403, detail="Access denied")
+            return cached
+
         lead = supabase_data.get_lead_by_id(lead_id)
         if not lead:
             raise HTTPException(status_code=404, detail="Lead not found")
@@ -2654,6 +2661,7 @@ async def get_lead(lead_id: str, request: Request):
         else:
             lead['notes'] = []
 
+        LEAD_CACHE[_single_key] = lead
         return lead
     except HTTPException:
         raise
@@ -2691,6 +2699,9 @@ async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, b
         updated_lead = supabase_data.update_lead(lead_id, update_data)
         if not updated_lead:
             raise HTTPException(status_code=404, detail="Lead not found")
+
+        # Evict single-lead cache so next GET returns fresh data with notes
+        LEAD_CACHE.pop(f"lead:{lead_id}", None)
 
         # ── Record activity for every meaningful field change ─────────────────
         try:
@@ -8604,18 +8615,40 @@ async def get_daily_adset_stats(
         from datetime import datetime, timedelta, timezone
         from collections import defaultdict
 
-        now = datetime.now(timezone.utc)
+        _IST_TZ  = timezone(timedelta(hours=5, minutes=30))
+        _IST_OFF = timedelta(hours=5, minutes=30)
+
+        now_utc = datetime.now(timezone.utc)
+        now_ist = now_utc.astimezone(_IST_TZ)
 
         if date_from and date_to:
-            from_dt = f"{date_from}T00:00:00+00:00"
-            to_dt   = f"{date_to}T23:59:59+00:00"
+            # Interpret user-supplied dates as IST calendar days
+            # IST midnight = UTC midnight − 5h30m
+            _fd = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=_IST_TZ)
+            _td = datetime.strptime(date_to,   "%Y-%m-%d").replace(
+                      hour=23, minute=59, second=59, tzinfo=_IST_TZ)
+            from_dt = _fd.isoformat()
+            to_dt   = _td.isoformat()
         else:
-            to_dt   = now.isoformat()
-            from_dt = (now - timedelta(days=days)).isoformat()
+            to_dt   = now_ist.isoformat()
+            from_dt = (now_ist - timedelta(days=days)).isoformat()
 
-        today_str    = now.strftime("%Y-%m-%d")
-        week_ago_str = (now - timedelta(days=7)).strftime("%Y-%m-%d")
-        month_ago_str= (now - timedelta(days=30)).strftime("%Y-%m-%d")
+        # IST calendar dates for summary buckets
+        today_str     = now_ist.strftime("%Y-%m-%d")
+        week_ago_str  = (now_ist - timedelta(days=7)).strftime("%Y-%m-%d")
+        month_ago_str = (now_ist - timedelta(days=30)).strftime("%Y-%m-%d")
+
+        def _utc_to_ist_date(created_at_str: str) -> str:
+            """Convert a UTC ISO timestamp to an IST calendar date string."""
+            if not created_at_str:
+                return ""
+            try:
+                dt = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return (dt + _IST_OFF).strftime("%Y-%m-%d")
+            except Exception:
+                return (created_at_str or "")[:10]
 
         COLS = (
             "lead_id,full_name,email,phone,created_at,"
@@ -8644,13 +8677,13 @@ async def get_daily_adset_stats(
                 break
             offset += page_size
 
-        # Group by (date, adset_name)
+        # Group by (IST date, adset_name) for correct local-day breakdown
         groups: Dict[tuple, dict] = defaultdict(lambda: {
             "date": "", "adset_name": "", "campaign_name": "",
             "source": "", "new_leads": 0, "repeated": 0, "total": 0,
         })
         for r in all_rows:
-            dt_str = (r.get("created_at") or "")[:10]
+            dt_str = _utc_to_ist_date(r.get("created_at") or "")
             if not dt_str:
                 continue
             key = (dt_str, r.get("adset_name") or "Unknown")
@@ -8665,14 +8698,14 @@ async def get_daily_adset_stats(
             else:
                 g["new_leads"] += 1
 
-        # Sort: most recent date first, then by total desc within same day
+        # Sort: most recent IST date first, then by total desc within same day
         result_rows = sorted(
             groups.values(),
             key=lambda x: (x["date"], x["total"]),
             reverse=True,
         )
 
-        # Summary totals from query results
+        # Summary totals computed against IST calendar dates
         def _sum(from_date: str) -> dict:
             new = rep = tot = 0
             for g in groups.values():

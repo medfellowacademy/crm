@@ -162,14 +162,22 @@ const LeadDetails = () => {
   const [callMainStatus, setCallMainStatus] = useState(null);
   const [callSubStatus, setCallSubStatus]   = useState(null);
 
-  // Fetch lead details
+  // Fetch lead details — show cached row from list instantly, then refetch for notes
   const { data: lead, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['lead', leadId],
     queryFn: () => leadsAPI.getById(leadId).then(res => res.data),
-    refetchOnMount: 'always', // Always fetch fresh data when component mounts
-    refetchOnWindowFocus: true, // Refetch when user returns to tab
-    staleTime: 0, // Consider data stale immediately
-    retry: 1, // Only retry once on failure
+    staleTime: 30 * 1000,   // 30 sec — avoid redundant fetches on rapid back/forward
+    retry: 1,
+    placeholderData: () => {
+      // Pull the row we already have from the leads list cache so the page
+      // renders immediately without a spinner while the full fetch (with notes) loads.
+      const entries = queryClient.getQueriesData({ queryKey: ['leads'] });
+      for (const [, data] of entries) {
+        const found = data?.leads?.find(l => l.lead_id === leadId);
+        if (found) return found;
+      }
+      return undefined;
+    },
   });
 
   // Update form when lead data changes
@@ -199,12 +207,14 @@ const LeadDetails = () => {
 
   const { data: courses } = useQuery({
     queryKey: ['courses'],
-    queryFn: () => coursesAPI.getAll().then(res => Array.isArray(res.data) ? res.data : [])
+    queryFn: () => coursesAPI.getAll().then(res => Array.isArray(res.data) ? res.data : []),
+    staleTime: 10 * 60 * 1000,  // courses rarely change
   });
 
   const { data: counselors } = useQuery({
     queryKey: ['counselors'],
-    queryFn: () => counselorsAPI.getAll().then(res => Array.isArray(res.data) ? res.data : [])
+    queryFn: () => counselorsAPI.getAll().then(res => Array.isArray(res.data) ? res.data : []),
+    staleTime: 10 * 60 * 1000,  // counselors rarely change
   });
 
   const { data: usersData } = useQuery({

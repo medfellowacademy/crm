@@ -743,6 +743,7 @@ const LeadsPage = () => {
               onChange={(value) => handleFilter('assigned_to', value)}
               value={filters.assigned_to}
             >
+              <Option value="__none__">— Unassigned —</Option>
               {counselors?.map(counselor => (
                 <Option key={counselor.id} value={counselor.name}>
                   {counselor.name}
