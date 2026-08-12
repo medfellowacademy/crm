@@ -8586,6 +8586,116 @@ async def get_adset_stats(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/sheets/daily-stats")
+async def get_daily_adset_stats(
+    current_user: dict = Depends(get_current_user),
+    days: int = Query(30, ge=1, le=365),
+    adset_name: Optional[str] = Query(None),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    platform: Optional[str] = Query(None),
+):
+    """
+    Daily leads breakdown grouped by (date, adset_name).
+    Returns exact per-day per-adset counts of new vs repeated leads.
+    Supports filtering by date range, ad set name, and platform.
+    """
+    try:
+        from datetime import datetime, timedelta, timezone
+        from collections import defaultdict
+
+        now = datetime.now(timezone.utc)
+
+        if date_from and date_to:
+            from_dt = f"{date_from}T00:00:00+00:00"
+            to_dt   = f"{date_to}T23:59:59+00:00"
+        else:
+            to_dt   = now.isoformat()
+            from_dt = (now - timedelta(days=days)).isoformat()
+
+        today_str    = now.strftime("%Y-%m-%d")
+        week_ago_str = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+        month_ago_str= (now - timedelta(days=30)).strftime("%Y-%m-%d")
+
+        COLS = (
+            "lead_id,full_name,email,phone,created_at,"
+            "adset_name,campaign_name,source,is_repeated,status,assigned_to"
+        )
+
+        all_rows: list = []
+        page_size = 1000
+        offset = 0
+        while True:
+            q = (
+                supabase_data.client.table("leads")
+                .select(COLS)
+                .not_.is_("meta_lead_id", "null")
+                .gte("created_at", from_dt)
+                .lte("created_at", to_dt)
+            )
+            if adset_name:
+                q = q.eq("adset_name", adset_name)
+            if platform:
+                q = q.eq("source", platform)
+            batch = q.order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
+            page = batch.data or []
+            all_rows.extend(page)
+            if len(page) < page_size:
+                break
+            offset += page_size
+
+        # Group by (date, adset_name)
+        groups: Dict[tuple, dict] = defaultdict(lambda: {
+            "date": "", "adset_name": "", "campaign_name": "",
+            "source": "", "new_leads": 0, "repeated": 0, "total": 0,
+        })
+        for r in all_rows:
+            dt_str = (r.get("created_at") or "")[:10]
+            if not dt_str:
+                continue
+            key = (dt_str, r.get("adset_name") or "Unknown")
+            g = groups[key]
+            g["date"]          = dt_str
+            g["adset_name"]    = r.get("adset_name") or "Unknown"
+            g["campaign_name"] = r.get("campaign_name") or ""
+            g["source"]        = r.get("source") or "Facebook"
+            g["total"]        += 1
+            if r.get("is_repeated"):
+                g["repeated"] += 1
+            else:
+                g["new_leads"] += 1
+
+        # Sort: most recent date first, then by total desc within same day
+        result_rows = sorted(
+            groups.values(),
+            key=lambda x: (x["date"], x["total"]),
+            reverse=True,
+        )
+
+        # Summary totals from query results
+        def _sum(from_date: str) -> dict:
+            new = rep = tot = 0
+            for g in groups.values():
+                if g["date"] >= from_date:
+                    new += g["new_leads"]
+                    rep += g["repeated"]
+                    tot += g["total"]
+            return {"new": new, "repeated": rep, "total": tot}
+
+        return {
+            "rows":        result_rows,
+            "total_leads": len(all_rows),
+            "summary": {
+                "today":        _sum(today_str),
+                "last_7_days":  _sum(week_ago_str),
+                "last_30_days": _sum(month_ago_str),
+            },
+        }
+    except Exception as e:
+        logger.error(f"Daily stats error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/sheets/tabs")
 async def get_sheet_tabs_endpoint(current_user: dict = Depends(get_current_user)):
     """List all tab names in the Google Sheet."""

@@ -279,10 +279,11 @@ export const duplicatesAPI = {
 
 // Google Sheets / Meta Leads Sync API
 export const sheetsAPI = {
-  sync:     ()  => api.post('/api/sheets/sync'),
-  status:   ()  => api.get('/api/sheets/status'),
-  adsets:   ()  => api.get('/api/sheets/adsets'),
-  tabs:     ()  => api.get('/api/sheets/tabs'),
+  sync:       ()       => api.post('/api/sheets/sync'),
+  status:     ()       => api.get('/api/sheets/status'),
+  adsets:     ()       => api.get('/api/sheets/adsets'),
+  tabs:       ()       => api.get('/api/sheets/tabs'),
+  dailyStats: (params) => api.get('/api/sheets/daily-stats', { params }),
 };
 
 // Score Decay Engine API
