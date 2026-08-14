@@ -18,7 +18,7 @@
 import {
   LayoutDashboard, Users, Hospital, BookOpen, BarChart3, TrendingUp,
   GitBranch, UserPlus, Activity, Shield, CalendarClock, DollarSign,
-  Settings, Timer, Users2, ShieldCheck, TrendingDown, ClipboardList,
+  Settings, Timer, Users2, ClipboardList,
   Share2, Globe, Bot, Trophy, MapPin, Building2, Megaphone, Wallet,
   Settings2,
 } from 'lucide-react';
@@ -68,15 +68,13 @@ export const DEPARTMENTS = {
     name: 'Operations',
     icon: Settings2,
     color: '#8b5cf6',
-    description: 'Courses, hospitals, attendance, SLAs and activity tracking',
+    description: 'Courses, hospitals, attendance and activity tracking',
     pages: [
       { key: '/hospitals',            icon: Hospital,      label: 'Hospitals' },
       { key: '/courses',              icon: BookOpen,      label: 'Courses' },
       { key: '/attendance',           icon: MapPin,        label: 'Attendance' },
       { key: '/user-activity',        icon: Activity,      label: 'User Activity' },
       { key: '/lead-update-activity', icon: ClipboardList, label: 'Lead Updates' },
-      { key: '/sla',                  icon: ShieldCheck,   label: 'SLA Tracker' },
-      { key: '/score-decay',          icon: TrendingDown,  label: 'Score Decay' },
     ],
   },
   administration: {

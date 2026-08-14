@@ -21,8 +21,6 @@ const PaymentsPage        = lazy(() => import('./pages/PaymentsPage'));
 const SettingsPage        = lazy(() => import('./pages/SettingsPage'));
 const ConversionTimePage  = lazy(() => import('./pages/ConversionTimePage'));
 const CohortAnalysisPage  = lazy(() => import('./pages/CohortAnalysisPage'));
-const SLAPage             = lazy(() => import('./pages/SLAPage'));
-const ScoreDecayPage            = lazy(() => import('./pages/ScoreDecayPage'));
 const LeadUpdateActivityPage    = lazy(() => import('./pages/LeadUpdateActivityPage'));
 const MetaLeadsPage             = lazy(() => import('./pages/MetaLeadsPage'));
 const WebsiteLeadsPage          = lazy(() => import('./pages/WebsiteLeadsPage'));
@@ -109,8 +107,6 @@ function AppRoutes() {
                     <Route path="/payments" element={<PaymentsPage />} />
                     <Route path="/conversion-time" element={<ConversionTimePage />} />
                     <Route path="/cohort-analysis" element={<CohortAnalysisPage />} />
-                    <Route path="/sla" element={<SLAPage />} />
-                    <Route path="/score-decay" element={<ScoreDecayPage />} />
                     <Route path="/meta-leads" element={<MetaLeadsPage />} />
                     <Route path="/website-leads" element={<WebsiteLeadsPage />} />
                     <Route path="/settings" element={<SettingsPage />} />

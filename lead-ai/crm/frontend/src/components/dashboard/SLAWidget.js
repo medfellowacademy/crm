@@ -1,8 +1,7 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
 import { Spin } from 'antd';
-import { ShieldCheck, ShieldAlert, ExternalLink } from 'lucide-react';
+import { ShieldCheck, ShieldAlert } from 'lucide-react';
 import { slaAPI } from '../../api/api';
 
 /* ─── mini compliance bar ─────────────────────────────── */
@@ -62,8 +61,6 @@ const Gauge = ({ rate }) => {
 
 /* ─── Widget ──────────────────────────────────────────── */
 const SLAWidget = () => {
-  const navigate = useNavigate();
-
   const { data, isLoading } = useQuery({
     queryKey: ['sla-compliance'],
     queryFn: () => slaAPI.getCompliance().then(r => r.data),
@@ -98,12 +95,6 @@ const SLAWidget = () => {
             </span>
           )}
         </div>
-        <button
-          onClick={() => navigate('/sla')}
-          style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, color: 'var(--color-primary,#3b82f6)', fontSize: 12, fontWeight: 600 }}
-        >
-          Details <ExternalLink size={12} />
-        </button>
       </div>
 
       {isLoading ? (
