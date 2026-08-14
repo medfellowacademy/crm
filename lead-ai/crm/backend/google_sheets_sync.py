@@ -542,6 +542,8 @@ def sync_sheet_to_crm() -> Dict:
                     'phone':  lead.get('phone') if not existing.get('phone') else None,
                     # Update source only if the existing one is blank
                     'source': lead.get('source') if not existing.get('source') else None,
+                    # Backfill course_interested if it was never resolved on the original submission
+                    'course_interested': lead.get('course_interested') if not existing.get('course_interested') else None,
                 }.items() if v is not None}
 
                 try:

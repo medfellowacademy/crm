@@ -126,6 +126,8 @@ COURSE_NAME_MAP = {
     'gynecology & obstetrics':                     'Fellowship in Obstetrics & Gynecology',
     'obs & gyne':                                  'Fellowship in Obstetrics & Gynecology',
     'fellowship in gynecology & obstetrics':       'Fellowship in Obstetrics & Gynecology',
+    'gyno':                                        'Fellowship in Obstetrics & Gynecology',
+    'gyno and obs':                                'Fellowship in Obstetrics & Gynecology',
     'high-risk pregnancy':                         'Fellowship in High Risk Pregnancy',
     'high risk pregnancy':                         'Fellowship in High Risk Pregnancy',
     'fellowship in high-risk pregnancy':           'Fellowship in High Risk Pregnancy',
