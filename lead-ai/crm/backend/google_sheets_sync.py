@@ -33,6 +33,47 @@ PLATFORM_SOURCE_MAP = {
     "facebook": "Facebook",
 }
 
+# ISO 3166-1 alpha-2 → full country name. Meta lead forms submit the
+# lead's country as a 2-letter code in most tabs (a handful already send
+# the full name, e.g. "India", "Saudi Arabia" — those pass through as-is).
+ISO_COUNTRY_MAP = {
+    "AD": "Andorra", "AE": "United Arab Emirates", "AF": "Afghanistan", "AG": "Antigua and Barbuda",
+    "AI": "Anguilla", "AL": "Albania", "AM": "Armenia", "AO": "Angola", "AR": "Argentina", "AS": "American Samoa",
+    "AT": "Austria", "AU": "Australia", "AW": "Aruba", "AZ": "Azerbaijan", "BA": "Bosnia and Herzegovina",
+    "BB": "Barbados", "BD": "Bangladesh", "BE": "Belgium", "BF": "Burkina Faso", "BG": "Bulgaria",
+    "BH": "Bahrain", "BI": "Burundi", "BJ": "Benin", "BN": "Brunei", "BO": "Bolivia", "BR": "Brazil",
+    "BS": "Bahamas", "BT": "Bhutan", "BW": "Botswana", "BY": "Belarus", "BZ": "Belize", "CA": "Canada",
+    "CD": "DR Congo", "CF": "Central African Republic", "CG": "Congo", "CH": "Switzerland",
+    "CI": "Ivory Coast", "CL": "Chile", "CM": "Cameroon", "CN": "China", "CO": "Colombia",
+    "CR": "Costa Rica", "CU": "Cuba", "CV": "Cabo Verde", "CY": "Cyprus", "CZ": "Czechia",
+    "DE": "Germany", "DJ": "Djibouti", "DK": "Denmark", "DM": "Dominica", "DO": "Dominican Republic",
+    "DZ": "Algeria", "EC": "Ecuador", "EE": "Estonia", "EG": "Egypt", "ER": "Eritrea", "ES": "Spain",
+    "ET": "Ethiopia", "FI": "Finland", "FJ": "Fiji", "FR": "France", "GA": "Gabon", "GB": "United Kingdom",
+    "GD": "Grenada", "GE": "Georgia", "GH": "Ghana", "GM": "Gambia", "GN": "Guinea", "GQ": "Equatorial Guinea",
+    "GR": "Greece", "GT": "Guatemala", "GY": "Guyana", "HK": "Hong Kong", "HN": "Honduras", "HR": "Croatia",
+    "HT": "Haiti", "HU": "Hungary", "ID": "Indonesia", "IE": "Ireland", "IL": "Israel", "IN": "India",
+    "IQ": "Iraq", "IR": "Iran", "IS": "Iceland", "IT": "Italy", "JM": "Jamaica", "JO": "Jordan",
+    "JP": "Japan", "KE": "Kenya", "KG": "Kyrgyzstan", "KH": "Cambodia", "KM": "Comoros",
+    "KN": "Saint Kitts and Nevis", "KR": "South Korea", "KW": "Kuwait", "KZ": "Kazakhstan", "LA": "Laos",
+    "LB": "Lebanon", "LC": "Saint Lucia", "LK": "Sri Lanka", "LR": "Liberia", "LS": "Lesotho",
+    "LT": "Lithuania", "LU": "Luxembourg", "LV": "Latvia", "LY": "Libya", "MA": "Morocco", "MC": "Monaco",
+    "MD": "Moldova", "ME": "Montenegro", "MG": "Madagascar", "MH": "Marshall Islands", "MK": "North Macedonia",
+    "ML": "Mali", "MM": "Myanmar", "MN": "Mongolia", "MR": "Mauritania", "MT": "Malta", "MU": "Mauritius",
+    "MV": "Maldives", "MW": "Malawi", "MX": "Mexico", "MY": "Malaysia", "MZ": "Mozambique", "NA": "Namibia",
+    "NE": "Niger", "NG": "Nigeria", "NI": "Nicaragua", "NL": "Netherlands", "NO": "Norway", "NP": "Nepal",
+    "NZ": "New Zealand", "OM": "Oman", "PA": "Panama", "PE": "Peru", "PG": "Papua New Guinea",
+    "PH": "Philippines", "PK": "Pakistan", "PL": "Poland", "PS": "Palestine", "PT": "Portugal",
+    "PY": "Paraguay", "QA": "Qatar", "RO": "Romania", "RS": "Serbia", "RU": "Russia", "RW": "Rwanda",
+    "SA": "Saudi Arabia", "SB": "Solomon Islands", "SC": "Seychelles", "SD": "Sudan", "SE": "Sweden",
+    "SG": "Singapore", "SI": "Slovenia", "SK": "Slovakia", "SL": "Sierra Leone", "SN": "Senegal",
+    "SO": "Somalia", "SR": "Suriname", "SS": "South Sudan", "ST": "Sao Tome and Principe",
+    "SV": "El Salvador", "SY": "Syria", "SZ": "Eswatini", "TD": "Chad", "TG": "Togo", "TH": "Thailand",
+    "TJ": "Tajikistan", "TL": "Timor-Leste", "TM": "Turkmenistan", "TN": "Tunisia", "TO": "Tonga",
+    "TR": "Turkey", "TT": "Trinidad and Tobago", "TW": "Taiwan", "TZ": "Tanzania", "UA": "Ukraine",
+    "UG": "Uganda", "US": "United States", "UY": "Uruguay", "UZ": "Uzbekistan", "VC": "Saint Vincent and the Grenadines",
+    "VE": "Venezuela", "VN": "Vietnam", "YE": "Yemen", "ZA": "South Africa", "ZM": "Zambia", "ZW": "Zimbabwe",
+}
+
 # ── helpers ────────────────────────────────────────────────────────────────────
 
 def _clean_meta_id(raw: str) -> str:
@@ -49,6 +90,16 @@ def _clean_phone(raw: str) -> str:
 
 def _map_source(platform: str) -> str:
     return PLATFORM_SOURCE_MAP.get((platform or "").lower().strip(), "Facebook")
+
+
+def _map_country(raw: str) -> str:
+    """Map a raw sheet value (ISO alpha-2 code or full name) to a canonical country name."""
+    s = (raw or "").strip()
+    if not s or "test lead" in s.lower() or "dummy data" in s.lower():
+        return ""
+    if len(s) == 2:
+        return ISO_COUNTRY_MAP.get(s.upper(), s)
+    return s
 
 
 def _map_course(raw: str) -> str:
@@ -151,7 +202,7 @@ def find_existing_lead_by_contact(phone: str, email: str) -> Optional[Dict]:
     SELECT = (
         "id,lead_id,full_name,email,phone,status,meta_lead_id,"
         "adset_name,source,assigned_to,created_at,"
-        "submission_count,meta_submission_ids"
+        "submission_count,meta_submission_ids,course_interested,country"
     )
 
     try:
@@ -335,9 +386,15 @@ def row_to_lead(row: Dict, tab_name: str) -> Optional[Dict]:
     # Source from platform column
     source = _map_source(row.get("platform", ""))
 
-    # State → India
-    state = (row.get("state") or "").strip()
-    country = "India" if state else ""
+    # Most tabs submit a "country" field directly (ISO alpha-2 code or full
+    # name — international campaigns targeting Middle East/Asian audiences).
+    # A few older India-only tabs instead submit an Indian "state" field
+    # with no country column at all, so those default to "India".
+    country = _map_country(row.get("country") or "")
+    if not country:
+        state = (row.get("state") or "").strip()
+        if state and "test lead" not in state.lower() and "dummy data" not in state.lower():
+            country = "India"
 
     # Parse created_time
     created_dt = None
@@ -542,8 +599,9 @@ def sync_sheet_to_crm() -> Dict:
                     'phone':  lead.get('phone') if not existing.get('phone') else None,
                     # Update source only if the existing one is blank
                     'source': lead.get('source') if not existing.get('source') else None,
-                    # Backfill course_interested if it was never resolved on the original submission
+                    # Backfill course_interested / country only if never resolved on the original submission
                     'course_interested': lead.get('course_interested') if not existing.get('course_interested') else None,
+                    'country': lead.get('country') if not existing.get('country') else None,
                 }.items() if v is not None}
 
                 try:
