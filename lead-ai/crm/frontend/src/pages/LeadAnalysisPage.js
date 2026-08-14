@@ -749,6 +749,18 @@ tbody td{border-bottom:1px solid #f1f5f9;vertical-align:middle}
       )
     },
     {
+      title: 'Enrolled Date',
+      dataIndex: 'enrolled_at',
+      key: 'enrolled_at',
+      width: 130,
+      sorter: (a, b) => dayjs(a.enrolled_at || 0).valueOf() - dayjs(b.enrolled_at || 0).valueOf(),
+      render: (date, record) => (
+        record.status === 'Enrolled'
+          ? (date ? <Text>{dayjs(date).format('DD MMM YYYY')}</Text> : <Text type="secondary">—</Text>)
+          : <Text type="secondary">—</Text>
+      )
+    },
+    {
       title: 'Course',
       dataIndex: 'course_interested',
       key: 'course',

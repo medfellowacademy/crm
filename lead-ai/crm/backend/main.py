@@ -901,6 +901,7 @@ class LeadUpdate(BaseModel):
     emi_details: Optional[list] = None          # [{amount, date, status}]
     payment_receipt_url: Optional[str] = None
     documents: Optional[list] = None            # [{name, url, type, uploaded_at}]
+    enrolled_at: Optional[datetime] = None      # exact date the sale/enrollment closed
     lms_status: Optional[str] = None            # e.g. 'Not Started', 'Active', 'Completed'
     lms_modules: Optional[list] = None          # ['M1', 'M2', ...]
     next_action: Optional[str] = None
@@ -2537,6 +2538,9 @@ async def get_leads(
     search: Optional[str] = None,
     adset_name: Optional[str] = None,
     meta_only: bool = False,
+    utm_source: Optional[str] = None,
+    utm_medium: Optional[str] = None,
+    utm_campaign: Optional[str] = None,
 ):
     """Get leads with filters. Counselors are restricted to their own leads. Now Supabase-only."""
 
@@ -2578,6 +2582,7 @@ async def get_leads(
         created_after=str(created_after), created_before=str(created_before),
         updated_on=updated_on, updated_from=str(updated_from), updated_to=str(updated_to),
         updated_after=str(updated_after), updated_before=str(updated_before),
+        utm_source=utm_source, utm_medium=utm_medium, utm_campaign=utm_campaign,
     )
     import hashlib, json
     _cache_key = "leads:" + hashlib.md5(
@@ -2626,6 +2631,9 @@ async def get_leads(
                 updated_to=updated_to.isoformat() if updated_to else None,
                 adset_name=adset_name,
                 meta_only=meta_only,
+                utm_source=utm_source,
+                utm_medium=utm_medium,
+                utm_campaign=utm_campaign,
         )
         # Cache and return raw data from Supabase (already in correct format)
         LEAD_CACHE[_cache_key] = leads_data
@@ -2633,6 +2641,40 @@ async def get_leads(
     except Exception as e:
         logger.error(f"Supabase query failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch leads from database")
+
+
+@app.get("/api/leads/filter-options")
+@cache_async_result(STATS_CACHE, "leads_filter_options")
+async def get_leads_filter_options():
+    """Distinct values for every Leads-page filter dropdown (country, course,
+    source, company, qualification, assigned_to, UTM source/medium/campaign),
+    computed from the FULL leads table — not just whatever page is currently
+    loaded — so filter lists are always complete."""
+    try:
+        rows = _fetch_all_leads(
+            'country,course_interested,source,company,qualification,assigned_to,'
+            'utm_source,utm_medium,utm_campaign'
+        )
+
+        def _distinct(col):
+            return sorted({(r.get(col) or '').strip() for r in rows if (r.get(col) or '').strip()})
+
+        return {
+            "countries":      _distinct('country'),
+            "courses":        _distinct('course_interested'),
+            "sources":        _distinct('source'),
+            "companies":      _distinct('company'),
+            "qualifications": _distinct('qualification'),
+            "assigned_to":    _distinct('assigned_to'),
+            "utm_sources":    _distinct('utm_source'),
+            "utm_mediums":    _distinct('utm_medium'),
+            "utm_campaigns":  _distinct('utm_campaign'),
+        }
+    except Exception as e:
+        logger.error(f"Leads filter-options error: {e}")
+        return {"countries": [], "courses": [], "sources": [], "companies": [],
+                "qualifications": [], "assigned_to": [], "utm_sources": [],
+                "utm_mediums": [], "utm_campaigns": []}
 
 
 @app.get("/api/leads/{lead_id}")
@@ -2698,6 +2740,10 @@ async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, b
             dt = update_data['follow_up_date']
             iso = dt.isoformat() if hasattr(dt, 'isoformat') else str(dt)
             update_data['follow_up_date'] = iso if iso.endswith('Z') or '+' in iso else iso + 'Z'
+        if 'enrolled_at' in update_data and update_data['enrolled_at']:
+            dt = update_data['enrolled_at']
+            iso = dt.isoformat() if hasattr(dt, 'isoformat') else str(dt)
+            update_data['enrolled_at'] = iso if iso.endswith('Z') or '+' in iso else iso + 'Z'
         
         # Fetch the existing lead BEFORE update so we can diff changed fields
         existing_for_diff = supabase_data.get_lead_by_id(lead_id) if not _counselor_name else existing
@@ -2744,6 +2790,7 @@ async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, b
                 "follow_up_date":     "Follow-up Date",
                 "expected_revenue":   "Expected Revenue",
                 "actual_revenue":     "Actual Revenue",
+                "enrolled_at":        "Enrolled Date",
                 "notes":              "Notes",
                 "utm_source":         "UTM Source",
                 "utm_medium":         "UTM Medium",
@@ -4140,8 +4187,11 @@ async def get_department_kpis(current_user: dict = Depends(get_current_user)):
                 break
             _off += 1000
 
+        # enrolled_at is the exact sale date (set via the enrollment modal); using it
+        # instead of updated_at avoids miscounting leads whose row was merely edited
+        # this month (e.g. LMS status change) but that actually enrolled earlier.
         month_rev_q = supabase_data.client.table('leads').select('actual_revenue') \
-            .eq('status', 'Enrolled').gte('updated_at', month_start).execute()
+            .eq('status', 'Enrolled').gte('enrolled_at', month_start).execute()
         month_collected = sum(r.get('actual_revenue') or 0 for r in (month_rev_q.data or []))
 
         # ── Operations ──────────────────────────────────────────────────────────
@@ -6176,17 +6226,22 @@ async def get_revenue_trend(days: int = 30):
         cutoff = datetime.utcnow() - timedelta(days=days)
         
         # Get enrolled leads (paginated)
-        enrolled = _fetch_all_leads('status,expected_revenue,updated_at,created_at', {'status': 'Enrolled'})
+        enrolled = _fetch_all_leads('status,expected_revenue,enrolled_at,updated_at,created_at', {'status': 'Enrolled'})
+
+        # Prefer the explicit enrollment date; fall back to updated_at/created_at
+        # only for legacy leads enrolled before enrolled_at existed.
+        def _enroll_date(l):
+            return l.get('enrolled_at') or l.get('updated_at') or l.get('created_at')
 
         # Filter by cutoff date
-        enrolled = [l for l in enrolled if l.get('updated_at') and datetime.fromisoformat(l['updated_at'].replace('Z', '+00:00')) >= cutoff]
+        enrolled = [l for l in enrolled if _enroll_date(l) and datetime.fromisoformat(_enroll_date(l).replace('Z', '+00:00')) >= cutoff]
 
         daily = defaultdict(float)
         for lead in enrolled:
-            updated_at = lead.get('updated_at') or lead.get('created_at')
-            if updated_at:
+            date_str = _enroll_date(lead)
+            if date_str:
                 try:
-                    dt = datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
+                    dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
                     day_key = dt.strftime('%Y-%m-%d')
                     daily[day_key] += lead.get('expected_revenue', 0) or 0
                 except:
@@ -6940,19 +6995,22 @@ async def get_cohort_analysis():
     TERMINAL = {"Enrolled", "Not Interested", "Junk"}
 
     def conv_days(lead):
-        if not lead.get('created_at') or not lead.get('updated_at'):
+        # Prefer the explicit enrollment date; fall back to updated_at only
+        # for legacy leads enrolled before enrolled_at existed.
+        enroll_date = lead.get('enrolled_at') or lead.get('updated_at')
+        if not lead.get('created_at') or not enroll_date:
             return None
         try:
             created = datetime.fromisoformat(lead['created_at'].replace('Z', '+00:00'))
-            updated = datetime.fromisoformat(lead['updated_at'].replace('Z', '+00:00'))
-            if updated > created:
-                return (updated - created).days
+            enrolled_dt = datetime.fromisoformat(enroll_date.replace('Z', '+00:00'))
+            if enrolled_dt > created:
+                return (enrolled_dt - created).days
         except Exception:
             pass
         return None
 
     try:
-        all_leads = _fetch_all_leads('created_at,status,updated_at')
+        all_leads = _fetch_all_leads('created_at,status,updated_at,enrolled_at')
 
         # Group by cohort month
         cohorts = defaultdict(list)
@@ -7061,13 +7119,16 @@ async def get_conversion_time(created_from: Optional[str] = None, created_to: Op
     empty_response = {"overall": {"count": 0}, "distribution": [], "by_counselor": [], "by_course": [], "by_country": []}
 
     def days_to_convert(lead):
-        if not lead.get('created_at') or not lead.get('updated_at'):
+        # Prefer the explicit enrollment date; fall back to updated_at only
+        # for legacy leads enrolled before enrolled_at existed.
+        enroll_date = lead.get('enrolled_at') or lead.get('updated_at')
+        if not lead.get('created_at') or not enroll_date:
             return None
         try:
             created = datetime.fromisoformat(lead['created_at'].replace('Z', '+00:00'))
-            updated = datetime.fromisoformat(lead['updated_at'].replace('Z', '+00:00'))
-            if updated > created:
-                return (updated - created).days
+            enrolled_dt = datetime.fromisoformat(enroll_date.replace('Z', '+00:00'))
+            if enrolled_dt > created:
+                return (enrolled_dt - created).days
         except Exception:
             pass
         return None
@@ -7088,7 +7149,7 @@ async def get_conversion_time(created_from: Optional[str] = None, created_to: Op
         }
 
     try:
-        enrolled = _fetch_all_leads('created_at,updated_at,assigned_to,course_interested,country',
+        enrolled = _fetch_all_leads('created_at,updated_at,enrolled_at,assigned_to,course_interested,country',
                                      {'status': 'Enrolled'}, date_from=created_from, date_to=created_to)
 
         all_days = [d for lead in enrolled if (d := days_to_convert(lead)) is not None]

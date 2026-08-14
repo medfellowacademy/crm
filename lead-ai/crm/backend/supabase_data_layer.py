@@ -110,6 +110,9 @@ class SupabaseDataLayer:
         updated_to: Optional[str] = None,
         adset_name: Optional[str] = None,
         meta_only: bool = False,
+        utm_source: Optional[str] = None,
+        utm_medium: Optional[str] = None,
+        utm_campaign: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Get leads with filters. Returns a paginated response dict."""
         # Base column list. 'qualification' is included when the column exists in
@@ -121,7 +124,7 @@ class SupabaseDataLayer:
             "conversion_probability,expected_revenue,actual_revenue,"
             "registration_fees,registration_payments,emi_details,payment_receipt_url,documents,"
             "lms_status,lms_modules,"
-            "follow_up_date,assigned_to,created_at,updated_at,"
+            "follow_up_date,assigned_to,created_at,updated_at,enrolled_at,"
             "last_contact_date,buying_signal_strength,churn_risk,"
             "primary_objection,next_action,priority_level,"
             "qualification,company,loss_reason,loss_note,"
@@ -131,6 +134,7 @@ class SupabaseDataLayer:
         )
         LIST_COLUMNS_COMPAT = (
             LIST_COLUMNS
+            .replace(",enrolled_at", "")
             .replace(",qualification", "")
             .replace(",company", "")
             .replace(",utm_source,utm_medium,utm_campaign", "")
@@ -246,6 +250,24 @@ class SupabaseDataLayer:
                 q = q.eq('adset_name', adset_name.strip())
             if meta_only:
                 q = q.not_.is_('meta_lead_id', 'null')
+            if utm_source:
+                if ',' in utm_source:
+                    vals = [v.strip() for v in utm_source.split(',') if v.strip()]
+                    q = q.or_(','.join([f"utm_source.ilike.{v}" for v in vals]))
+                else:
+                    q = q.ilike('utm_source', utm_source.strip())
+            if utm_medium:
+                if ',' in utm_medium:
+                    vals = [v.strip() for v in utm_medium.split(',') if v.strip()]
+                    q = q.or_(','.join([f"utm_medium.ilike.{v}" for v in vals]))
+                else:
+                    q = q.ilike('utm_medium', utm_medium.strip())
+            if utm_campaign:
+                if ',' in utm_campaign:
+                    vals = [v.strip() for v in utm_campaign.split(',') if v.strip()]
+                    q = q.or_(','.join([f"utm_campaign.ilike.{v}" for v in vals]))
+                else:
+                    q = q.ilike('utm_campaign', utm_campaign.strip())
             effective_limit = min(limit, 10000)
             q = q.order('updated_at', desc=False, nullsfirst=False).order('created_at', desc=False)
             return q, effective_limit
@@ -288,7 +310,7 @@ class SupabaseDataLayer:
                 err_str = str(col_err)
                 # Any new column that doesn't exist yet triggers a fallback to
                 # LIST_COLUMNS_COMPAT (which strips all new/optional columns).
-                NEW_COLS = ('qualification', 'company', 'utm_source', 'utm_medium', 'utm_campaign')
+                NEW_COLS = ('qualification', 'company', 'utm_source', 'utm_medium', 'utm_campaign', 'enrolled_at')
                 if any(c in err_str for c in NEW_COLS):
                     missing = [c for c in NEW_COLS if c in err_str]
                     for col in missing:

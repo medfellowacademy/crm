@@ -71,6 +71,7 @@ const EnrollmentModal = ({ open, lead, onSave, onCancel, loading }) => {
 
     form.setFieldsValue({
       actual_revenue:         existing.actual_revenue ? Number(existing.actual_revenue) : null,
+      enrolled_at:            existing.enrolled_at ? dayjs(existing.enrolled_at) : dayjs(),
       lms_status:             existing.lms_status     || 'Not Started',
       emis:                   savedEmis,
       registration_payments:  regPayments,
@@ -117,6 +118,7 @@ const EnrollmentModal = ({ open, lead, onSave, onCancel, loading }) => {
       const registrationTotal = serializedRegPayments.reduce((s, p) => s + p.amount, 0);
       onSave({
         status:                'Enrolled',
+        enrolled_at:           vals.enrolled_at ? dayjs(vals.enrolled_at).format('YYYY-MM-DD') : null,
         actual_revenue:        vals.actual_revenue != null ? toINR(vals.actual_revenue) : null,
         registration_fees:     registrationTotal,
         registration_payments: serializedRegPayments,
@@ -124,7 +126,7 @@ const EnrollmentModal = ({ open, lead, onSave, onCancel, loading }) => {
         lms_status:            vals.lms_status || 'Not Started',
         lms_modules:           lmsModules,
       });
-    }).catch(() => message.warning('Please fill in Total Course Fee and Registration Fees'));
+    }).catch(() => message.warning('Please fill in Enrollment Date and Total Course Fee'));
   };
 
   // Live summary values — always shown in INR regardless of input currency,
@@ -181,6 +183,12 @@ const EnrollmentModal = ({ open, lead, onSave, onCancel, loading }) => {
             </div>
           ))}
         </div>
+
+        {/* ── Enrollment Date ───────────────────────────────────────── */}
+        <Form.Item name="enrolled_at" label="Enrollment Date (when the sale closed)"
+          rules={[{ required: true, message: 'Enter the enrollment date' }]}>
+          <DatePicker style={{ width: '100%' }} format="DD MMM YYYY" disabledDate={d => d && d.isAfter(dayjs(), 'day')} />
+        </Form.Item>
 
         {/* ── Revenue ────────────────────────────────────────────────── */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>

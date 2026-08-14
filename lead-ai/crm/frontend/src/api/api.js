@@ -57,6 +57,7 @@ export const authAPI = {
 // Leads API
 export const leadsAPI = {
   getAll: (params) => api.get('/api/leads', { params }),
+  getFilterOptions: () => api.get('/api/leads/filter-options'),
   getById: (leadId) => api.get(`/api/leads/${leadId}`),
   create: (data) => api.post('/api/leads', data),
   bulkCreate: (leads) => api.post('/api/leads/bulk-create', leads),

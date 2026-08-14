@@ -415,6 +415,9 @@ const LeadsPageEnhanced = () => {
     if (advFilters.course?.length > 0) params.course_interested = advFilters.course.join(',');
     if (advFilters.source?.length > 0)   params.source   = advFilters.source.join(',');
     if (advFilters.company?.length > 0)  params.company  = advFilters.company.join(',');
+    if (advFilters.utmSource?.length > 0)   params.utm_source   = advFilters.utmSource.join(',');
+    if (advFilters.utmMedium?.length > 0)   params.utm_medium   = advFilters.utmMedium.join(',');
+    if (advFilters.utmCampaign?.length > 0) params.utm_campaign = advFilters.utmCampaign.join(',');
     if (advFilters.minScore != null) params.min_score = advFilters.minScore;
     if (advFilters.maxScore != null) params.max_score = advFilters.maxScore;
 
@@ -534,26 +537,45 @@ const LeadsPageEnhanced = () => {
     staleTime: 10 * 60 * 1000,
   });
 
+  // Distinct filter-dropdown values computed server-side from the FULL leads
+  // table — not just whatever page happens to be loaded, which is what the
+  // old (leads || []).map(...) approach below silently did, only ever
+  // showing values present on the current 50-row page.
+  const { data: filterOptions } = useQuery({
+    queryKey: ['leads-filter-options'],
+    queryFn: async () => { try { return (await leadsAPI.getFilterOptions()).data; } catch { return null; } },
+    staleTime: 5 * 60 * 1000,
+    gcTime: 15 * 60 * 1000,
+  });
+
   // ── Computed filter options (memoized for performance) ────────────────────
   const uniqueStatuses   = STATUS_OPTIONS;
-  const uniqueCountries  = useMemo(() => 
-    [...new Set((leads || []).map(l => l.country))].filter(Boolean).sort(),
-    [leads]
+  const uniqueCountries  = useMemo(() =>
+    filterOptions?.countries?.length
+      ? filterOptions.countries
+      : [...new Set((leads || []).map(l => l.country))].filter(Boolean).sort(),
+    [filterOptions, leads]
   );
-  const uniqueCourses    = useMemo(() => 
-    [...new Set([
+  const uniqueCourses    = useMemo(() =>
+    filterOptions?.courses?.length
+      ? [...new Set([...(courses || []).map(c => c.course_name), ...filterOptions.courses])].filter(Boolean).sort()
+      : [...new Set([
       ...(courses || []).map(c => c.course_name),
       ...(leads || []).map(l => l.course_interested),
     ])].filter(Boolean).sort(),
-    [courses, leads]
+    [courses, leads, filterOptions]
   );
   const uniqueAssigned   = useMemo(() => {
     if (isCounselor) return authUser?.full_name ? [authUser.full_name] : [];
     // Prefer the full users list so ALL counselors appear, not just those on current page
     const fromUsers = (users || []).map(u => u.full_name || u.name).filter(Boolean);
     const fromLeads = (leads || []).map(l => l.assigned_to).filter(Boolean);
-    return [...new Set([...fromUsers, ...fromLeads])].sort();
-  }, [users, leads, isCounselor, authUser]);
+    const fromServer = filterOptions?.assigned_to || [];
+    return [...new Set([...fromUsers, ...fromLeads, ...fromServer])].sort();
+  }, [users, leads, isCounselor, authUser, filterOptions]);
+  const uniqueUtmSources   = filterOptions?.utm_sources   || [];
+  const uniqueUtmMediums   = filterOptions?.utm_mediums   || [];
+  const uniqueUtmCampaigns = filterOptions?.utm_campaigns || [];
   // Always show exactly the 5 canonical source options in filters —
   // don't derive from lead data (which may have legacy raw values).
   const uniqueSources = SOURCE_OPTIONS;
@@ -2180,6 +2202,30 @@ const LeadsPageEnhanced = () => {
             <Select mode="multiple" style={{ width: '100%', marginTop: 6 }} placeholder="Any company"
               value={advFilters.company || []} onChange={v => setAdvFilters(f => ({ ...f, company: v }))}>
               {COMPANY_OPTIONS.map(c => <Option key={c} value={c}>{c}</Option>)}
+            </Select>
+          </div>
+
+          <div>
+            <Text strong>UTM Source</Text>
+            <Select mode="multiple" style={{ width: '100%', marginTop: 6 }} placeholder="Any UTM source" showSearch allowClear
+              value={advFilters.utmSource || []} onChange={v => setAdvFilters(f => ({ ...f, utmSource: v }))}>
+              {uniqueUtmSources.map(s => <Option key={s} value={s}>{s}</Option>)}
+            </Select>
+          </div>
+
+          <div>
+            <Text strong>UTM Medium</Text>
+            <Select mode="multiple" style={{ width: '100%', marginTop: 6 }} placeholder="Any UTM medium" showSearch allowClear
+              value={advFilters.utmMedium || []} onChange={v => setAdvFilters(f => ({ ...f, utmMedium: v }))}>
+              {uniqueUtmMediums.map(m => <Option key={m} value={m}>{m}</Option>)}
+            </Select>
+          </div>
+
+          <div>
+            <Text strong>UTM Campaign</Text>
+            <Select mode="multiple" style={{ width: '100%', marginTop: 6 }} placeholder="Any UTM campaign" showSearch allowClear
+              value={advFilters.utmCampaign || []} onChange={v => setAdvFilters(f => ({ ...f, utmCampaign: v }))}>
+              {uniqueUtmCampaigns.map(c => <Option key={c} value={c}>{c}</Option>)}
             </Select>
           </div>
 
