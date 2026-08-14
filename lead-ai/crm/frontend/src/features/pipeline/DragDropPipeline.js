@@ -11,23 +11,38 @@ import { TableSkeleton } from '../../components/ui/Skeletons';
 import { isFeatureEnabled } from '../../config/featureFlags';
 
 // ── CRM Status ↔ Pipeline Stage mapping ─────────────────────────────────────
-// The DB stores `status` (e.g. "Fresh", "Follow Up"), but the pipeline UI uses
-// internal stage ids.  Both mappings must stay in sync.
+// The DB stores `status` (LeadStatus enum in the backend: Fresh, Follow Up,
+// Warm, Hot, Not Interested, Junk, Not Answering, Enrolled, Will Enroll
+// Later, Dropped). These stage ids MUST match those exactly — any status not
+// listed here used to silently fall back to "Fresh", which meant Warm/Hot
+// leads and every terminal status (Not Interested/Junk/Not Answering/
+// Dropped — ~75% of all leads) were miscounted into the Fresh column while
+// dragging a card into a stage without a matching backend status silently
+// failed (pydantic rejects unknown enum values).
 const PIPELINE_STAGES = [
-  { id: 'Fresh',         name: 'Fresh Leads',    color: '#6b7280', probability: 10 },
-  { id: 'Follow Up',     name: 'Follow Up',      color: '#3b82f6', probability: 30 },
-  { id: 'Interested',    name: 'Interested',     color: '#f59e0b', probability: 50 },
-  { id: 'Qualified',     name: 'Qualified',      color: '#8b5cf6', probability: 70 },
-  { id: 'Negotiation',   name: 'Negotiation',    color: '#ec4899', probability: 85 },
-  { id: 'Enrolled',      name: 'Enrolled / Won', color: '#10b981', probability: 100 },
+  { id: 'Fresh',              name: 'Fresh Leads',       color: '#6b7280', probability: 5   },
+  { id: 'Follow Up',          name: 'Follow Up',         color: '#3b82f6', probability: 25  },
+  { id: 'Warm',               name: 'Warm',               color: '#f59e0b', probability: 45  },
+  { id: 'Hot',                name: 'Hot',                color: '#ef4444', probability: 70  },
+  { id: 'Will Enroll Later',  name: 'Will Enroll Later',  color: '#8b5cf6', probability: 85  },
+  { id: 'Enrolled',           name: 'Enrolled / Won',     color: '#10b981', probability: 100 },
 ];
 
-// All statuses that should fall into the last column if not in PIPELINE_STAGES
+// Terminal/negative statuses collapse into one "Lost" column so every lead
+// has a definite, correct home instead of being dumped into Fresh.
+const LOST_STAGE = { id: 'Lost', name: 'Lost / Inactive', color: '#9ca3af', probability: 0 };
+const LOST_STATUSES = new Set(['Not Interested', 'Not Answering', 'Junk', 'Dropped']);
+
 const FALLBACK_STAGE = 'Fresh';
 
 function resolveStage(lead) {
-  const st = lead.status || FALLBACK_STAGE;
-  return PIPELINE_STAGES.some(s => s.id === st) ? st : FALLBACK_STAGE;
+  // Normalise case so data-entry inconsistencies (e.g. "junk" vs "Junk")
+  // still land in the right column instead of falling back to Fresh.
+  const raw = (lead.status || FALLBACK_STAGE).trim();
+  const st = PIPELINE_STAGES.find(s => s.id.toLowerCase() === raw.toLowerCase())?.id
+    || [...LOST_STATUSES].find(s => s.toLowerCase() === raw.toLowerCase());
+  if (st && LOST_STATUSES.has(st)) return LOST_STAGE.id;
+  return st || FALLBACK_STAGE;
 }
 
 // ── Draggable Lead Card ──────────────────────────────────────────────────────
@@ -47,7 +62,12 @@ const DraggableLeadCard = ({ lead, stage }) => {
     opacity: isDragging ? 0.5 : 1,
   };
 
-  const expectedRevenue = (lead.expected_revenue || 0) * (stage.probability / 100);
+  // Won deals show the real closed amount (actual_revenue, set at enrollment)
+  // rather than the pre-sale estimate — expected_revenue is often stale/zero
+  // by the time a lead is actually enrolled.
+  const expectedRevenue = stage.id === 'Enrolled'
+    ? (lead.actual_revenue || 0)
+    : (lead.expected_revenue || 0) * (stage.probability / 100);
   const segment = lead.ai_segment || 'Cold';
 
   return (
@@ -119,7 +139,11 @@ const DraggableLeadCard = ({ lead, stage }) => {
 // ── Pipeline Stage Column ────────────────────────────────────────────────────
 const StageColumn = ({ stage, leads }) => {
   const totalValue = leads.reduce(
-    (sum, lead) => sum + ((lead.expected_revenue || 0) * (stage.probability / 100)),
+    (sum, lead) => sum + (
+      stage.id === 'Enrolled'
+        ? (lead.actual_revenue || 0)
+        : (lead.expected_revenue || 0) * (stage.probability / 100)
+    ),
     0
   );
 
@@ -190,12 +214,17 @@ const DragDropPipeline = () => {
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
   );
 
-  // Fetch all leads for the pipeline view.
-  const { data: leadsData, isLoading, isError } = useQuery({
+  // Fetch all leads for the pipeline view. 10000 is the backend's hard cap
+  // per request (supabase_data_layer.get_leads effective_limit); `total`
+  // from the response tells us honestly if the DB has grown past that so
+  // the UI can say so instead of silently under-counting.
+  const { data: pipelineResponse, isLoading, isError } = useQuery({
     queryKey: ['pipeline-leads'],
-    queryFn: () => leadsAPI.getAll({ limit: 2000, skip: 0 }).then(res => res.data?.leads || []),
+    queryFn: () => leadsAPI.getAll({ limit: 10000, skip: 0 }).then(res => res.data || { leads: [], total: 0 }),
     staleTime: 2 * 60 * 1000,
   });
+  const leadsData = pipelineResponse?.leads || [];
+  const totalLeads = pipelineResponse?.total || 0;
 
   // Update lead status mutation — sends `status` (the real DB field)
   const updateStatusMutation = useMutation({
@@ -214,9 +243,11 @@ const DragDropPipeline = () => {
     },
   });
 
+  const ALL_STAGES = useMemo(() => [...PIPELINE_STAGES, LOST_STAGE], []);
+
   // Group leads into stage columns (with optimistic overrides applied)
   const pipelineData = useMemo(() => {
-    const grouped = Object.fromEntries(PIPELINE_STAGES.map(s => [s.id, []]));
+    const grouped = Object.fromEntries(ALL_STAGES.map(s => [s.id, []]));
     (leadsData || []).forEach(lead => {
       const effectiveStatus = overrides[lead.lead_id] ?? resolveStage(lead);
       if (grouped[effectiveStatus]) {
@@ -224,7 +255,7 @@ const DragDropPipeline = () => {
       }
     });
     return grouped;
-  }, [leadsData, overrides]);
+  }, [leadsData, overrides, ALL_STAGES]);
 
   const handleDragEnd = (event) => {
     const { active, over } = event;
@@ -235,7 +266,7 @@ const DragDropPipeline = () => {
 
     // Resolve the stage the card was dropped onto
     const overStage =
-      PIPELINE_STAGES.find(s => s.id === targetStageId)?.id ||
+      ALL_STAGES.find(s => s.id === targetStageId)?.id ||
       Object.keys(pipelineData).find(stageId =>
         pipelineData[stageId].some(l => l.lead_id === targetStageId)
       );
@@ -245,9 +276,14 @@ const DragDropPipeline = () => {
     );
 
     if (overStage && overStage !== currentStage) {
+      // "Lost" is a UI-only bucket (4 real statuses collapsed into one column) —
+      // not a valid backend LeadStatus, so dropping here needs a concrete status.
+      // "Not Interested" is the most common lost reason and matches what the
+      // Leads page itself defaults to for this kind of bulk disposition.
+      const newStatus = overStage === LOST_STAGE.id ? 'Not Interested' : overStage;
       // Optimistic update — UI responds instantly, API call happens in background
       setOverrides(prev => ({ ...prev, [activeLeadId]: overStage }));
-      updateStatusMutation.mutate({ leadId: activeLeadId, newStatus: overStage });
+      updateStatusMutation.mutate({ leadId: activeLeadId, newStatus });
     }
   };
 
@@ -284,7 +320,12 @@ const DragDropPipeline = () => {
           Drag leads between stages to update their status instantly.
         </p>
         <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)', margin: 0 }}>
-          Showing top 500 leads · {(leadsData || []).length} loaded
+          {leadsData.length} of {totalLeads} leads loaded
+          {totalLeads > leadsData.length && (
+            <span style={{ color: '#ef4444', fontWeight: 600 }}>
+              {' '}— {totalLeads - leadsData.length} more not shown, counts below are incomplete
+            </span>
+          )}
         </p>
       </div>
 
@@ -294,7 +335,7 @@ const DragDropPipeline = () => {
         onDragEnd={handleDragEnd}
       >
         <div style={{ display: 'flex', gap: 16, overflowX: 'auto', paddingBottom: 16 }}>
-          {PIPELINE_STAGES.map(stage => (
+          {ALL_STAGES.map(stage => (
             <StageColumn
               key={stage.id}
               stage={stage}
