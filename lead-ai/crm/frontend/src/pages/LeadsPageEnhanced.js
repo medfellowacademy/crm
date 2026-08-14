@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
   Table, Button, Tag, Progress, Space, Input, Select, DatePicker,
@@ -466,10 +466,11 @@ const LeadsPageEnhanced = () => {
         throw err; // Re-throw to trigger error state
       }
     },
-    staleTime: 0,              // always fetch fresh after invalidation
+    staleTime: 60 * 1000,       // matches backend's 90s cache — avoid refetching data we already have
     gcTime: 5 * 60 * 1000,
     refetchInterval: false,
     refetchOnWindowFocus: true,  // re-check when user comes back to the tab
+    placeholderData: keepPreviousData,  // keep showing current rows while a new page/filter loads
     retry: 3,
     retryDelay: (attemptIndex) => Math.min(2000 * 2 ** attemptIndex, 30000),
   });
@@ -660,7 +661,11 @@ const LeadsPageEnhanced = () => {
     applyDateColFilter(tableFilters.follow_up_date, 'follow_up_from', 'follow_up_to', null,             null,            cf);
     applyDateColFilter(tableFilters.created_at,     'created_from',   'created_to',   'created_before', 'created_after', cf);
     applyDateColFilter(tableFilters.updated_at,     'updated_from',   'updated_to',   'updated_before', 'updated_after', cf);
-    setColumnFilters(cf);
+    // Only update state (and thus trigger the "reset to page 1" effect) when the
+    // filters actually changed — Table's onChange fires on every interaction
+    // (including plain pagination clicks), and a fresh {} object on every call
+    // would otherwise reset currentPage back to 1 on every page click.
+    setColumnFilters(prev => (JSON.stringify(prev) === JSON.stringify(cf) ? prev : cf));
   }, []);
 
   const deleteMutation = useMutation({

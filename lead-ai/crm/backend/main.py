@@ -6020,6 +6020,7 @@ async def upload_file(file: UploadFile = File(...)):
 # ============================================================
 
 @app.get("/api/admin/stats")
+@cache_async_result(STATS_CACHE, "admin_stats")
 async def get_admin_stats():
     """Admin dashboard: total revenue, leads, conversion rate, trends - SUPABASE ONLY"""
 
@@ -6074,6 +6075,7 @@ async def get_admin_stats():
 
 
 @app.get("/api/admin/team-performance")
+@cache_async_result(STATS_CACHE, "admin_team_performance")
 async def get_team_performance():
     """Admin dashboard: per-counselor performance metrics - SUPABASE ONLY"""
     
@@ -6128,6 +6130,7 @@ _FUNNEL_STAGE_ORDER = ["Fresh", "Follow Up", "Warm", "Hot", "Enrolled"]
 
 
 @app.get("/api/admin/funnel-analysis")
+@cache_async_result(STATS_CACHE, "admin_funnel_analysis")
 async def get_funnel_analysis():
     """Funnel analysis - SUPABASE ONLY.
 
@@ -6162,6 +6165,7 @@ async def get_funnel_analysis():
 
 
 @app.get("/api/admin/revenue-trend")
+@cache_async_result(STATS_CACHE, "admin_revenue_trend")
 async def get_revenue_trend(days: int = 30):
     """Admin dashboard: daily revenue trend for past N days - SUPABASE ONLY"""
     
