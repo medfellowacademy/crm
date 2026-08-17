@@ -32,7 +32,21 @@ api.interceptors.request.use((config) => {
 // localStorage on mount and will reflect the cleared state after redirect.
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
+    // A client-side timeout (ECONNABORTED) on Render's free tier almost
+    // always means the request itself woke a spun-down dyno — the dyno is
+    // warm by the time we'd retry, so one automatic retry turns what would
+    // be a hard-fail into a few extra seconds of wait instead of an error
+    // the user has to manually refresh past.
+    if (error.code === 'ECONNABORTED' && error.config && !error.config._retried) {
+      error.config._retried = true;
+      try {
+        return await api(error.config);
+      } catch (retryError) {
+        error = retryError;
+      }
+    }
+
     // Only clear session on a genuine auth failure (invalid/expired token).
     // 503 means the server is temporarily unavailable (e.g. DB under load during sync)
     // — do NOT log the user out for transient server errors.
