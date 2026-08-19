@@ -2537,6 +2537,7 @@ async def get_leads(
     updated_before: Optional[datetime] = None,
     search: Optional[str] = None,
     adset_name: Optional[str] = None,
+    ad_name: Optional[str] = None,
     meta_only: bool = False,
     utm_source: Optional[str] = None,
     utm_medium: Optional[str] = None,
@@ -2583,6 +2584,7 @@ async def get_leads(
         updated_on=updated_on, updated_from=str(updated_from), updated_to=str(updated_to),
         updated_after=str(updated_after), updated_before=str(updated_before),
         utm_source=utm_source, utm_medium=utm_medium, utm_campaign=utm_campaign,
+        ad_name=ad_name,
     )
     import hashlib, json
     _cache_key = "leads:" + hashlib.md5(
@@ -2630,6 +2632,7 @@ async def get_leads(
                 updated_from=updated_from.isoformat() if updated_from else None,
                 updated_to=updated_to.isoformat() if updated_to else None,
                 adset_name=adset_name,
+                ad_name=ad_name,
                 meta_only=meta_only,
                 utm_source=utm_source,
                 utm_medium=utm_medium,
@@ -2647,13 +2650,13 @@ async def get_leads(
 @cache_async_result(STATS_CACHE, "leads_filter_options")
 async def get_leads_filter_options():
     """Distinct values for every Leads-page filter dropdown (country, course,
-    source, company, qualification, assigned_to, UTM source/medium/campaign),
-    computed from the FULL leads table — not just whatever page is currently
-    loaded — so filter lists are always complete."""
+    source, company, qualification, assigned_to, UTM source/medium/campaign,
+    ad name), computed from the FULL leads table — not just whatever page is
+    currently loaded — so filter lists are always complete."""
     try:
         rows = _fetch_all_leads(
             'country,course_interested,source,company,qualification,assigned_to,'
-            'utm_source,utm_medium,utm_campaign'
+            'utm_source,utm_medium,utm_campaign,ad_name'
         )
 
         def _distinct(col):
@@ -2669,12 +2672,13 @@ async def get_leads_filter_options():
             "utm_sources":    _distinct('utm_source'),
             "utm_mediums":    _distinct('utm_medium'),
             "utm_campaigns":  _distinct('utm_campaign'),
+            "ad_names":       _distinct('ad_name'),
         }
     except Exception as e:
         logger.error(f"Leads filter-options error: {e}")
         return {"countries": [], "courses": [], "sources": [], "companies": [],
                 "qualifications": [], "assigned_to": [], "utm_sources": [],
-                "utm_mediums": [], "utm_campaigns": []}
+                "utm_mediums": [], "utm_campaigns": [], "ad_names": []}
 
 
 @app.get("/api/leads/{lead_id}")

@@ -109,6 +109,7 @@ class SupabaseDataLayer:
         updated_from: Optional[str] = None,
         updated_to: Optional[str] = None,
         adset_name: Optional[str] = None,
+        ad_name: Optional[str] = None,
         meta_only: bool = False,
         utm_source: Optional[str] = None,
         utm_medium: Optional[str] = None,
@@ -248,6 +249,12 @@ class SupabaseDataLayer:
                 q = q.lt('updated_at', updated_before)
             if adset_name:
                 q = q.eq('adset_name', adset_name.strip())
+            if ad_name:
+                if ',' in ad_name:
+                    vals = [v.strip() for v in ad_name.split(',') if v.strip()]
+                    q = q.or_(','.join([f"ad_name.ilike.{v}" for v in vals]))
+                else:
+                    q = q.ilike('ad_name', ad_name.strip())
             if meta_only:
                 q = q.not_.is_('meta_lead_id', 'null')
             if utm_source:

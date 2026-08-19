@@ -576,6 +576,7 @@ const LeadsPageEnhanced = () => {
   const uniqueUtmSources   = filterOptions?.utm_sources   || [];
   const uniqueUtmMediums   = filterOptions?.utm_mediums   || [];
   const uniqueUtmCampaigns = filterOptions?.utm_campaigns || [];
+  const uniqueAdNames      = filterOptions?.ad_names      || [];
   // Always show exactly the 5 canonical source options in filters —
   // don't derive from lead data (which may have legacy raw values).
   const uniqueSources = SOURCE_OPTIONS;
@@ -677,6 +678,7 @@ const LeadsPageEnhanced = () => {
     if (tableFilters.course?.length)      cf.course_interested = tableFilters.course.join(',');
     if (tableFilters.source?.length)      cf.source            = tableFilters.source.join(',');
     if (tableFilters.company?.length)     cf.company           = tableFilters.company.join(',');
+    if (tableFilters.ad_name?.length)     cf.ad_name           = tableFilters.ad_name.join(',');
     if (tableFilters.status?.length)      cf.status_in         = tableFilters.status.join(',');
     if (tableFilters.assigned_to?.length) cf.assigned_to_in    = tableFilters.assigned_to.join(',');
     // Date column filters — use shared helper that correctly handles all modes
@@ -928,6 +930,7 @@ const LeadsPageEnhanced = () => {
       Country: l.country, Qualification: l.qualification || '',
       Course: l.course_interested, Status: l.status,
       Segment: l.ai_segment, Score: l.ai_score, Source: l.source,
+      'Ad Name': l.ad_name || '',
       'Assigned To': l.assigned_to, 'Follow Up': l.follow_up_date,
       Revenue: l.status === 'Enrolled' ? l.actual_revenue : l.expected_revenue,
       Created: l.created_at,
@@ -1205,6 +1208,18 @@ const LeadsPageEnhanced = () => {
       ),
     },
     {
+      title: 'Ad Name',
+      dataIndex: 'ad_name',
+      key: 'ad_name',
+      width: 180,
+      ellipsis: true,
+      filteredValue: tableFilterState.ad_name || null,
+      filters: uniqueAdNames.map(a => ({ text: a, value: a })),
+      render: (adName) => adName
+        ? <Tooltip title={adName}><Text style={{ fontSize: 12 }}>{adName}</Text></Tooltip>
+        : <Text type="secondary" style={{ fontSize: 12 }}>—</Text>,
+    },
+    {
       title: 'Assigned To',
       dataIndex: 'assigned_to',
       key: 'assigned_to',
@@ -1422,7 +1437,7 @@ const LeadsPageEnhanced = () => {
         </Space>
       ),
     },
-  ], [uniqueCountries, uniqueCourses, uniqueSources, uniqueStatuses, uniqueAssigned, isCounselor, authUser, users, navigate, decayConfig, updateMutation, inlineUpdate, handleTableChange, getActionMenu, editingCell, setEditingCell, commitEdit, setEditingValue, tableFilterState, repeatedLeadIds, repeatedReasonMap]);
+  ], [uniqueCountries, uniqueCourses, uniqueSources, uniqueStatuses, uniqueAssigned, uniqueAdNames, isCounselor, authUser, users, navigate, decayConfig, updateMutation, inlineUpdate, handleTableChange, getActionMenu, editingCell, setEditingCell, commitEdit, setEditingValue, tableFilterState, repeatedLeadIds, repeatedReasonMap]);
 
   const activeAdvFilters = Object.values(advFilters).filter(v => v && (Array.isArray(v) ? v.length > 0 : true)).length;
 
