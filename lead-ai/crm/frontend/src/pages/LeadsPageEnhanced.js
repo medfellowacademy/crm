@@ -274,6 +274,12 @@ const LeadsPageEnhanced = () => {
   const [chatLead, setChatLead] = useState(null);
   const [repeatDrawerVisible, setRepeatDrawerVisible] = useState(false);
   const [drawerVisible, setDrawerVisible] = useState(false);
+  // Free-text search values for the "Course Interested" selects — lets a
+  // user add a course that isn't in the predefined list instead of being
+  // stuck (required field with no matching option = can't submit at all).
+  const [addCourseSearch, setAddCourseSearch] = useState('');
+  const [bulkCourseSearch, setBulkCourseSearch] = useState('');
+  const [inlineCourseSearch, setInlineCourseSearch] = useState('');
   const [bulkDrawerVisible, setBulkDrawerVisible] = useState(false);
   const [filterDrawerVisible, setFilterDrawerVisible] = useState(false);
   const [importVisible, setImportVisible] = useState(false);
@@ -1181,9 +1187,31 @@ const LeadsPageEnhanced = () => {
           style={{ width: '100%', minWidth: 160 }}
           showSearch
           allowClear
+          searchValue={inlineCourseSearch}
+          onSearch={setInlineCourseSearch}
           filterOption={(input, opt) => opt.label.toLowerCase().includes(input.toLowerCase())}
           options={uniqueCourses.map(co => ({ value: co, label: co }))}
-          onChange={v => inlineUpdate(r.lead_id, 'course_interested', v || null)}
+          onChange={v => { inlineUpdate(r.lead_id, 'course_interested', v || null); setInlineCourseSearch(''); }}
+          dropdownRender={menu => (
+            <>
+              {menu}
+              {inlineCourseSearch.trim() && !uniqueCourses.some(co => co.toLowerCase() === inlineCourseSearch.trim().toLowerCase()) && (
+                <>
+                  <Divider style={{ margin: '4px 0' }} />
+                  <div
+                    style={{ padding: '6px 12px', cursor: 'pointer', color: '#1677ff' }}
+                    onMouseDown={e => e.preventDefault()}
+                    onClick={() => {
+                      inlineUpdate(r.lead_id, 'course_interested', inlineCourseSearch.trim());
+                      setInlineCourseSearch('');
+                    }}
+                  >
+                    <PlusOutlined /> Add "{inlineCourseSearch.trim()}" as new course
+                  </div>
+                </>
+              )}
+            </>
+          )}
         />
       ),
     },
@@ -1437,7 +1465,7 @@ const LeadsPageEnhanced = () => {
         </Space>
       ),
     },
-  ], [uniqueCountries, uniqueCourses, uniqueSources, uniqueStatuses, uniqueAssigned, uniqueAdNames, isCounselor, authUser, users, navigate, decayConfig, updateMutation, inlineUpdate, handleTableChange, getActionMenu, editingCell, setEditingCell, commitEdit, setEditingValue, tableFilterState, repeatedLeadIds, repeatedReasonMap]);
+  ], [uniqueCountries, uniqueCourses, uniqueSources, uniqueStatuses, uniqueAssigned, uniqueAdNames, isCounselor, authUser, users, navigate, decayConfig, updateMutation, inlineUpdate, handleTableChange, getActionMenu, editingCell, setEditingCell, commitEdit, setEditingValue, tableFilterState, repeatedLeadIds, repeatedReasonMap, inlineCourseSearch]);
 
   const activeAdvFilters = Object.values(advFilters).filter(v => v && (Array.isArray(v) ? v.length > 0 : true)).length;
 
@@ -1974,11 +2002,33 @@ const LeadsPageEnhanced = () => {
           <Row gutter={16}>
             <Col span={16}>
               <Form.Item name="course_interested" label="Course Interested" rules={[{ required: true }]}>
-                <Select placeholder="Select course" showSearch
+                <Select placeholder="Select or type a course" showSearch
                   loading={!courses || courses.length === 0}
-                  notFoundContent={!courses || courses.length === 0 ? "Loading courses..." : "No courses found"}
-                  onChange={() => {}}
-                  filterOption={(i, o) => o.children.toLowerCase().includes(i.toLowerCase())}>
+                  notFoundContent={!courses || courses.length === 0 ? "Loading courses..." : "No matching course — type to add a custom one"}
+                  searchValue={addCourseSearch}
+                  onSearch={setAddCourseSearch}
+                  onChange={() => setAddCourseSearch('')}
+                  filterOption={(i, o) => o.children.toLowerCase().includes(i.toLowerCase())}
+                  dropdownRender={menu => (
+                    <>
+                      {menu}
+                      {addCourseSearch.trim() && !(courses || []).some(c => c.course_name.toLowerCase() === addCourseSearch.trim().toLowerCase()) && (
+                        <>
+                          <Divider style={{ margin: '4px 0' }} />
+                          <div
+                            style={{ padding: '6px 12px', cursor: 'pointer', color: '#1677ff' }}
+                            onMouseDown={e => e.preventDefault()}
+                            onClick={() => {
+                              form.setFieldsValue({ course_interested: addCourseSearch.trim() });
+                              setAddCourseSearch('');
+                            }}
+                          >
+                            <PlusOutlined /> Add "{addCourseSearch.trim()}" as new course
+                          </div>
+                        </>
+                      )}
+                    </>
+                  )}>
                   {(courses || []).map(c => <Option key={c.id} value={c.course_name}>{c.course_name} — ₹{(c.price/1000).toFixed(0)}K</Option>)}
                 </Select>
               </Form.Item>
@@ -2130,7 +2180,30 @@ const LeadsPageEnhanced = () => {
             </Select>
           </Form.Item>
           <Form.Item name="course_interested" label="Course Interested">
-            <Select placeholder="Keep unchanged" allowClear showSearch>
+            <Select placeholder="Keep unchanged" allowClear showSearch
+              searchValue={bulkCourseSearch}
+              onSearch={setBulkCourseSearch}
+              onChange={() => setBulkCourseSearch('')}
+              dropdownRender={menu => (
+                <>
+                  {menu}
+                  {bulkCourseSearch.trim() && !uniqueCourses.some(c => c.toLowerCase() === bulkCourseSearch.trim().toLowerCase()) && (
+                    <>
+                      <Divider style={{ margin: '4px 0' }} />
+                      <div
+                        style={{ padding: '6px 12px', cursor: 'pointer', color: '#1677ff' }}
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => {
+                          bulkForm.setFieldsValue({ course_interested: bulkCourseSearch.trim() });
+                          setBulkCourseSearch('');
+                        }}
+                      >
+                        <PlusOutlined /> Add "{bulkCourseSearch.trim()}" as new course
+                      </div>
+                    </>
+                  )}
+                </>
+              )}>
               {uniqueCourses.map(c => <Option key={c} value={c}>{c}</Option>)}
             </Select>
           </Form.Item>
