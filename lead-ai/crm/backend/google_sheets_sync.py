@@ -16,6 +16,7 @@ import io
 import re as _re
 import csv
 import logging
+import time
 import requests
 from datetime import datetime
 from typing import List, Dict, Optional
@@ -273,9 +274,24 @@ def fetch_tab_rows(tab_name: str) -> List[Dict]:
         f"&valueRenderOption=UNFORMATTED_VALUE"
         f"&dateTimeRenderOption=FORMATTED_STRING"
     )
-    for attempt in range(2):
+    MAX_ATTEMPTS = 4
+    for attempt in range(MAX_ATTEMPTS):
         try:
             resp = requests.get(url, timeout=90)
+            # Google's Sheets API v4 rate-limits at ~60-100 read requests/min.
+            # A 53-tab sync fired back-to-back with no spacing trips this easily,
+            # and previously any non-timeout error (429 included) gave up on the
+            # first attempt — silently treating the whole tab as empty for that
+            # sync run, dropping any leads in it with no indication why.
+            if resp.status_code == 429:
+                retry_after = resp.headers.get("Retry-After")
+                wait_s = float(retry_after) if retry_after else min(2 ** attempt * 2, 30)
+                logger.warning(f"Tab '{tab_name}': rate limited (429), retrying in {wait_s:.0f}s (attempt {attempt+1}/{MAX_ATTEMPTS})")
+                if attempt < MAX_ATTEMPTS - 1:
+                    time.sleep(wait_s)
+                    continue
+                logger.error(f"Tab '{tab_name}': still rate limited after {MAX_ATTEMPTS} attempts — giving up for this sync run")
+                return []
             resp.raise_for_status()
             data = resp.json()
             raw_rows = data.get("values", [])
@@ -293,7 +309,7 @@ def fetch_tab_rows(tab_name: str) -> List[Dict]:
             return rows
         except requests.exceptions.Timeout:
             logger.warning(f"Tab '{tab_name}': timeout on attempt {attempt+1}")
-            if attempt == 0:
+            if attempt < MAX_ATTEMPTS - 1:
                 continue
             return []
         except Exception as e:
@@ -305,10 +321,9 @@ def fetch_tab_rows(tab_name: str) -> List[Dict]:
 def _fetch_rows_for_tab(tab: Dict) -> List[Dict]:
     """Pick the best fetch method based on what credentials are available."""
     if SHEETS_API_KEY:
-        rows = fetch_tab_rows(tab["name"])
-        if not rows:
-            logger.warning(f"Tab '{tab['name']}': 0 rows returned from Sheets API — API key may be invalid or sheet not shared")
-        return rows
+        # fetch_tab_rows() already logs the specific cause (rate limited, timeout,
+        # genuinely empty, or an API error) — no need to guess at a cause here too.
+        return fetch_tab_rows(tab["name"])
     # Fallback: CSV export (only works for fully public sheets)
     logger.warning("GOOGLE_SHEETS_API_KEY not set — using CSV fallback (only works for public sheets)")
     url = (
@@ -528,7 +543,13 @@ def sync_sheet_to_crm() -> Dict:
 
     tab_stats: List[Dict] = []
 
-    for tab in tabs:
+    for i, tab in enumerate(tabs):
+        # Small spacing between requests — 53 tabs fired back-to-back with zero
+        # delay easily trips Google's Sheets API per-minute rate limit, which
+        # (before the 429 retry above) silently dropped that tab's leads for
+        # the whole sync run. This alone should keep most syncs under the limit.
+        if i > 0:
+            time.sleep(0.4)
         rows = _fetch_rows_for_tab(tab)
         if not rows:
             logger.warning(f"Tab '{tab['name']}': skipped (0 rows returned)")
