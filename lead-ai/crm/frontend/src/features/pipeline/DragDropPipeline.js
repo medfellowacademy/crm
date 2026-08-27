@@ -13,14 +13,16 @@ import { isFeatureEnabled } from '../../config/featureFlags';
 // ── CRM Status ↔ Pipeline Stage mapping ─────────────────────────────────────
 // The DB stores `status` (LeadStatus enum in the backend: Fresh, Follow Up,
 // Warm, Hot, Not Interested, Junk, Not Answering, Enrolled, Will Enroll
-// Later, Dropped). These stage ids MUST match those exactly — any status not
-// listed here used to silently fall back to "Fresh", which meant Warm/Hot
-// leads and every terminal status (Not Interested/Junk/Not Answering/
-// Dropped — ~75% of all leads) were miscounted into the Fresh column while
-// dragging a card into a stage without a matching backend status silently
-// failed (pydantic rejects unknown enum values).
+// Later, Dropped, TMT No Response, Re-assigned Lead, Test Lead). These stage
+// ids MUST match those exactly — any status not listed here used to silently
+// fall back to "Fresh", which meant Warm/Hot leads and every terminal status
+// (Not Interested/Junk/Not Answering/Dropped — ~75% of all leads) were
+// miscounted into the Fresh column while dragging a card into a stage
+// without a matching backend status silently failed (pydantic rejects
+// unknown enum values).
 const PIPELINE_STAGES = [
   { id: 'Fresh',              name: 'Fresh Leads',       color: '#6b7280', probability: 5   },
+  { id: 'Re-assigned Lead',   name: 'Re-assigned',       color: '#2f54eb', probability: 15  },
   { id: 'Follow Up',          name: 'Follow Up',         color: '#3b82f6', probability: 25  },
   { id: 'Warm',               name: 'Warm',               color: '#f59e0b', probability: 45  },
   { id: 'Hot',                name: 'Hot',                color: '#ef4444', probability: 70  },
@@ -31,7 +33,7 @@ const PIPELINE_STAGES = [
 // Terminal/negative statuses collapse into one "Lost" column so every lead
 // has a definite, correct home instead of being dumped into Fresh.
 const LOST_STAGE = { id: 'Lost', name: 'Lost / Inactive', color: '#9ca3af', probability: 0 };
-const LOST_STATUSES = new Set(['Not Interested', 'Not Answering', 'Junk', 'Dropped']);
+const LOST_STATUSES = new Set(['Not Interested', 'Not Answering', 'Junk', 'Dropped', 'TMT No Response', 'Test Lead']);
 
 const FALLBACK_STAGE = 'Fresh';
 

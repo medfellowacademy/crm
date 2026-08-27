@@ -29,6 +29,7 @@ const statusColor  = {
   Fresh: 'blue', 'Follow Up': 'orange', Warm: 'volcano', Hot: 'red',
   Enrolled: 'green', 'Will Enroll Later': 'gold', 'Not Interested': 'default',
   Dropped: 'volcano', Junk: 'default', 'Not Answering': 'warning',
+  'TMT No Response': 'gold', 'Re-assigned Lead': 'geekblue', 'Test Lead': 'default',
 };
 
 // ── Quick-action modal ────────────────────────────────────────────────────────
@@ -128,7 +129,7 @@ function QuickActionModal({ lead, open, onClose, onDone }) {
         <div>
           <Text type="secondary">Update Status</Text>
           <Select value={status} onChange={setStatus} style={{ width: '100%', marginTop: 4 }}>
-            {['Fresh','Follow Up','Warm','Hot','Will Enroll Later','Not Answering','Not Interested','Dropped','Enrolled','Junk'].map(s => (
+            {['Fresh','Follow Up','Warm','Hot','Will Enroll Later','Not Answering','Not Interested','Dropped','Enrolled','Junk','TMT No Response','Re-assigned Lead','Test Lead'].map(s => (
               <Option key={s} value={s}>{s}</Option>
             ))}
           </Select>

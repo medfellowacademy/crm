@@ -27,6 +27,8 @@ const STATUS_COLORS = {
   Fresh: 'blue', New: 'blue', Interested: 'cyan',
   'Follow-up': 'orange', Enrolled: 'green',
   'Not Interested': 'red', Hot: 'red', Warm: 'orange',
+  'Will Enroll Later': 'gold', Dropped: 'volcano',
+  'TMT No Response': 'gold', 'Re-assigned Lead': 'geekblue', 'Test Lead': 'default',
 };
 
 // ── helpers ────────────────────────────────────────────────────────────────────

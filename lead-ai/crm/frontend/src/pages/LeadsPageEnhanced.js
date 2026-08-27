@@ -198,7 +198,7 @@ const parseSpreadsheet = (data, isBinary) => {
 };
 
 const REQUIRED_COLS = ['full_name', 'phone'];
-const STATUS_OPTIONS = ['Fresh', 'Follow Up', 'Warm', 'Hot', 'Not Interested', 'Not Answering', 'Enrolled', 'Junk', 'Will Enroll Later', 'Dropped'];
+const STATUS_OPTIONS = ['Fresh', 'Follow Up', 'Warm', 'Hot', 'Not Interested', 'Not Answering', 'Enrolled', 'Junk', 'Will Enroll Later', 'Dropped', 'TMT No Response', 'Re-assigned Lead', 'Test Lead'];
 
 // Auto-retry countdown shown when the server times out (cold-start)
 const AutoRetryCountdown = ({ onRetry, seconds = 15 }) => {
@@ -261,6 +261,7 @@ const STATUS_COLOR_MAP = {
   Fresh: 'blue', 'Follow Up': 'purple',
   'Not Interested': 'default', 'Not Answering': 'gray', Junk: 'volcano',
   'Will Enroll Later': 'cyan', Dropped: 'magenta',
+  'TMT No Response': 'gold', 'Re-assigned Lead': 'geekblue', 'Test Lead': 'default',
 };
 const COMPANY_OPTIONS = ['MED', 'Others'];
 

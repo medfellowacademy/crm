@@ -454,6 +454,9 @@ class LeadStatus(str, enum.Enum):
     ENROLLED = "Enrolled"
     WILL_ENROLL_LATER = "Will Enroll Later"
     DROPPED = "Dropped"
+    TMT_NO_RESPONSE = "TMT No Response"
+    RE_ASSIGNED_LEAD = "Re-assigned Lead"
+    TEST_LEAD = "Test Lead"
 
 class LeadSegment(str, enum.Enum):
     HOT = "Hot"
@@ -780,10 +783,25 @@ _STATUS_NORMALISE_MAP: dict[str, str] = {
     "enrolled": "Enrolled",
     "admission done": "Enrolled",
     "converted": "Enrolled",
+    # TMT No Response
+    "tmt no response": "TMT No Response",
+    "tmt_no_response": "TMT No Response",
+    "tmt-no-response": "TMT No Response",
+    "tmt": "TMT No Response",
+    # Re-assigned Lead
+    "re-assigned lead": "Re-assigned Lead",
+    "reassigned lead": "Re-assigned Lead",
+    "re assigned lead": "Re-assigned Lead",
+    "reassigned": "Re-assigned Lead",
+    "re-assigned": "Re-assigned Lead",
+    # Test Lead
+    "test lead": "Test Lead",
+    "testlead": "Test Lead",
+    "test": "Test Lead",
 }
 
 # Valid enum values set for fast lookup
-_VALID_STATUSES = {"Fresh", "Follow Up", "Warm", "Hot", "Not Interested", "Junk", "Not Answering", "Enrolled", "Will Enroll Later", "Dropped"}
+_VALID_STATUSES = {"Fresh", "Follow Up", "Warm", "Hot", "Not Interested", "Junk", "Not Answering", "Enrolled", "Will Enroll Later", "Dropped", "TMT No Response", "Re-assigned Lead", "Test Lead"}
 
 def _normalise_status(v):
     if not v:
@@ -1326,6 +1344,15 @@ def normalize_lead_values(lead_data: dict) -> dict:
         'not-answering': 'Not Answering',
         'notanswering': 'Not Answering',
         'enrolled': 'Enrolled',
+        'will enroll later': 'Will Enroll Later',
+        'dropped': 'Dropped',
+        'tmt no response': 'TMT No Response',
+        'tmt': 'TMT No Response',
+        're-assigned lead': 'Re-assigned Lead',
+        'reassigned lead': 'Re-assigned Lead',
+        'reassigned': 'Re-assigned Lead',
+        'test lead': 'Test Lead',
+        'test': 'Test Lead',
     }
     
     # Country normalization - common variations
@@ -3401,7 +3428,7 @@ def _compute_raw_notifications(counselor_name: Optional[str] = None) -> list:
         supabase_data.client.table('leads')
         .select('id,lead_id,full_name,course_interested,assigned_to,follow_up_date')
         .lt('follow_up_date', now_iso)
-        .not_.in_('status', ['Enrolled', 'Not Interested', 'Junk', 'Dropped'])
+        .not_.in_('status', ['Enrolled', 'Not Interested', 'Junk', 'Dropped', 'TMT No Response', 'Test Lead'])
     )
     if counselor_name:
         overdue_q = overdue_q.eq('assigned_to', counselor_name)
@@ -3456,7 +3483,7 @@ def _compute_raw_notifications(counselor_name: Optional[str] = None) -> list:
         .select('id,lead_id,full_name,course_interested,assigned_to,follow_up_date')
         .gte('follow_up_date', today_start)
         .lte('follow_up_date', today_end)
-        .not_.in_('status', ['Enrolled', 'Not Interested', 'Junk', 'Dropped'])
+        .not_.in_('status', ['Enrolled', 'Not Interested', 'Junk', 'Dropped', 'TMT No Response', 'Test Lead'])
     )
     if counselor_name:
         due_today_q = due_today_q.eq('assigned_to', counselor_name)
@@ -3865,7 +3892,7 @@ async def get_followups_today(request: Request, assigned_to: Optional[str] = Non
         today_end_ist = datetime.combine(today, datetime.max.time(), tzinfo=_IST)
         today_start = today_start_ist.astimezone(_timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
         today_end = today_end_ist.astimezone(_timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
-        active_statuses = ["Enrolled", "Not Interested", "Junk", "Dropped"]
+        active_statuses = ["Enrolled", "Not Interested", "Junk", "Dropped", "TMT No Response", "Test Lead"]
         _LIST_COLS = ('id,lead_id,full_name,phone,whatsapp,course_interested,status,ai_segment,'
                       'ai_score,assigned_to,follow_up_date,last_contact_date,country,next_action,'
                       'primary_objection,churn_risk')
@@ -6996,7 +7023,7 @@ async def get_cohort_analysis():
     """Cohort analysis grouped by signup month, with conversion-rate benchmarks - SUPABASE ONLY"""
 
     empty_response = {"cohorts": [], "benchmarks": {}, "underperforming": []}
-    TERMINAL = {"Enrolled", "Not Interested", "Junk"}
+    TERMINAL = {"Enrolled", "Not Interested", "Junk", "Dropped", "TMT No Response", "Test Lead"}
 
     def conv_days(lead):
         # Prefer the explicit enrollment date; fall back to updated_at only
@@ -7283,9 +7310,10 @@ async def get_source_analytics(created_from: Optional[str] = None, created_to: O
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Statuses that are already terminal — never downgrade these
-_DECAY_TERMINAL = {"Enrolled", "Not Interested", "Junk", "enrolled",
-                   "not_interested", "junk", LeadStatus.ENROLLED,
-                   LeadStatus.NOT_INTERESTED, LeadStatus.JUNK}
+_DECAY_TERMINAL = {"Enrolled", "Not Interested", "Junk", "Dropped", "TMT No Response", "Test Lead",
+                   "enrolled", "not_interested", "junk",
+                   LeadStatus.ENROLLED, LeadStatus.NOT_INTERESTED, LeadStatus.JUNK,
+                   LeadStatus.DROPPED, LeadStatus.TMT_NO_RESPONSE, LeadStatus.TEST_LEAD}
 
 # Map LeadStatus enum → display string for the log
 def _status_str(s) -> str:

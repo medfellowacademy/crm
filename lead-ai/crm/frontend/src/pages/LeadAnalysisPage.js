@@ -220,14 +220,16 @@ const LeadAnalysisPage = () => {
 
     const totalLeads_  = filteredLeads.length;
     const enrolled_    = filteredLeads.filter(l => l.status === 'Enrolled').length;
-    const active_      = filteredLeads.filter(l => ['Fresh','Follow Up','Warm','Hot'].includes(l.status)).length;
+    const active_      = filteredLeads.filter(l => ['Fresh','Follow Up','Warm','Hot','Re-assigned Lead'].includes(l.status)).length;
     const stale_       = filteredLeads.filter(l => calculateDaysSinceUpdate(l.updated_at) > 7).length;
-    const lost_        = filteredLeads.filter(l => ['Not Interested','Not Answering','Junk'].includes(l.status)).length;
+    const lost_        = filteredLeads.filter(l => ['Not Interested','Not Answering','Junk','Dropped','TMT No Response','Test Lead'].includes(l.status)).length;
     const revenue_     = filteredLeads.reduce((s, l) => s + (l.potential_revenue || 0), 0);
     const convRate_    = totalLeads_ > 0 ? ((enrolled_ / totalLeads_) * 100).toFixed(1) : '0.0';
 
     const sColor = { 'Fresh':'#13c2c2','Follow Up':'#1890ff','Warm':'#fa8c16','Hot':'#f5222d',
-                     'Enrolled':'#52c41a','Not Interested':'#8c8c8c','Not Answering':'#78716c','Junk':'#9ca3af' };
+                     'Enrolled':'#52c41a','Not Interested':'#8c8c8c','Not Answering':'#78716c','Junk':'#9ca3af',
+                     'Will Enroll Later':'#13a8a8','Dropped':'#c41d7f','TMT No Response':'#faad14',
+                     'Re-assigned Lead':'#2f54eb','Test Lead':'#9ca3af' };
 
     const statCard = (lbl, val, clr) =>
       `<div style="flex:1;min-width:110px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px">
@@ -384,9 +386,9 @@ tbody td{border-bottom:1px solid #f1f5f9;vertical-align:middle}
     // ── Sheet 1: Summary ────────────────────────────────────────────────────
     const totalLeads   = filteredLeads.length;
     const enrolled     = filteredLeads.filter(l => l.status === 'Enrolled').length;
-    const active       = filteredLeads.filter(l => ['Fresh','Follow Up','Warm','Hot'].includes(l.status)).length;
+    const active       = filteredLeads.filter(l => ['Fresh','Follow Up','Warm','Hot','Re-assigned Lead'].includes(l.status)).length;
     const stale        = filteredLeads.filter(l => calculateDaysSinceUpdate(l.updated_at) > 7).length;
-    const lost         = filteredLeads.filter(l => ['Not Interested','Not Answering','Junk'].includes(l.status)).length;
+    const lost         = filteredLeads.filter(l => ['Not Interested','Not Answering','Junk','Dropped','TMT No Response','Test Lead'].includes(l.status)).length;
     const totalRevenue = filteredLeads.reduce((s, l) => s + (l.potential_revenue || 0), 0);
     const convRate     = totalLeads > 0 ? ((enrolled / totalLeads) * 100).toFixed(1) : '0.0';
     const avgAge       = totalLeads > 0
@@ -524,7 +526,7 @@ tbody td{border-bottom:1px solid #f1f5f9;vertical-align:middle}
     const freshLeads = filteredLeads.filter(l => calculateDaysSinceUpdate(l.updated_at) <= 2).length;
     const activeLeads = filteredLeads.filter(l => ['Fresh', 'Follow Up', 'Warm', 'Hot'].includes(l.status)).length;
     const convertedLeads = filteredLeads.filter(l => l.status === 'Enrolled').length;
-    const lostLeads = filteredLeads.filter(l => ['Not Interested', 'Not Answering', 'Junk'].includes(l.status)).length;
+    const lostLeads = filteredLeads.filter(l => ['Not Interested', 'Not Answering', 'Junk', 'Dropped', 'TMT No Response', 'Test Lead'].includes(l.status)).length;
 
     const conversionRate = totalLeads > 0 ? (convertedLeads / totalLeads) * 100 : 0;
     const lostRate = totalLeads > 0 ? (lostLeads / totalLeads) * 100 : 0;
@@ -676,7 +678,12 @@ tbody td{border-bottom:1px solid #f1f5f9;vertical-align:middle}
     'Enrolled': '#52c41a',
     'Not Interested': '#8c8c8c',
     'Not Answering': '#8c8c8c',
-    'Junk': '#8c8c8c'
+    'Junk': '#8c8c8c',
+    'Will Enroll Later': '#13a8a8',
+    'Dropped': '#c41d7f',
+    'TMT No Response': '#faad14',
+    'Re-assigned Lead': '#2f54eb',
+    'Test Lead': '#8c8c8c',
   };
 
   // Chart colors
@@ -1317,7 +1324,7 @@ tbody td{border-bottom:1px solid #f1f5f9;vertical-align:middle}
               key: 'status',
               width: 130,
               render: s => {
-                const c = { Fresh: 'cyan', 'Follow Up': 'blue', Warm: 'orange', Hot: 'red', Enrolled: 'green', 'Not Interested': 'default', 'Not Answering': 'default', Junk: 'default' };
+                const c = { Fresh: 'cyan', 'Follow Up': 'blue', Warm: 'orange', Hot: 'red', Enrolled: 'green', 'Not Interested': 'default', 'Not Answering': 'default', Junk: 'default', 'Will Enroll Later': 'geekblue', Dropped: 'magenta', 'TMT No Response': 'gold', 'Re-assigned Lead': 'geekblue', 'Test Lead': 'default' };
                 return <Tag color={c[s] || 'default'}>{s}</Tag>;
               },
             },

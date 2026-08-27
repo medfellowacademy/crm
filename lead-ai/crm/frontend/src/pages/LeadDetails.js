@@ -264,7 +264,7 @@ const LeadDetails = () => {
   const handleSaveChanges = (values) => {
     // Check if status changed to loss status
     const statusChanged = values.status !== lead.status;
-    const isLossStatus = values.status === 'Not Interested' || values.status === 'Junk' || values.status === 'Dropped';
+    const isLossStatus = values.status === 'Not Interested' || values.status === 'Junk' || values.status === 'Dropped' || values.status === 'TMT No Response';
 
     if (statusChanged && isLossStatus) {
       setPendingStatus(values.status);
@@ -686,7 +686,10 @@ const LeadDetails = () => {
                       lead?.status === 'Will Enroll Later' ? 'gold' :
                       lead?.status === 'Not Interested' ? 'red' :
                       lead?.status === 'Dropped' ? 'volcano' :
-                      lead?.status === 'Junk' ? 'red' : 'blue'
+                      lead?.status === 'Junk' ? 'red' :
+                      lead?.status === 'TMT No Response' ? 'gold' :
+                      lead?.status === 'Re-assigned Lead' ? 'geekblue' :
+                      lead?.status === 'Test Lead' ? 'default' : 'blue'
                     }>
                       {lead?.status}
                     </Tag>
@@ -698,10 +701,13 @@ const LeadDetails = () => {
                         <Option value="Warm">Warm</Option>
                         <Option value="Hot">Hot</Option>
                         <Option value="Will Enroll Later">Will Enroll Later</Option>
+                        <Option value="Re-assigned Lead">Re-assigned Lead</Option>
+                        <Option value="TMT No Response">TMT No Response</Option>
                         <Option value="Not Interested">Not Interested</Option>
                         <Option value="Dropped">Dropped</Option>
                         <Option value="Junk">Junk</Option>
                         <Option value="Not Answering">Not Answering</Option>
+                        <Option value="Test Lead">Test Lead</Option>
                         <Option value="Enrolled">Enrolled</Option>
                       </Select>
                     </Form.Item>

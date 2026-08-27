@@ -25,6 +25,11 @@ const STATUS_COLORS = {
   'Not Interested': 'default',
   Junk: 'default',
   'Not Answering': 'default',
+  'Will Enroll Later': 'cyan',
+  Dropped: 'magenta',
+  'TMT No Response': 'gold',
+  'Re-assigned Lead': 'geekblue',
+  'Test Lead': 'default',
 };
 
 const WebsiteLeadsPage = () => {

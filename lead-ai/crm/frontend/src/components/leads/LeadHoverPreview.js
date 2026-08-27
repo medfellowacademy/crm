@@ -16,7 +16,9 @@ const segEmoji = (seg) =>
 
 const statusColor = (s) => {
   const m = { Enrolled: '#10b981', Hot: '#ef4444', Warm: '#f59e0b', Fresh: '#3b82f6',
-    'Follow Up': '#8b5cf6', 'Not Interested': '#9ca3af', 'Not Answering': '#6b7280', Junk: '#ef4444' };
+    'Follow Up': '#8b5cf6', 'Not Interested': '#9ca3af', 'Not Answering': '#6b7280', Junk: '#ef4444',
+    'Will Enroll Later': '#06b6d4', Dropped: '#d946ef', 'TMT No Response': '#f59e0b',
+    'Re-assigned Lead': '#4338ca', 'Test Lead': '#9ca3af' };
   return m[s] || '#9ca3af';
 };
 

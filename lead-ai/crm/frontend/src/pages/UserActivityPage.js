@@ -92,7 +92,7 @@ export default function UserActivityPage() {
     const hot        = assigned.filter(l => l.status === 'Hot').length;
     const warm       = assigned.filter(l => l.status === 'Warm').length;
     const followUp   = assigned.filter(l => l.status === 'Follow Up').length;
-    const lost       = assigned.filter(l => ['Not Interested', 'Not Answering', 'Junk'].includes(l.status)).length;
+    const lost       = assigned.filter(l => ['Not Interested', 'Not Answering', 'Junk', 'Dropped', 'TMT No Response', 'Test Lead'].includes(l.status)).length;
     const potential  = hot + warm;
 
     const totalRevenue   = assigned.filter(l => l.status === 'Enrolled')

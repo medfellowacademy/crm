@@ -807,7 +807,7 @@ const AnalyticsPage = () => {
               key: 'status',
               width: 130,
               render: s => {
-                const c = { Fresh: 'cyan', 'Follow Up': 'blue', Warm: 'orange', Hot: 'red', Enrolled: 'green', 'Not Interested': 'default', 'Not Answering': 'default', Junk: 'default' };
+                const c = { Fresh: 'cyan', 'Follow Up': 'blue', Warm: 'orange', Hot: 'red', Enrolled: 'green', 'Not Interested': 'default', 'Not Answering': 'default', Junk: 'default', 'Will Enroll Later': 'geekblue', Dropped: 'magenta', 'TMT No Response': 'gold', 'Re-assigned Lead': 'geekblue', 'Test Lead': 'default' };
                 return <Tag color={c[s] || 'default'}>{s}</Tag>;
               },
             },
