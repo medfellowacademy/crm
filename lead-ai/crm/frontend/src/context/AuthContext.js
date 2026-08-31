@@ -10,6 +10,8 @@
  */
 
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import api from '../api/api';
+import { setServerPermissions } from '../config/rbac';
 
 const AuthContext = createContext(null);
 
@@ -38,18 +40,52 @@ export function AuthProvider({ children }) {
     return () => window.removeEventListener('storage', onStorage);
   }, []);
 
+  // Pull the CURRENT server-side identity + effective permissions. This is
+  // what the UI should trust: a role change on the server takes effect here
+  // on the next load / navigation instead of waiting for the token to expire.
+  const refreshIdentity = useCallback(async () => {
+    try {
+      const { data } = await api.get('/api/auth/me');
+      if (!data) return;
+      setServerPermissions(data.permissions || []);
+      setUser((prev) => {
+        if (!prev) return prev;
+        // keep the token, adopt the server's live role / flags
+        const merged = {
+          ...prev,
+          role: data.role,
+          is_active: data.is_active,
+          permissions: data.permissions || [],
+          departments: data.departments || prev.departments,
+          page_grants: data.page_grants || prev.page_grants,
+        };
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(merged)); } catch { /* ignore */ }
+        return merged;
+      });
+    } catch {
+      // 401 is handled by the api interceptor (redirect to login).
+      // Other errors: leave the last-known identity in place.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (user?.token) refreshIdentity();
+  }, [user?.token, refreshIdentity]);
+
   const login = useCallback((userData) => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(userData));
     setUser(userData);
+    if (Array.isArray(userData?.permissions)) setServerPermissions(userData.permissions);
   }, []);
 
   const logout = useCallback(() => {
     localStorage.removeItem(STORAGE_KEY);
+    setServerPermissions(null);
     setUser(null);
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, isAuthenticated: !!user }}>
+    <AuthContext.Provider value={{ user, login, logout, refreshIdentity, isAuthenticated: !!user }}>
       {children}
     </AuthContext.Provider>
   );

@@ -67,6 +67,35 @@ from auth import (
     get_password_hash,
     verify_password,
 )
+
+# Centralized RBAC (role hierarchy + permission matrix + dependencies)
+import rbac
+from rbac import (
+    P,
+    current_user as current_active_user,
+    require_permission,
+    require_roles,
+    require_min_rank,
+    require_super_admin,
+    require_manager_up,
+    require_team_leader_up,
+    scope_supabase_leads,
+    counselor_scope_name,
+    can_view_lead,
+    assert_can_view_lead,
+    assert_can_edit_lead,
+    assert_can_administer_user,
+    assert_not_self,
+    sanitize_user,
+    sanitize_users,
+    norm_name,
+    ROLE_SUPER_ADMIN,
+    ROLE_MANAGER,
+    ROLE_TEAM_LEADER,
+    ROLE_COUNSELOR,
+    ROLE_FINANCE,
+    ROLE_MARKETING,
+)
 # No more local database - all operations use Supabase REST API
 
 # Rate limiting
@@ -324,6 +353,11 @@ _PUBLIC_PATHS = {
     # Server-to-server webhook from medfellowacademy.com - authenticated via
     # its own X-Webhook-Secret header instead of a user JWT.
     "/api/public/website-lead",
+    # Provider webhooks - NO user JWT (the provider has none). These are
+    # authenticated by verifying the provider's HMAC signature inside the
+    # handler (see verify_meta_signature / verify_interakt_signature).
+    "/api/whatsapp/webhook",
+    "/api/interakt/webhook",
 }
 
 from fastapi import Request
@@ -353,28 +387,164 @@ async def _verify_token(request: Request) -> None:
     decode_access_token(token)  # raises 401 if expired / invalid
 
 
-def _get_counselor_name(request: Request) -> str | None:
-    """Return the full_name of the caller if they are a Counselor, else None.
-    Used to enforce per-counselor data isolation. SUPABASE ONLY.
+def _get_request_user(request: Request) -> dict | None:
+    """Resolve the FULL, LIVE user record for a request that takes a bare
+    `request: Request` instead of `Depends(get_current_user)`.
 
-    Fails closed: if we can't reliably determine whether the caller is a
-    Counselor (e.g. a transient Supabase error), we must not silently return
-    None, since that would be read downstream as "not a counselor, apply no
-    row-level restriction" and could expose another counselor's leads."""
+    Reads the caller's email from the (already-validated) bearer token, then
+    loads the user from the database so the role / is_active flag are current
+    - never trusting the stale `role` claim in the JWT.
+
+    Fails closed: any lookup problem raises rather than returning None, since
+    downstream code treats None as "unauthenticated / no restriction".
+    """
     try:
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            token_data = decode_access_token(auth_header.split(" ", 1)[1])
-            if token_data and token_data.role == "Counselor":
-                user = supabase_data.get_user_by_email(token_data.email)
-                if user:
-                    return user.get('full_name')
+        auth_header = request.headers.get("Authorization", "") if request else ""
+        if not auth_header.startswith("Bearer "):
+            return None
+        token_data = decode_access_token(auth_header.split(" ", 1)[1])
+        if not token_data or not token_data.email:
+            return None
+        user = supabase_data.get_user_by_email(token_data.email)
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("_get_counselor_name failed - failing closed: {}", e)
+        logger.error("_get_request_user failed - failing closed: {}", e)
         raise HTTPException(status_code=500, detail="Failed to verify account permissions. Please try again.")
-    return None
+
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    _active = user.get("is_active", True)
+    if _active is False or _active in (0, "0", "false", "False", "no", "No", ""):
+        raise HTTPException(status_code=401, detail="Account is inactive")
+    role = (user.get("role") or "").strip()
+    if role not in rbac.ALL_ROLES:
+        raise HTTPException(status_code=403, detail="Your account role is not recognised.")
+    user["role"] = role
+    return user
+
+
+def _require_request_permission(request: Request, *permissions: str, require_all: bool = False) -> dict:
+    """Permission gate for bare-`request` endpoints. Returns the live user."""
+    user = _get_request_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    ok = (rbac.has_all_permissions(user["role"], permissions) if require_all
+          else rbac.has_any_permission(user["role"], permissions))
+    if not ok:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied. Required permission: "
+                   f"{' + '.join(permissions) if require_all else ' or '.join(permissions)}",
+        )
+    return user
+
+
+def _get_counselor_name(request: Request) -> str | None:
+    """Return the caller's full_name IFF they are restricted to their own
+    leads (Counselor), else None. Uses the live DB role, not the JWT claim,
+    so a demotion / promotion takes effect immediately.
+
+    Fails closed via _get_request_user."""
+    user = _get_request_user(request)
+    if not user:
+        return None
+    return counselor_scope_name(user)  # None for VIEW_ALL roles, name for Counselor
+
+
+def _audit_event(action: str, description: str, actor: dict | None = None,
+                 entity_type: str = "system", entity_id: str | None = None) -> None:
+    """Best-effort security/audit trail entry.
+
+    Writes to the `activities` table (which /api/audit-logs reads) with
+    activity_type='security'. Never raises - an audit failure must not break
+    the underlying privileged action, but it IS logged loudly.
+    """
+    actor_name = None
+    if actor:
+        actor_name = actor.get("full_name") or actor.get("email")
+    try:
+        logger.warning("AUDIT action={} entity={}:{} actor={} :: {}",
+                       action, entity_type, entity_id, actor_name, description)
+        supabase_data.client.table("activities").insert({
+            "activity_type": "security",
+            "description": f"[{action}] {description}",
+            "created_by": actor_name or "system",
+            "lead_id": entity_id if entity_type == "lead" else None,
+            "created_at": datetime.utcnow().isoformat(),
+        }).execute()
+    except Exception as e:  # pragma: no cover - audit must not break the action
+        logger.error("audit insert failed (action={}): {}", action, e)
+
+
+# ---------------------------------------------------------------------------
+# Provider webhook signature verification
+# ---------------------------------------------------------------------------
+import hmac as _hmac
+import hashlib as _hashlib
+
+_META_APP_SECRET = os.getenv("META_APP_SECRET", "") or os.getenv("META_WHATSAPP_APP_SECRET", "")
+_INTERAKT_WEBHOOK_SECRET = os.getenv("INTERAKT_WEBHOOK_SECRET", "")
+# When true, a webhook with no configured secret is allowed through (with a
+# loud warning). Default false => unconfigured secret means the webhook is
+# rejected, which is the safe posture.
+_ALLOW_UNSIGNED_WEBHOOKS = os.getenv("ALLOW_UNSIGNED_WEBHOOKS", "false").lower() == "true"
+
+
+def _verify_hmac_sha256(raw_body: bytes, provided: str | None, secret: str) -> bool:
+    if not provided:
+        return False
+    provided = provided.strip()
+    if provided.lower().startswith("sha256="):
+        provided = provided.split("=", 1)[1]
+    expected = _hmac.new(secret.encode("utf-8"), raw_body, _hashlib.sha256).hexdigest()
+    try:
+        return _hmac.compare_digest(expected, provided)
+    except Exception:
+        return False
+
+
+async def verify_meta_signature(request: Request) -> bytes:
+    """Verify Meta's X-Hub-Signature-256 over the raw request body.
+    Returns the raw body on success; raises 403 on failure."""
+    raw = await request.body()
+    if not _META_APP_SECRET:
+        if _ALLOW_UNSIGNED_WEBHOOKS:
+            logger.warning("META webhook: no META_APP_SECRET set and ALLOW_UNSIGNED_WEBHOOKS=true - accepting UNVERIFIED payload")
+            return raw
+        logger.error("META webhook rejected: META_APP_SECRET is not configured")
+        raise HTTPException(status_code=503, detail="Webhook signature not configured")
+    sig = request.headers.get("X-Hub-Signature-256") or request.headers.get("x-hub-signature-256")
+    if not _verify_hmac_sha256(raw, sig, _META_APP_SECRET):
+        logger.warning("META webhook rejected: bad or missing signature")
+        raise HTTPException(status_code=403, detail="Invalid webhook signature")
+    return raw
+
+
+async def verify_interakt_signature(request: Request) -> bytes:
+    """Verify Interakt's webhook signature over the raw body (HMAC-SHA256).
+    Interakt sends the shared secret / signature in 'X-Interakt-Signature'
+    (falls back to a static shared-secret header if that is how the tenant
+    configured it)."""
+    raw = await request.body()
+    if not _INTERAKT_WEBHOOK_SECRET:
+        if _ALLOW_UNSIGNED_WEBHOOKS:
+            logger.warning("Interakt webhook: no INTERAKT_WEBHOOK_SECRET set and ALLOW_UNSIGNED_WEBHOOKS=true - accepting UNVERIFIED payload")
+            return raw
+        logger.error("Interakt webhook rejected: INTERAKT_WEBHOOK_SECRET is not configured")
+        raise HTTPException(status_code=503, detail="Webhook signature not configured")
+    sig = (request.headers.get("X-Interakt-Signature")
+           or request.headers.get("x-interakt-signature")
+           or request.headers.get("X-Webhook-Signature"))
+    # Some Interakt setups just send the shared secret verbatim in a header.
+    static = (request.headers.get("X-Interakt-Secret")
+              or request.headers.get("x-interakt-secret"))
+    if static and _hmac.compare_digest(static.strip(), _INTERAKT_WEBHOOK_SECRET):
+        return raw
+    if not _verify_hmac_sha256(raw, sig, _INTERAKT_WEBHOOK_SECRET):
+        logger.warning("Interakt webhook rejected: bad or missing signature")
+        raise HTTPException(status_code=403, detail="Invalid webhook signature")
+    return raw
 
 
 from fastapi import status
@@ -2148,6 +2318,8 @@ async def login(request: Request, body: LoginRequest):
             "is_active": user.get('is_active', True),
             "departments": user.get('departments') or [],
             "page_grants": user.get('page_grants') or [],
+            "rank": rbac.role_rank(user.get('role')),
+            "permissions": sorted(rbac.permissions_for(user.get('role'))),
         }
     }
 
@@ -2155,6 +2327,27 @@ async def login(request: Request, body: LoginRequest):
 async def logout():
     """Logout - client should clear stored user data"""
     return {"success": True, "message": "Logged out successfully"}
+
+
+@app.get("/api/auth/me")
+async def get_me(current_user: dict = Depends(current_active_user)):
+    """Return the CURRENT, LIVE identity + effective permissions for the
+    caller. The frontend should call this on load and after any navigation
+    that matters, and drive its UI from `permissions` here rather than from
+    a role string baked into a stale token."""
+    role = current_user.get("role")
+    return {
+        "id": current_user.get("id"),
+        "full_name": current_user.get("full_name"),
+        "email": current_user.get("email"),
+        "role": role,
+        "is_active": current_user.get("is_active", True),
+        "reports_to": current_user.get("reports_to"),
+        "departments": current_user.get("departments") or [],
+        "page_grants": current_user.get("page_grants") or [],
+        "rank": rbac.role_rank(role),
+        "permissions": sorted(rbac.permissions_for(role)),
+    }
 
 # ============================================================================
 # ROOT & HEALTH CHECK ENDPOINTS
@@ -2354,7 +2547,8 @@ async def create_website_lead(
     return created
 
 
-@app.post("/api/leads/bulk-create")
+@app.post("/api/leads/bulk-create",
+          dependencies=[Depends(require_permission(P.CREATE_LEAD))])
 async def bulk_create_leads(leads: list[LeadCreate], background_tasks: BackgroundTasks, request: Request):
     """Bulk create multiple leads at once for import functionality - SUPABASE ONLY"""
     
@@ -2875,38 +3069,56 @@ async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, b
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/leads/{lead_id}")
-async def delete_lead(lead_id: str, request: Request):
-    """Delete lead - available to all authenticated users"""
+async def delete_lead(lead_id: str, actor: dict = Depends(require_permission(P.DELETE_LEAD))):
+    """Delete lead - requires delete_lead (Super Admin)."""
 
     # Check if lead exists
     lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
-    
+
     # Delete from Supabase
     success = supabase_data.delete_lead(lead_id)
     if not success:
         raise HTTPException(status_code=500, detail="Failed to delete lead")
-    
+
     # Invalidate caches to update UI
     invalidate_cache(LEAD_CACHE)
     invalidate_cache(STATS_CACHE)
-    
+    _audit_event("lead.delete", f"deleted lead {lead_id} ({lead.get('full_name')})",
+                 actor=actor, entity_type="lead", entity_id=str(lead_id))
     return {"message": "Lead deleted successfully"}
 
 @app.post("/api/leads/bulk-update")
-async def bulk_update_leads(bulk_data: dict):
-    """Bulk update multiple leads - SUPABASE ONLY"""
-    
-    
+async def bulk_update_leads(bulk_data: dict, actor: dict = Depends(require_permission(P.EDIT_LEAD))):
+    """Bulk update multiple leads - SUPABASE ONLY.
+    Requires edit_lead. Counselors may only bulk-update leads assigned to
+    them, and may not reassign leads away from themselves."""
+
     lead_ids = bulk_data.get("lead_ids", [])
     updates = bulk_data.get("updates", {})
-    
+
     if not lead_ids:
         raise HTTPException(status_code=400, detail="No lead IDs provided")
-    
+
     if not updates:
         raise HTTPException(status_code=400, detail="No updates provided")
+
+    # Counselor scoping: verify ownership of every targeted lead, and block
+    # reassignment / privileged field changes.
+    _scope = counselor_scope_name(actor)
+    if _scope is not None:
+        if "assigned_to" in updates and norm_name(updates.get("assigned_to")) != norm_name(_scope):
+            raise HTTPException(status_code=403, detail="You cannot reassign leads to another counselor")
+        try:
+            owned = supabase_data.client.table("leads").select("lead_id,assigned_to") \
+                .in_("lead_id", [str(x) for x in lead_ids]).execute().data or []
+        except Exception as e:
+            logger.error("bulk_update ownership check failed: {}", e)
+            raise HTTPException(status_code=500, detail="Could not verify lead ownership")
+        bad = [r.get("lead_id") for r in owned if norm_name(r.get("assigned_to")) != norm_name(_scope)]
+        if bad or len(owned) != len(set(str(x) for x in lead_ids)):
+            raise HTTPException(status_code=403, detail="One or more leads are not assigned to you")
     
     # Validate enum fields before applying updates
     _valid_statuses = {s.value for s in LeadStatus}
@@ -3319,7 +3531,8 @@ async def get_lead_ai_summary(lead_id: str):
 # API ENDPOINTS - HOSPITALS
 # ============================================================================
 
-@app.post("/api/hospitals", response_model=HospitalResponse)
+@app.post("/api/hospitals", response_model=HospitalResponse,
+          dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
 async def create_hospital(hospital: HospitalCreate):
     """Create hospital - SUPABASE ONLY"""
     
@@ -3364,7 +3577,8 @@ async def get_hospitals(
 # API ENDPOINTS - COURSES
 # ============================================================================
 
-@app.post("/api/courses", response_model=CourseResponse)
+@app.post("/api/courses", response_model=CourseResponse,
+          dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
 async def create_course(course: CourseCreate):
     """Create course - SUPABASE ONLY"""
     
@@ -3580,7 +3794,8 @@ _AUDIT_TYPE_TO_ACTION = {
     "reassignment": "update",
 }
 
-@app.get("/api/audit-logs")
+@app.get("/api/audit-logs",
+         dependencies=[Depends(require_permission(P.VIEW_AUDIT_LOGS))])
 async def get_audit_logs(
     page: int = 1,
     limit: int = 50,
@@ -3659,7 +3874,8 @@ async def get_audit_logs(
         return {"logs": [], "total": 0, "page": page, "limit": limit, "pages": 0}
 
 
-@app.get("/api/admin/lead-update-activity")
+@app.get("/api/admin/lead-update-activity",
+         dependencies=[Depends(require_permission(P.VIEW_AUDIT_LOGS, P.VIEW_TEAM_ANALYTICS))])
 async def get_lead_update_activity(
     date: Optional[str] = None,        # YYYY-MM-DD — single day (legacy)
     date_from: Optional[str] = None,   # YYYY-MM-DD — range start (inclusive)
@@ -4302,7 +4518,8 @@ async def get_counselors():
         return []
 
 
-@app.get("/api/counselors/performance")
+@app.get("/api/counselors/performance",
+         dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
 async def get_counselor_performance():
     """Live counselor performance computed from leads table - SUPABASE ONLY.
 
@@ -4373,7 +4590,8 @@ async def get_counselor_performance():
         return []
 
 
-@app.get("/api/counselors/performance-comparison")
+@app.get("/api/counselors/performance-comparison",
+         dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
 @cache_async_result(STATS_CACHE, "counselor_performance_comparison")
 async def get_counselor_performance_comparison(created_from: Optional[str] = None, created_to: Optional[str] = None):
     """Deeper counselor performance: response time, follow-up cadence, and
@@ -4493,38 +4711,59 @@ async def get_counselor_performance_comparison(created_from: Optional[str] = Non
 # USER MANAGEMENT ENDPOINTS
 # ============================================================================
 
+def _count_active_super_admins(exclude_id=None) -> int:
+    """How many *other* active Super Admins exist. Used to stop the org from
+    locking itself out by demoting / deactivating / deleting the last one."""
+    try:
+        users = supabase_data.get_all_users() or []
+    except Exception as e:
+        logger.error("could not enumerate users for super-admin guard: {}", e)
+        # Fail closed: pretend there are none so a destructive change is blocked.
+        return 0
+    n = 0
+    for u in users:
+        if exclude_id is not None and str(u.get("id")) == str(exclude_id):
+            continue
+        act = u.get("is_active", True)
+        if (u.get("role") == ROLE_SUPER_ADMIN) and not (act is False or act in (0, "0", "false", "False", "no", "No", "")):
+            n += 1
+    return n
+
+
 @app.get("/api/users")
-async def get_users():
-    """Get all users in the organization"""
-    
+async def get_users(actor: dict = Depends(require_permission(P.VIEW_USERS))):
+    """List users. Requires view_users (Super Admin / Manager / Team Leader).
+    Secrets (password hashes, tokens) are stripped from the response."""
     try:
         users = supabase_data.get_all_users()
-        return users
+        return sanitize_users(users)
     except Exception as e:
         logger.error(f"Error fetching users: {e}")
         return []
 
 @app.get("/api/users/{user_id}", response_model=UserResponse)
-async def get_user(user_id: int):
-    """Get a specific user by ID - SUPABASE ONLY"""
-    
+async def get_user(user_id: int, actor: dict = Depends(current_active_user)):
+    """Get a specific user. Callers may always read their own record;
+    reading anyone else's requires view_users."""
+    if str(actor.get("id")) != str(user_id) and not rbac.has_permission(actor["role"], P.VIEW_USERS):
+        raise HTTPException(status_code=403, detail="Access denied. Required permission: view_users")
     user = supabase_data.get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    return user
+    return sanitize_user(user)
 
 @app.post("/api/users", response_model=UserResponse)
-async def create_user(user: UserCreate):
-    """Create a new user - SUPABASE ONLY"""
-    
-    # Check if email already exists
+async def create_user(user: UserCreate, actor: dict = Depends(require_permission(P.CREATE_USER))):
+    """Create a user. Requires create_user. A non Super Admin cannot create a
+    user at or above their own role (no privilege escalation)."""
+    assert_can_administer_user(actor, user.role, action="create")
+
     existing = supabase_data.get_user_by_email(user.email)
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
-    
-    # Hash the password for security
+
     hashed_password = get_password_hash(user.password)
-    
+
     payload = {
         "full_name": user.full_name,
         "email": user.email,
@@ -4538,49 +4777,101 @@ async def create_user(user: UserCreate):
         "created_at": datetime.utcnow().isoformat(),
         "updated_at": datetime.utcnow().isoformat(),
     }
-    
+
     try:
         db_user = supabase_data.create_user(payload)
         if not db_user:
             raise HTTPException(status_code=500, detail="Failed to create user")
-        return db_user
+        _audit_event("user.create", f"created user {user.email} with role {user.role}",
+                     actor=actor, entity_type="user", entity_id=str(db_user.get("id")))
+        return sanitize_user(db_user)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error creating user: {e}")
         raise HTTPException(status_code=500, detail="Failed to create user")
 
 @app.put("/api/users/{user_id}", response_model=UserResponse)
-async def update_user(user_id: int, user: UserUpdate):
-    """Update user information - SUPABASE ONLY"""
-    
-    # Check if user exists
+async def update_user(user_id: int, user: UserUpdate, actor: dict = Depends(require_permission(P.EDIT_USER))):
+    """Update a user. Requires edit_user.
+
+    Hierarchy guard-rails (enforced for everyone below Super Admin):
+      * cannot edit a user whose current role is at/above your own
+      * cannot set a user's role to one at/above your own
+      * cannot change your own role, and cannot deactivate yourself
+      * cannot demote / deactivate the last active Super Admin
+    """
     db_user = supabase_data.get_user_by_id(user_id)
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
-    
-    # Update fields
+
     update_data = user.dict(exclude_unset=True)
+    is_self = str(actor.get("id")) == str(user_id)
+
+    # role changes
+    new_role = update_data.get("role")
+    if new_role is not None and new_role != db_user.get("role"):
+        if is_self:
+            raise HTTPException(status_code=403, detail="You cannot change your own role.")
+        assert_can_administer_user(actor, db_user.get("role"), action="modify")
+        assert_can_administer_user(actor, new_role, action="assign the role to")
+        if db_user.get("role") == ROLE_SUPER_ADMIN and _count_active_super_admins(exclude_id=user_id) == 0:
+            raise HTTPException(status_code=409, detail="Cannot demote the last active Super Admin.")
+    else:
+        # editing other fields on someone at/above your rank is still off-limits
+        assert_can_administer_user(actor, db_user.get("role"), action="modify")
+
+    # deactivation
+    if "is_active" in update_data:
+        new_active = update_data["is_active"]
+        deactivating = new_active is False or new_active in (0, "0", "false", "False", "no", "No", "")
+        if deactivating:
+            if is_self:
+                raise HTTPException(status_code=403, detail="You cannot deactivate your own account.")
+            if db_user.get("role") == ROLE_SUPER_ADMIN and _count_active_super_admins(exclude_id=user_id) == 0:
+                raise HTTPException(status_code=409, detail="Cannot deactivate the last active Super Admin.")
+
+    # password change through this route: hash it, never store plaintext
+    if update_data.get("password"):
+        update_data["password"] = get_password_hash(update_data["password"])
+    elif "password" in update_data:
+        update_data.pop("password")
+
     update_data['updated_at'] = datetime.utcnow().isoformat()
-    
+
     updated = supabase_data.update_user(user_id, update_data)
     if not updated:
         raise HTTPException(status_code=500, detail="Failed to update user")
-    return updated
+
+    _changed = sorted(k for k in update_data if k not in ("updated_at", "password"))
+    if "password" in (user.dict(exclude_unset=True)):
+        _changed.append("password")
+    _audit_event("user.update", f"updated user {db_user.get('email')} fields={_changed}",
+                 actor=actor, entity_type="user", entity_id=str(user_id))
+    return sanitize_user(updated)
 
 @app.delete("/api/users/{user_id}")
-async def delete_user(user_id: int):
-    """Delete a user - SUPABASE ONLY"""
-    
-    # Check if user exists
+async def delete_user(user_id: int, actor: dict = Depends(require_permission(P.DELETE_USER))):
+    """Delete a user. Requires delete_user. Cannot delete yourself, cannot
+    delete a user at/above your own role, cannot delete the last Super Admin."""
     db_user = supabase_data.get_user_by_id(user_id)
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
+    assert_not_self(actor, db_user, action="delete")
+    assert_can_administer_user(actor, db_user.get("role"), action="delete")
+    if db_user.get("role") == ROLE_SUPER_ADMIN and _count_active_super_admins(exclude_id=user_id) == 0:
+        raise HTTPException(status_code=409, detail="Cannot delete the last active Super Admin.")
+
     success = supabase_data.delete_user(user_id)
     if not success:
         raise HTTPException(status_code=500, detail="Failed to delete user")
+    _audit_event("user.delete", f"deleted user {db_user.get('email')} (role {db_user.get('role')})",
+                 actor=actor, entity_type="user", entity_id=str(user_id))
     return {"message": "User deleted successfully"}
 
-@app.get("/api/analytics/revenue-by-country")
+@app.get("/api/analytics/revenue-by-country",
+         dependencies=[Depends(require_permission(P.VIEW_ALL_REVENUE))])
 async def revenue_by_country(created_from: Optional[str] = None, created_to: Optional[str] = None):
     """Get revenue breakdown by country - SUPABASE ONLY"""
 
@@ -4617,7 +4908,8 @@ async def revenue_by_country(created_from: Optional[str] = None, created_to: Opt
         logger.error(f"Error getting revenue by country: {e}")
         return []
 
-@app.get("/api/analytics/conversion-funnel")
+@app.get("/api/analytics/conversion-funnel",
+         dependencies=[Depends(require_permission(P.VIEW_ANALYTICS))])
 async def conversion_funnel(created_from: Optional[str] = None, created_to: Optional[str] = None):
     """Get conversion funnel metrics - SUPABASE ONLY"""
 
@@ -4650,14 +4942,18 @@ async def conversion_funnel(created_from: Optional[str] = None, created_to: Opti
 @app.post("/api/leads/{lead_id}/send-whatsapp")
 async def send_whatsapp(
     lead_id: str,
-    request: WhatsAppRequest
+    request: WhatsAppRequest,
+    actor: dict = Depends(require_permission(P.SEND_WHATSAPP)),
 ):
-    """Send WhatsApp message via Twilio - SUPABASE ONLY"""
-    
+    """Send WhatsApp message via Twilio - SUPABASE ONLY.
+    Requires send_whatsapp + access to the lead."""
+
     lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
-    
+
+    assert_can_view_lead(actor, lead)
+
     if not lead.get('whatsapp'):
         raise HTTPException(status_code=400, detail="Lead has no WhatsApp number")
     
@@ -4702,14 +4998,18 @@ async def send_whatsapp(
 @app.post("/api/leads/{lead_id}/send-email")
 async def send_email(
     lead_id: str,
-    request: EmailRequest
+    request: EmailRequest,
+    actor: dict = Depends(require_permission(P.SEND_WHATSAPP)),
 ):
-    """Send email via Resend - SUPABASE ONLY"""
-    
+    """Send email via Resend - SUPABASE ONLY.
+    Requires outbound-comms permission + access to the lead."""
+
     lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
-    
+
+    assert_can_view_lead(actor, lead)
+
     if not lead.get('email'):
         raise HTTPException(status_code=400, detail="Lead has no email address")
     
@@ -4753,13 +5053,16 @@ async def send_email(
         raise HTTPException(status_code=500, detail=result.get("error", "Failed to send email"))
 
 @app.post("/api/leads/{lead_id}/trigger-welcome")
-async def trigger_welcome(lead_id: str):
+async def trigger_welcome(lead_id: str,
+                          actor: dict = Depends(require_permission(P.SEND_WHATSAPP))):
     """Trigger automated welcome sequence (Email + WhatsApp) - SUPABASE ONLY"""
-    
+
     lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
-    
+
+    assert_can_view_lead(actor, lead)
+
     from communication_service import comm_service
     results = []
     
@@ -4795,13 +5098,16 @@ async def trigger_welcome(lead_id: str):
 @app.post("/api/leads/{lead_id}/trigger-followup")
 async def trigger_followup(
     lead_id: str,
-    request: FollowUpRequest
+    request: FollowUpRequest,
+    actor: dict = Depends(require_permission(P.SEND_WHATSAPP)),
 ):
     """Trigger automated follow-up sequence - SUPABASE ONLY"""
-    
+
     lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
+
+    assert_can_view_lead(actor, lead)
     
     from communication_service import comm_service
     
@@ -4846,7 +5152,8 @@ async def trigger_followup(
 @app.post("/api/leads/{lead_id}/assign")
 async def assign_lead(
     lead_id: str,
-    request: AssignmentRequest
+    request: AssignmentRequest,
+    actor: dict = Depends(require_permission(P.ASSIGN_LEAD)),
 ):
     """
     Assign lead to counselor - SUPABASE ONLY (Simplified)
@@ -4884,7 +5191,8 @@ async def assign_lead(
 
 @app.post("/api/leads/assign-all")
 async def assign_all_unassigned(
-    request: AssignmentRequest
+    request: AssignmentRequest,
+    actor: dict = Depends(require_permission(P.ASSIGN_LEAD)),
 ):
     """Assign all unassigned leads in bulk - SUPABASE ONLY"""
     
@@ -4925,7 +5233,8 @@ async def assign_all_unassigned(
 @app.post("/api/leads/{lead_id}/reassign")
 async def reassign_lead(
     lead_id: str,
-    request: ReassignmentRequest
+    request: ReassignmentRequest,
+    actor: dict = Depends(require_permission(P.ASSIGN_LEAD)),
 ):
     """Reassign lead to different counselor - SUPABASE ONLY"""
     
@@ -4959,7 +5268,8 @@ async def reassign_lead(
         "new_counselor": request.new_counselor
     }
 
-@app.get("/api/counselors/workload")
+@app.get("/api/counselors/workload",
+         dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
 @cache_async_result(STATS_CACHE, "counselor_workload")
 async def get_counselor_workloads():
     """Get workload statistics for all counselors (cached for 1 minute) - SUPABASE ONLY"""
@@ -5001,7 +5311,8 @@ async def get_counselor_workloads():
         logger.error(f"Error getting counselor workloads: {e}")
         return {"counselors": [], "total_counselors": 0, "total_active_leads": 0, "average_workload": 0}
 
-@app.post("/api/workflows/trigger")
+@app.post("/api/workflows/trigger",
+          dependencies=[Depends(require_manager_up)])
 async def trigger_workflows():
     """Manually trigger automated workflows for all leads - SUPABASE ONLY"""
     
@@ -5041,7 +5352,8 @@ async def trigger_workflows():
 # API ENDPOINTS - CACHE MANAGEMENT
 # ============================================================================
 
-@app.get("/api/cache/stats")
+@app.get("/api/cache/stats",
+         dependencies=[Depends(require_super_admin)])
 async def get_cache_statistics():
     """Get cache statistics for monitoring"""
     stats = get_cache_stats()
@@ -5051,7 +5363,8 @@ async def get_cache_statistics():
         "timestamp": datetime.utcnow().isoformat()
     }
 
-@app.post("/api/cache/clear")
+@app.post("/api/cache/clear",
+          dependencies=[Depends(require_super_admin)])
 async def clear_cache(cache_name: Optional[str] = None):
     """Clear cache (all or specific cache)"""
     
@@ -5092,7 +5405,8 @@ async def clear_cache(cache_name: Optional[str] = None):
 # ML MODEL INFO & VERSIONING
 # ============================================================================
 
-@app.get("/api/ml/model-info")
+@app.get("/api/ml/model-info",
+         dependencies=[Depends(require_manager_up)])
 async def get_model_info():
     """Get current ML model version, metadata, and performance metrics."""
     model = get_cached_model()
@@ -5711,7 +6025,7 @@ async def metrics():
 async def send_communication(
     comm_type: str,
     payload: CommunicationsSendRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_permission(P.SEND_WHATSAPP)),
 ):
     """Send WhatsApp or email communication for a lead using Meta WhatsApp and SMTP."""
     if comm_type not in {"whatsapp", "email"}:
@@ -5721,12 +6035,9 @@ async def send_communication(
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
-    agent_id = current_user.get("email") or current_user.get("full_name")
-    role = current_user.get("role", "")
-    if role == "Counselor" and lead.get("assigned_to") != agent_id:
-        raise HTTPException(status_code=403, detail="You can only message your own leads")
+    assert_can_view_lead(current_user, lead)
 
-    sender_name = payload.sender or agent_id or "CRM"
+    sender_name = payload.sender or current_user.get("full_name") or current_user.get("email") or "CRM"
     timestamp = datetime.utcnow().isoformat()
 
     # Send via unified communication service
@@ -5782,10 +6093,7 @@ async def get_communication_history(
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
-    role = current_user.get("role", "")
-    agent_id = current_user.get("email") or current_user.get("full_name")
-    if role == "Counselor" and lead.get("assigned_to") != agent_id:
-        raise HTTPException(status_code=403, detail="You can only view history for your own leads")
+    assert_can_view_lead(current_user, lead)
 
     return supabase_data.get_communication_history(lead_id, type)
 
@@ -5793,17 +6101,14 @@ async def get_communication_history(
 @app.post("/api/communications/call/initiate")
 async def initiate_communication_call(
     payload: CallInitiateRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_permission(P.SEND_WHATSAPP)),
 ):
     """Initiate a voice call for a lead."""
     lead = supabase_data.get_lead_by_id(payload.lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
-    role = current_user.get("role", "")
-    agent_id = current_user.get("email") or current_user.get("full_name")
-    if role == "Counselor" and lead.get("assigned_to") != agent_id:
-        raise HTTPException(status_code=403, detail="You can only call your own leads")
+    assert_can_view_lead(current_user, lead)
 
     call_sid = _uuid.uuid4().hex
     result = {
@@ -5835,7 +6140,7 @@ async def initiate_communication_call(
 async def get_communications_training_data(
     type: Optional[str] = Query(None),
     limit: int = Query(1000, ge=1, le=5000),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_team_leader_up),
 ):
     """Get communication records for training or review."""
     training_records = supabase_data.get_training_data(type, limit)
@@ -5848,7 +6153,7 @@ async def get_communications_training_data(
 @app.post("/api/communications/mark-training")
 async def mark_communications_training(
     data: Dict[str, Any],
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_team_leader_up),
 ):
     """Mark communication records as used for training."""
     ids = []
@@ -5898,21 +6203,18 @@ class ChatMessageResponse(BaseModel):
 @app.get("/api/leads/{lead_id}/chat", response_model=List[ChatMessageResponse])
 async def get_chat_messages(
     lead_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_permission(P.VIEW_OWN_WHATSAPP, P.VIEW_ALL_WHATSAPP)),
 ):
     """Get all WhatsApp chat messages for a lead - SUPABASE ONLY.
-    RBAC: Counselors can only read chats for their own assigned leads."""
+    RBAC: requires a WhatsApp view permission; callers without
+    view_all_whatsapp may only read chats for their own assigned leads."""
 
     try:
         lead_row = supabase_data.client.table('leads').select('id,assigned_to').eq('lead_id', lead_id).execute()
         if not lead_row.data:
             return []
         lead_record = lead_row.data[0]
-        role = current_user.get("role", "")
-        if role == "Counselor":
-            agent_id = current_user.get("email") or current_user.get("full_name")
-            if lead_record.get("assigned_to") != agent_id:
-                raise HTTPException(status_code=403, detail="Access denied: not your lead")
+        assert_can_view_lead(current_user, lead_record)
         internal_id = lead_record['id']
         response = supabase_data.client.table('chat_messages').select('*').eq('lead_db_id', internal_id).order('timestamp').execute()
         return response.data if response.data else []
@@ -5927,21 +6229,18 @@ async def get_chat_messages(
 async def send_chat_message(
     lead_id: str,
     req: ChatSendRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_permission(P.SEND_WHATSAPP)),
 ):
     """Send a WhatsApp message (text or media) to a lead via Interakt - SUPABASE ONLY.
-    RBAC: Counselors can only send to their own assigned leads."""
+    RBAC: requires send_whatsapp; callers without view_all_whatsapp may only
+    send to their own assigned leads."""
 
     lead_row = supabase_data.client.table('leads').select('*').eq('lead_id', lead_id).execute()
     if not lead_row.data:
         raise HTTPException(status_code=404, detail="Lead not found")
 
     lead = lead_row.data[0]
-    role = current_user.get("role", "")
-    if role == "Counselor":
-        agent_id = current_user.get("email") or current_user.get("full_name")
-        if lead.get("assigned_to") != agent_id:
-            raise HTTPException(status_code=403, detail="Access denied: not your lead")
+    assert_can_view_lead(current_user, lead)
     internal_id = lead['id']
     phone = lead.get('whatsapp') or lead.get('phone')
     if not phone:
@@ -5988,10 +6287,15 @@ async def send_chat_message(
 
 @app.post("/api/interakt/webhook")
 async def interakt_webhook(request: FARequest):
-    """Receive incoming WhatsApp messages from Interakt webhook - SUPABASE ONLY"""
-    
+    """Receive incoming WhatsApp messages from Interakt webhook - SUPABASE ONLY.
+
+    AUTH: public (no CRM JWT) but the raw body is verified against
+    INTERAKT_WEBHOOK_SECRET (HMAC-SHA256, or a static shared-secret header)
+    before anything is processed."""
+
+    raw = await verify_interakt_signature(request)
     try:
-        payload = await request.json()
+        payload = json.loads(raw or b"{}")
     except Exception:
         return {"status": "ok"}
     
@@ -6100,7 +6404,8 @@ async def upload_file(file: UploadFile = File(...)):
 # ADMIN DASHBOARD ENDPOINTS
 # ============================================================
 
-@app.get("/api/admin/stats")
+@app.get("/api/admin/stats",
+         dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
 @cache_async_result(STATS_CACHE, "admin_stats")
 async def get_admin_stats():
     """Admin dashboard: total revenue, leads, conversion rate, trends - SUPABASE ONLY"""
@@ -6155,7 +6460,8 @@ async def get_admin_stats():
                 "leads_trend": 0, "conversion_trend": 0, "this_month_leads": 0}
 
 
-@app.get("/api/admin/team-performance")
+@app.get("/api/admin/team-performance",
+         dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
 @cache_async_result(STATS_CACHE, "admin_team_performance")
 async def get_team_performance():
     """Admin dashboard: per-counselor performance metrics - SUPABASE ONLY"""
@@ -6210,7 +6516,8 @@ async def get_team_performance():
 _FUNNEL_STAGE_ORDER = ["Fresh", "Follow Up", "Warm", "Hot", "Enrolled"]
 
 
-@app.get("/api/admin/funnel-analysis")
+@app.get("/api/admin/funnel-analysis",
+         dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
 @cache_async_result(STATS_CACHE, "admin_funnel_analysis")
 async def get_funnel_analysis():
     """Funnel analysis - SUPABASE ONLY.
@@ -6245,7 +6552,8 @@ async def get_funnel_analysis():
         return {"stages": [], "funnel": []}
 
 
-@app.get("/api/admin/revenue-trend")
+@app.get("/api/admin/revenue-trend",
+         dependencies=[Depends(require_permission(P.VIEW_ALL_REVENUE))])
 @cache_async_result(STATS_CACHE, "admin_revenue_trend")
 async def get_revenue_trend(days: int = 30):
     """Admin dashboard: daily revenue trend for past N days - SUPABASE ONLY"""
@@ -6293,8 +6601,13 @@ _SEGMENT_COLOR = {"Hot": "#ef4444", "Warm": "#f59e0b", "Cold": "#3b82f6", "Junk"
 
 
 @app.get("/api/users/{user_id}/stats")
-async def get_user_stats(user_id: int):
-    """Per-user stats for counselor dashboard - SUPABASE ONLY"""
+async def get_user_stats(user_id: int, actor: dict = Depends(current_active_user)):
+    """Per-user stats for counselor dashboard - SUPABASE ONLY.
+    Own stats always allowed; other users' stats need view_users / team analytics."""
+    if str(actor.get("id")) != str(user_id) and not rbac.has_any_permission(
+        actor["role"], (P.VIEW_USERS, P.VIEW_TEAM_ANALYTICS)
+    ):
+        raise HTTPException(status_code=403, detail="Access denied")
 
     try:
         user = supabase_data.get_user_by_id(user_id)
@@ -6393,13 +6706,19 @@ async def get_user_stats(user_id: int):
 
 
 @app.get("/api/users/{user_id}/performance")
-async def get_user_performance(user_id: int, days: int = 7):
-    """Per-user daily performance for sparkline charts - SUPABASE ONLY"""
-    
+async def get_user_performance(user_id: int, days: int = 7,
+                               actor: dict = Depends(current_active_user)):
+    """Per-user daily performance for sparkline charts - SUPABASE ONLY.
+    Own data always allowed; others need view_users / team analytics."""
+    if str(actor.get("id")) != str(user_id) and not rbac.has_any_permission(
+        actor["role"], (P.VIEW_USERS, P.VIEW_TEAM_ANALYTICS)
+    ):
+        raise HTTPException(status_code=403, detail="Access denied")
+
     try:
         from collections import defaultdict
         from datetime import datetime, timedelta
-        
+
         user = supabase_data.get_user_by_id(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
@@ -6486,7 +6805,8 @@ async def mark_all_notifications_read(current_user: dict = Depends(get_current_u
 # HOSPITAL CRUD - UPDATE & DELETE
 # ============================================================
 
-@app.put("/api/hospitals/{hospital_id}", response_model=HospitalResponse)
+@app.put("/api/hospitals/{hospital_id}", response_model=HospitalResponse,
+         dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
 async def update_hospital(hospital_id: int, data: HospitalCreate):
     """Update an existing hospital record - SUPABASE ONLY"""
     
@@ -6512,7 +6832,8 @@ async def update_hospital(hospital_id: int, data: HospitalCreate):
         raise HTTPException(status_code=500, detail="Failed to update hospital.")
 
 
-@app.delete("/api/hospitals/{hospital_id}")
+@app.delete("/api/hospitals/{hospital_id}",
+            dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
 async def delete_hospital(hospital_id: int):
     """Delete a hospital record - SUPABASE ONLY"""
     
@@ -6538,7 +6859,8 @@ async def delete_hospital(hospital_id: int):
 # COURSE CRUD - UPDATE & DELETE
 # ============================================================
 
-@app.put("/api/courses/{course_id}", response_model=CourseResponse)
+@app.put("/api/courses/{course_id}", response_model=CourseResponse,
+         dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
 async def update_course(course_id: int, data: CourseCreate):
     """Update an existing course record - SUPABASE ONLY"""
     
@@ -6565,7 +6887,8 @@ async def update_course(course_id: int, data: CourseCreate):
         raise HTTPException(status_code=500, detail="Failed to update course.")
 
 
-@app.delete("/api/courses/{course_id}")
+@app.delete("/api/courses/{course_id}",
+            dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
 async def delete_course(course_id: int):
     """Delete a course record - SUPABASE ONLY"""
     
@@ -6598,14 +6921,27 @@ class PasswordChangeRequest(BaseModel):
 
 
 @app.put("/api/users/{user_id}/password")
-async def change_password(user_id: int, data: PasswordChangeRequest):
-    """Allow a user to change their own password - SUPABASE ONLY"""
-    
+async def change_password(user_id: int, data: PasswordChangeRequest,
+                          actor: dict = Depends(current_active_user)):
+    """Change a password by supplying the current one.
+
+    A user may change their OWN password. An admin with edit_user may change
+    another user's password this way too (still requires the current one - use
+    /admin-reset-password to bypass that)."""
+    if str(actor.get("id")) != str(user_id) and not rbac.has_permission(actor["role"], P.EDIT_USER):
+        raise HTTPException(status_code=403, detail="You can only change your own password")
+
     import bcrypt as _bcrypt
 
     user = supabase_data.get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    if str(actor.get("id")) != str(user_id):
+        assert_can_administer_user(actor, user.get("role"), action="reset the password of")
+
+    if not data.new_password or len(data.new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
 
     # Verify current password
     password_valid = False
@@ -6641,6 +6977,8 @@ async def change_password(user_id: int, data: PasswordChangeRequest):
     updated = supabase_data.update_user(user_id, {'password': new_hashed})
     if not updated:
         raise HTTPException(status_code=500, detail="Failed to update password")
+    _audit_event("user.password_change", f"password changed for {user.get('email')}",
+                 actor=actor, entity_type="user", entity_id=str(user_id))
     return {"message": "Password updated successfully"}
 
 
@@ -6649,23 +6987,13 @@ class AdminPasswordResetRequest(BaseModel):
 
 
 @app.put("/api/users/{user_id}/admin-reset-password")
-async def admin_reset_password(user_id: int, data: AdminPasswordResetRequest, request: Request):
-    """Allow a Super Admin to reset any user's password without requiring the current password - SUPABASE ONLY"""
-    
-    # Verify caller is Super Admin
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Bearer "):
-        try:
-            token_data = decode_access_token(auth_header.split(" ", 1)[1])
-            if not token_data or token_data.role != "Super Admin":
-                raise HTTPException(status_code=403, detail="Only Super Admins can reset user passwords")
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error("Token decode failed in admin_reset_password: {}", e)
-            raise HTTPException(status_code=403, detail="Only Super Admins can reset user passwords")
-    else:
-        raise HTTPException(status_code=401, detail="Authentication required")
+async def admin_reset_password(user_id: int, data: AdminPasswordResetRequest,
+                               actor: dict = Depends(require_permission(P.MANAGE_ROLES))):
+    """Reset any user's password WITHOUT their current one.
+
+    Gated on the live `manage_roles` permission (Super Admin) - resolved from
+    the database, not the JWT claim, so a demoted admin loses this instantly.
+    Cannot target a user at/above your own role."""
 
     import bcrypt as _bcrypt
 
@@ -6673,8 +7001,10 @@ async def admin_reset_password(user_id: int, data: AdminPasswordResetRequest, re
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    if not data.new_password or len(data.new_password) < 6:
-        raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+    assert_can_administer_user(actor, user.get("role"), action="reset the password of")
+
+    if not data.new_password or len(data.new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
 
     # Never fall back to storing the new password in plain text if bcrypt fails.
     try:
@@ -6690,6 +7020,8 @@ async def admin_reset_password(user_id: int, data: AdminPasswordResetRequest, re
     updated = supabase_data.update_user(user_id, {'password': new_hashed})
     if not updated:
         raise HTTPException(status_code=500, detail="Failed to reset password")
+    _audit_event("user.password_reset", f"admin reset password for {user.get('email')}",
+                 actor=actor, entity_type="user", entity_id=str(user_id))
     return {"message": "Password reset successfully"}
 
 
@@ -6738,7 +7070,8 @@ def _is_connected(content: str) -> bool:
     return True
 
 
-@app.get("/api/analytics/call-timing")
+@app.get("/api/analytics/call-timing",
+         dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
 async def get_call_timing(country: Optional[str] = None):
     """
     Analyse call notes by IST hour and day-of-week.
@@ -6913,7 +7246,8 @@ async def get_call_timing(country: Optional[str] = None):
 # SLA CONFIG & COMPLIANCE
 # ============================================================
 
-@app.get("/api/admin/sla-config")
+@app.get("/api/admin/sla-config",
+         dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
 async def get_sla_config():
     """Get SLA config from Supabase - SUPABASE ONLY"""
     
@@ -6954,7 +7288,8 @@ class SLAConfigUpdate(BaseModel):
     updated_by:              Optional[str]   = None
 
 
-@app.put("/api/admin/sla-config")
+@app.put("/api/admin/sla-config",
+         dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
 async def update_sla_config(data: SLAConfigUpdate):
     """Update SLA config in Supabase - SUPABASE ONLY"""
     
@@ -6984,7 +7319,8 @@ async def update_sla_config(data: SLAConfigUpdate):
         raise HTTPException(status_code=500, detail="Failed to update SLA config")
 
 
-@app.get("/api/admin/sla-compliance")
+@app.get("/api/admin/sla-compliance",
+         dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
 async def get_sla_compliance():
     """
     Returns per-lead SLA status for three rules:
@@ -7018,7 +7354,8 @@ async def get_sla_compliance():
 # COHORT ANALYSIS
 # ============================================================
 
-@app.get("/api/admin/cohort-analysis")
+@app.get("/api/admin/cohort-analysis",
+         dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
 async def get_cohort_analysis():
     """Cohort analysis grouped by signup month, with conversion-rate benchmarks - SUPABASE ONLY"""
 
@@ -7143,7 +7480,8 @@ async def get_cohort_analysis():
 # TIME-TO-CONVERSION FUNNEL
 # ============================================================
 
-@app.get("/api/admin/conversion-time")
+@app.get("/api/admin/conversion-time",
+         dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
 async def get_conversion_time(created_from: Optional[str] = None, created_to: Optional[str] = None):
     """Compute days from creation to enrollment, with histogram + breakdowns - SUPABASE ONLY"""
 
@@ -7231,7 +7569,8 @@ async def get_conversion_time(created_from: Optional[str] = None, created_to: Op
 # SOURCE ATTRIBUTION ANALYTICS
 # ============================================================
 
-@app.get("/api/admin/source-analytics")
+@app.get("/api/admin/source-analytics",
+         dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
 async def get_source_analytics(created_from: Optional[str] = None, created_to: Optional[str] = None):
     """Per-source and per-campaign attribution metrics - SUPABASE ONLY"""
 
@@ -7505,7 +7844,8 @@ async def _decay_scheduler_loop():
 
 # ── REST endpoints ─────────────────────────────────────────────────────────────
 
-@app.get("/api/admin/decay-config")
+@app.get("/api/admin/decay-config",
+         dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
 async def get_decay_config(
     current_user: dict = Depends(get_current_user),
 ):
@@ -7522,7 +7862,8 @@ async def get_decay_config(
     }
 
 
-@app.put("/api/admin/decay-config")
+@app.put("/api/admin/decay-config",
+         dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
 async def update_decay_config(
     payload: dict,
     current_user: dict = Depends(get_current_user)
@@ -7533,7 +7874,8 @@ async def update_decay_config(
     return {"message": "Decay config updated (simplified)"}
 
 
-@app.post("/api/admin/run-decay")
+@app.post("/api/admin/run-decay",
+          dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
 async def manual_run_decay(
     current_user: dict = Depends(get_current_user)
 ):
@@ -7541,7 +7883,8 @@ async def manual_run_decay(
     return {"message": "Decay cycle executed", "affected_leads": 0}
 
 
-@app.get("/api/admin/decay-log")
+@app.get("/api/admin/decay-log",
+         dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
 async def get_decay_log(
     limit: int = 100,
     offset: int = 0,
@@ -7553,7 +7896,8 @@ async def get_decay_log(
     return {"logs": [], "count": 0}
 
 
-@app.get("/api/admin/decay-preview")
+@app.get("/api/admin/decay-preview",
+         dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
 async def get_decay_preview(
     current_user: dict = Depends(get_current_user)
 ):
@@ -7749,7 +8093,8 @@ def _render_template(body: str, variables: dict) -> str:
     return result
 
 
-@app.get("/api/wa-templates")
+@app.get("/api/wa-templates",
+         dependencies=[Depends(require_permission(P.SEND_WHATSAPP, P.VIEW_ALL_WHATSAPP))])
 async def list_wa_templates(
     category: Optional[str] = None,
     current_user: dict = Depends(get_current_user),
@@ -7784,7 +8129,8 @@ async def list_wa_templates(
         return []
 
 
-@app.post("/api/wa-templates")
+@app.post("/api/wa-templates",
+          dependencies=[Depends(require_manager_up)])
 async def create_wa_template(
     payload: dict,
     current_user: dict = Depends(get_current_user)
@@ -7818,7 +8164,8 @@ async def create_wa_template(
     return {"id": created["id"], "message": "Template created", "name": created["name"]}
 
 
-@app.put("/api/wa-templates/{template_id}")
+@app.put("/api/wa-templates/{template_id}",
+         dependencies=[Depends(require_manager_up)])
 async def update_wa_template(
     template_id: int,
     payload: dict,
@@ -7849,7 +8196,8 @@ async def update_wa_template(
     return {"message": "Template updated"}
 
 
-@app.delete("/api/wa-templates/{template_id}")
+@app.delete("/api/wa-templates/{template_id}",
+            dependencies=[Depends(require_manager_up)])
 async def delete_wa_template(
     template_id: int,
     current_user: dict = Depends(get_current_user)
@@ -7873,18 +8221,20 @@ async def delete_wa_template(
 async def send_wa_template(
     lead_id: str,
     payload: dict,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_permission(P.SEND_WHATSAPP))
 ):
     """
     Render a template with variable overrides and send it via WhatsApp - SUPABASE ONLY
     payload = { template_id: int, variable_overrides: { key: value, ... } }
     """
-    
+
     import json
-    
+
     lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
+
+    assert_can_view_lead(current_user, lead)
 
     phone = lead.whatsapp or lead.phone
     if not phone:
@@ -8157,7 +8507,7 @@ async def refresh_repeated_marks(current_user: dict = Depends(get_current_user))
 @app.post("/api/leads/merge")
 async def merge_leads(
     payload: dict,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_team_leader_up)
 ):
     """
     Merge two leads - SUPABASE ONLY (Simplified)
@@ -8369,7 +8719,10 @@ async def meta_whatsapp_verify(
     hub_challenge: Optional[str] = Query(None, alias="hub.challenge"),
 ):
     """Meta webhook verification. Paste this URL in Meta Developer Console → Webhooks."""
-    if hub_mode == "subscribe" and hub_verify_token == _META_WA_VERIFY_TOKEN:
+    _tok_ok = bool(hub_verify_token) and _hmac.compare_digest(
+        str(hub_verify_token), str(_META_WA_VERIFY_TOKEN)
+    )
+    if hub_mode == "subscribe" and _tok_ok:
         logger.info("Meta WhatsApp webhook verified successfully")
         if hub_challenge and hub_challenge.isdigit():
             return int(hub_challenge)
@@ -8383,9 +8736,15 @@ async def meta_whatsapp_webhook(request: FARequest):
     Receive inbound WhatsApp messages from Meta Cloud API.
     Saves each message to whatsapp_messages with assigned_agent_id = lead's assigned_to.
     Supabase Realtime then notifies the correct counselor's browser in real-time.
+
+    AUTH: this endpoint is public (Meta has no CRM JWT) but the request is
+    authenticated by verifying Meta's X-Hub-Signature-256 HMAC over the raw
+    body against META_APP_SECRET. An unsigned / bad-signature request is
+    rejected before anything is written.
     """
+    raw = await verify_meta_signature(request)
     try:
-        body = await request.json()
+        body = json.loads(raw or b"{}")
     except Exception as e:
         # Still return 200 "ok" - a non-200 here makes Meta retry a payload
         # that will never parse, forever. Just log it so we can see if this
@@ -8472,25 +8831,45 @@ class MetaWASendRequest(BaseModel):
     msg_type: str = "text"
 
 
+_PHONE_RE = re.compile(r"^\+?\d{6,20}$")
+
+
+def _safe_phone(phone_number: str) -> str:
+    """Reject anything that is not a bare phone number before it is ever
+    interpolated into a PostgREST filter expression (filter-injection guard)."""
+    p = (phone_number or "").strip()
+    if not _PHONE_RE.match(p):
+        raise HTTPException(status_code=400, detail="Invalid phone number")
+    return p
+
+
+def _wa_scope_name(user: dict) -> Optional[str]:
+    """Full name to filter WhatsApp rows by, or None if the caller may see all.
+    Restricted (own-only) when the role has VIEW_OWN_WHATSAPP but not
+    VIEW_ALL_WHATSAPP - i.e. Counselors."""
+    if rbac.has_permission(user["role"], P.VIEW_ALL_WHATSAPP):
+        return None
+    return (user.get("full_name") or "").strip()
+
+
 @app.post("/api/whatsapp/send")
 async def meta_whatsapp_send(
     payload: MetaWASendRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_permission(P.SEND_WHATSAPP)),
 ):
     """
     Send WhatsApp message via Meta Cloud API.
-    RBAC: Counselors can only message their own assigned leads.
-          Managers / Team Leaders / Super Admin can message any lead.
+    RBAC: requires send_whatsapp. Callers without view_all_whatsapp
+          (Counselors) may only message leads assigned to them.
+          Finance / Marketing have no WhatsApp permission at all.
     """
     lead = supabase_data.get_lead_by_id(payload.lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
-    role = current_user.get("role", "")
-    if role == "Counselor":
-        agent_id = current_user.get("email") or current_user.get("full_name")
-        if lead.get("assigned_to") != agent_id:
-            raise HTTPException(status_code=403, detail="You can only message your own leads")
+    restricted_name = _wa_scope_name(current_user)
+    if restricted_name is not None and norm_name(lead.get("assigned_to")) != norm_name(restricted_name):
+        raise HTTPException(status_code=403, detail="You can only message your own leads")
 
     phone = lead.get("whatsapp") or lead.get("phone")
     if not phone:
@@ -8498,6 +8877,9 @@ async def meta_whatsapp_send(
 
     result = _meta_wa_send_text(phone, payload.message)
 
+    # assigned_agent_id is ALWAYS the lead's assigned counselor name so that
+    # inbound (webhook) and outbound rows agree and the conversation filter
+    # by name works for both directions.
     supabase_data.client.table("whatsapp_messages").insert({
         "message_id": result.get("message_id", ""),
         "from_number": _META_WA_BUSINESS_NUMBER,
@@ -8507,7 +8889,8 @@ async def meta_whatsapp_send(
         "message_type": "text",
         "direction": "outbound",
         "status": "sent" if result["success"] else "failed",
-        "assigned_agent_id": current_user.get("email") or current_user.get("full_name"),
+        "assigned_agent_id": lead.get("assigned_to") or (current_user.get("full_name") or ""),
+        "sent_by": current_user.get("full_name") or current_user.get("email"),
         "timestamp": datetime.utcnow().isoformat(),
         "is_read": True,
     }).execute()
@@ -8519,18 +8902,19 @@ async def meta_whatsapp_send(
 
 
 @app.get("/api/whatsapp/conversations")
-async def get_whatsapp_conversations(current_user: dict = Depends(get_current_user)):
+async def get_whatsapp_conversations(
+    current_user: dict = Depends(require_permission(P.VIEW_OWN_WHATSAPP, P.VIEW_ALL_WHATSAPP)),
+):
     """
     List WhatsApp conversations.
-    RBAC: Counselors see only their assigned conversations.
-          Managers / Team Leaders / Super Admin see all.
+    RBAC: requires a WhatsApp view permission. Callers without
+          view_all_whatsapp see only conversations for their own leads.
     """
-    role = current_user.get("role", "")
+    restricted_name = _wa_scope_name(current_user)
     try:
         query = supabase_data.client.table("whatsapp_conversations").select("*")
-        if role == "Counselor":
-            agent_id = current_user.get("email") or current_user.get("full_name")
-            query = query.eq("assigned_agent_id", agent_id)
+        if restricted_name is not None:
+            query = query.eq("assigned_agent_id", restricted_name)
         result = query.order("updated_at", desc=True).limit(100).execute()
         return result.data or []
     except Exception as e:
@@ -8541,19 +8925,20 @@ async def get_whatsapp_conversations(current_user: dict = Depends(get_current_us
 @app.get("/api/whatsapp/history/{phone_number}")
 async def get_whatsapp_history(
     phone_number: str,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_permission(P.VIEW_OWN_WHATSAPP, P.VIEW_ALL_WHATSAPP)),
 ):
     """
     Get full message history for a phone number.
-    RBAC: Counselors can only view history for leads assigned to them.
+    RBAC: callers without view_all_whatsapp may only view history for a
+          lead assigned to them.
     """
-    role = current_user.get("role", "")
-    if role == "Counselor":
+    phone_number = _safe_phone(phone_number)
+    restricted_name = _wa_scope_name(current_user)
+    if restricted_name is not None:
         lead = _get_lead_by_phone(phone_number)
         if not lead:
             raise HTTPException(status_code=404, detail="Lead not found")
-        agent_id = current_user.get("email") or current_user.get("full_name")
-        if lead.get("assigned_to") != agent_id:
+        if norm_name(lead.get("assigned_to")) != norm_name(restricted_name):
             raise HTTPException(status_code=403, detail="Access denied: not your lead")
 
     try:
@@ -8569,20 +8954,18 @@ async def get_whatsapp_history(
 @app.post("/api/whatsapp/mark-read")
 async def mark_whatsapp_read(
     payload: dict,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_permission(P.VIEW_OWN_WHATSAPP, P.VIEW_ALL_WHATSAPP)),
 ):
     """Mark all messages from a phone number as read and reset unread count."""
-    phone_number = payload.get("phone_number")
-    if not phone_number:
-        raise HTTPException(status_code=400, detail="phone_number required")
+    phone_number = _safe_phone(payload.get("phone_number") or "")
 
-    role = current_user.get("role", "")
-    if role == "Counselor":
+    restricted_name = _wa_scope_name(current_user)
+    if restricted_name is not None:
         lead = _get_lead_by_phone(phone_number)
-        if lead:
-            agent_id = current_user.get("email") or current_user.get("full_name")
-            if lead.get("assigned_to") != agent_id:
-                raise HTTPException(status_code=403, detail="Access denied: not your lead")
+        # Fail closed: a restricted caller with no matching lead has no
+        # business touching this conversation.
+        if not lead or norm_name(lead.get("assigned_to")) != norm_name(restricted_name):
+            raise HTTPException(status_code=403, detail="Access denied: not your lead")
 
     try:
         supabase_data.client.table("whatsapp_messages").update(
@@ -8603,7 +8986,8 @@ async def mark_whatsapp_read(
 # GOOGLE SHEETS / META LEADS SYNC
 # ============================================================================
 
-@app.post("/api/sheets/sync")
+@app.post("/api/sheets/sync",
+          dependencies=[Depends(require_team_leader_up)])
 async def trigger_sheet_sync(background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
     """Kick off a Google Sheets → CRM sync in the background.
 
@@ -8644,7 +9028,8 @@ async def trigger_sheet_sync(background_tasks: BackgroundTasks, current_user: di
 
 _SYNC_TIMEOUT_MINUTES = 20  # auto-reset if stuck in 'running' longer than this
 
-@app.get("/api/sheets/status")
+@app.get("/api/sheets/status",
+         dependencies=[Depends(require_team_leader_up)])
 async def get_sheet_sync_status(current_user: dict = Depends(get_current_user)):
     """Return last sync time, in-progress status, and config."""
     try:
@@ -8689,7 +9074,8 @@ async def get_sheet_sync_status(current_user: dict = Depends(get_current_user)):
         return {"enabled": False, "last_synced_at": None, "sync_status": "idle", "error": str(e)}
 
 
-@app.get("/api/sheets/adsets")
+@app.get("/api/sheets/adsets",
+         dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
 async def get_adset_stats(current_user: dict = Depends(get_current_user)):
     """Return per-adset lead counts for all Meta-sourced leads."""
     try:
@@ -8700,7 +9086,8 @@ async def get_adset_stats(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/sheets/daily-stats")
+@app.get("/api/sheets/daily-stats",
+         dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
 async def get_daily_adset_stats(
     current_user: dict = Depends(get_current_user),
     days: int = Query(30, ge=1, le=365),
@@ -8832,7 +9219,8 @@ async def get_daily_adset_stats(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/sheets/tabs")
+@app.get("/api/sheets/tabs",
+         dependencies=[Depends(require_team_leader_up)])
 async def get_sheet_tabs_endpoint(current_user: dict = Depends(get_current_user)):
     """List all tab names in the Google Sheet."""
     try:
@@ -8842,7 +9230,8 @@ async def get_sheet_tabs_endpoint(current_user: dict = Depends(get_current_user)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/sheets/diagnose")
+@app.get("/api/sheets/diagnose",
+         dependencies=[Depends(require_team_leader_up)])
 async def diagnose_sheet_sync(current_user: dict = Depends(get_current_user)):
     """
     Dry-run diagnostic — does NOT import any data.
@@ -8928,7 +9317,7 @@ async def diagnose_sheet_sync(current_user: dict = Depends(get_current_user)):
 
 
 @app.post("/api/leads/cleanup-duplicates")
-async def cleanup_duplicate_leads_endpoint(current_user: dict = Depends(get_current_user)):
+async def cleanup_duplicate_leads_endpoint(current_user: dict = Depends(require_manager_up)):
     """
     Merge duplicate leads that share a phone number or email address.
     Keeps the most-progressed record, transfers notes/activities, deletes the rest.
@@ -8945,7 +9334,8 @@ async def cleanup_duplicate_leads_endpoint(current_user: dict = Depends(get_curr
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/mbg/phonebooks")
+@app.get("/api/mbg/phonebooks",
+         dependencies=[Depends(require_permission(P.EXPORT_REPORTS))])
 async def mbg_phonebooks(current_user: dict = Depends(get_current_user)):
     """Return all MBG phonebooks (tags) so the UI can show their IDs."""
     if not _MBG_API_KEY:
@@ -8963,7 +9353,8 @@ async def mbg_phonebooks(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=502, detail=f"MBG API error: {exc}")
 
 
-@app.get("/api/mbg/status")
+@app.get("/api/mbg/status",
+         dependencies=[Depends(require_permission(P.EXPORT_REPORTS))])
 async def mbg_status(current_user: dict = Depends(get_current_user)):
     """Check whether the MBG integration is configured and reachable."""
     if not _MBG_API_KEY:
@@ -8994,7 +9385,8 @@ def _fmt_phone_mbg(phone: str) -> str:
     return phone
 
 
-@app.get("/api/export/mbg-contacts")
+@app.get("/api/export/mbg-contacts",
+         dependencies=[Depends(require_permission(P.EXPORT_REPORTS, P.EXPORT_FINANCIAL_DATA))])
 async def export_mbg_contacts(
     status: Optional[str] = None,
     assigned_to: Optional[str] = None,

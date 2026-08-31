@@ -135,32 +135,72 @@ export const rolePermissions = {
   ],
 };
 
+// The live permission list from GET /api/auth/me. When set, it is the source
+// of truth (it reflects the user's CURRENT server-side role); the static
+// role->permission map below is only the fallback for the brief window before
+// /api/auth/me resolves.
+let _serverPermissions = null;
+
+export const setServerPermissions = (perms) => {
+  _serverPermissions = Array.isArray(perms) ? perms : null;
+};
+
+export const getEffectivePermissions = (userRole) => {
+  if (_serverPermissions) return _serverPermissions;
+  return rolePermissions[userRole] || [];
+};
+
 export const hasPermission = (userRole, permission) => {
-  // If no role specified, grant all permissions (for development/testing)
-  if (!userRole) return true;
-  
-  const permissions = rolePermissions[userRole] || [];
-  return permissions.includes(permission);
+  // FAIL CLOSED: no known role and no server permission list => no access.
+  if (!_serverPermissions && !userRole) return false;
+  return getEffectivePermissions(userRole).includes(permission);
 };
 
 export const hasAnyPermission = (userRole, permissionList) => {
-  return permissionList.some(permission => hasPermission(userRole, permission));
+  return permissionList.some((permission) => hasPermission(userRole, permission));
 };
 
+export const hasAllPermissions = (userRole, permissionList) => {
+  return permissionList.every((permission) => hasPermission(userRole, permission));
+};
+
+// Every guarded route -> the permission(s) that unlock it (any-of).
+export const ROUTE_PERMISSIONS = {
+  '/dashboard': [PERMISSIONS.VIEW_OWN_LEADS, PERMISSIONS.VIEW_ALL_LEADS],
+  '/leads': [PERMISSIONS.VIEW_OWN_LEADS, PERMISSIONS.VIEW_ALL_LEADS],
+  '/lead-analysis': [PERMISSIONS.VIEW_OWN_LEADS, PERMISSIONS.VIEW_ALL_LEADS],
+  '/pipeline': [PERMISSIONS.VIEW_OWN_LEADS, PERMISSIONS.VIEW_ALL_LEADS],
+  '/followups': [PERMISSIONS.VIEW_OWN_LEADS, PERMISSIONS.VIEW_ALL_LEADS],
+  '/meta-leads': [PERMISSIONS.VIEW_ALL_LEADS],
+  '/website-leads': [PERMISSIONS.VIEW_ALL_LEADS],
+  '/users': [PERMISSIONS.VIEW_USERS],
+  '/analytics': [PERMISSIONS.VIEW_ANALYTICS, PERMISSIONS.VIEW_TEAM_ANALYTICS],
+  '/team-performance': [PERMISSIONS.VIEW_TEAM_ANALYTICS],
+  '/conversion-time': [PERMISSIONS.VIEW_TEAM_ANALYTICS],
+  '/cohort-analysis': [PERMISSIONS.VIEW_TEAM_ANALYTICS],
+  '/source-analytics': [PERMISSIONS.VIEW_TEAM_ANALYTICS],
+  '/sla': [PERMISSIONS.VIEW_TEAM_ANALYTICS],
+  '/score-decay': [PERMISSIONS.VIEW_TEAM_ANALYTICS],
+  '/user-activity': [PERMISSIONS.VIEW_TEAM_ANALYTICS],
+  '/lead-update-activity': [PERMISSIONS.VIEW_AUDIT_LOGS, PERMISSIONS.VIEW_TEAM_ANALYTICS],
+  '/payments': [PERMISSIONS.MANAGE_PAYMENTS, PERMISSIONS.VIEW_ALL_REVENUE],
+  '/audit-logs': [PERMISSIONS.VIEW_AUDIT_LOGS],
+  '/settings': [PERMISSIONS.MANAGE_SETTINGS],
+};
+
+// Routes that any authenticated user may open (app shell, profile, reference
+// data). Anything not listed here AND not in ROUTE_PERMISSIONS is denied.
+const PUBLIC_ROUTES = new Set([
+  '/', '/login', '/logout', '/profile', '/unauthorized', '/dashboard',
+  '/hospitals', '/courses', '/attendance', '/whatsapp',
+]);
+
 export const canAccessRoute = (userRole, route) => {
-  const routePermissions = {
-    '/dashboard': [PERMISSIONS.VIEW_OWN_LEADS, PERMISSIONS.VIEW_ALL_LEADS],
-    '/leads': [PERMISSIONS.VIEW_OWN_LEADS, PERMISSIONS.VIEW_ALL_LEADS],
-    '/pipeline': [PERMISSIONS.VIEW_OWN_LEADS, PERMISSIONS.VIEW_ALL_LEADS],
-    '/users': [PERMISSIONS.VIEW_USERS],
-    '/analytics': [PERMISSIONS.VIEW_ANALYTICS, PERMISSIONS.VIEW_TEAM_ANALYTICS],
-    '/payments': [PERMISSIONS.MANAGE_PAYMENTS, PERMISSIONS.VIEW_ALL_REVENUE],
-    '/audit-logs': [PERMISSIONS.VIEW_AUDIT_LOGS],
-    '/settings': [PERMISSIONS.MANAGE_SETTINGS],
-  };
-  
-  const requiredPermissions = routePermissions[route];
-  if (!requiredPermissions) return true; // Public route
-  
-  return hasAnyPermission(userRole, requiredPermissions);
+  if (!_serverPermissions && !userRole) return false; // fail closed
+  const required = ROUTE_PERMISSIONS[route];
+  if (required) return hasAnyPermission(userRole, required);
+  if (PUBLIC_ROUTES.has(route)) return true;
+  // Unknown route: allow only if the user has ANY lead-view permission
+  // (i.e. is a real CRM user), never a blanket true.
+  return hasAnyPermission(userRole, [PERMISSIONS.VIEW_OWN_LEADS, PERMISSIONS.VIEW_ALL_LEADS]);
 };

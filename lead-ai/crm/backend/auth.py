@@ -76,12 +76,18 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 
 
 def decode_access_token(token: str) -> TokenData:
-    """Decode and verify a JWT token"""
+    """Decode and verify a JWT token.
+
+    NOTE: the `role` returned here is the claim baked into the token at login
+    time and MAY BE STALE. Never make an authorization decision from it -
+    always resolve the live role from the database via `get_current_user`
+    (or rbac.current_user). It is kept only for cheap, non-critical hints.
+    """
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
         role: str = payload.get("role")
-        
+
         if email is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -141,7 +147,11 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if not user.get('is_active', True):
+    # Fail closed on deactivation. Coerce the common falsy encodings that a
+    # REST/JSON layer can hand back ("false", 0, "no", ...) so a disabled
+    # account cannot slip through on a stringly-typed column.
+    _active = user.get('is_active', True)
+    if _active is False or _active in (0, "0", "false", "False", "no", "No", ""):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Account is inactive",
