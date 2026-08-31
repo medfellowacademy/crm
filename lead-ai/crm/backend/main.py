@@ -83,6 +83,13 @@ from rbac import (
     require_team_leader_up,
     scope_supabase_leads,
     counselor_scope_name,
+    lead_scope_names,
+    lead_scope_for,
+    own_scope_name,
+    resolve_assignee_filter,
+    team_member_names,
+    invalidate_org_cache,
+    LEAD_SCOPE_ALL, LEAD_SCOPE_TEAM, LEAD_SCOPE_OWN,
     can_view_lead,
     assert_can_view_lead,
     assert_can_edit_lead,
@@ -443,15 +450,52 @@ def _require_request_permission(request: Request, *permissions: str, require_all
 
 
 def _get_counselor_name(request: Request) -> str | None:
-    """Return the caller's full_name IFF they are restricted to their own
-    leads (Counselor), else None. Uses the live DB role, not the JWT claim,
-    so a demotion / promotion takes effect immediately.
+    """The caller's full_name IFF they are restricted to their OWN leads
+    (Counselor scope), else None. Used to force-assign a lead a counselor
+    creates to that counselor. Uses the live DB role, fails closed.
 
-    Fails closed via _get_request_user."""
+    NOTE: this is NOT a visibility filter - Managers/Team Leaders see their
+    whole reporting subtree. Use `_request_lead_scope(request)` for that.
+    """
     user = _get_request_user(request)
     if not user:
         return None
-    return counselor_scope_name(user)  # None for VIEW_ALL roles, name for Counselor
+    return own_scope_name(user)
+
+
+def _request_lead_scope(request: Request) -> list[str] | None:
+    """The set of `assigned_to` names the caller may see:
+      None  -> every lead (Super Admin / Finance / Marketing)
+      list  -> restrict to these names (own name for a Counselor; own +
+               reporting subtree for a Manager / Team Leader). Never empty.
+    Fails closed via _get_request_user.
+    """
+    user = _get_request_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return lead_scope_names(user)
+
+
+def _assert_request_can_view_lead(request: Request, lead: dict) -> dict:
+    """403 unless the caller's lead scope covers this lead. Returns the user."""
+    user = _get_request_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    assert_can_view_lead(user, lead)
+    return user
+
+
+def _scope_blocks_lead(request: Request, lead_or_assigned) -> bool:
+    """True when the caller's lead-visibility scope does NOT cover this lead
+    (Counselor: not theirs; Manager/Team Leader: outside their subtree).
+    False for Super Admin / Finance / Marketing (unrestricted)."""
+    names = _request_lead_scope(request)
+    if names is None:
+        return False
+    assigned = (lead_or_assigned if isinstance(lead_or_assigned, str)
+                else (lead_or_assigned or {}).get("assigned_to"))
+    allow = {norm_name(n) for n in names}
+    return norm_name(assigned) not in allow
 
 
 def _audit_event(action: str, description: str, actor: dict | None = None,
@@ -923,12 +967,12 @@ class NoteCreate(BaseModel):
 
 class NoteResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    
+
     id: int
     content: str
-    created_at: datetime
-    created_by: str
-    channel: str
+    created_at: Optional[datetime] = None   # legacy rows may have null timestamps
+    created_by: Optional[str] = None
+    channel: Optional[str] = None
 
 # Normalise status strings coming from the frontend or legacy data.
 # Old imports / DB rows may have ALL-CAPS values ("FRESH", "HOT", etc.).
@@ -2894,23 +2938,29 @@ async def get_leads(
     skip = max(0, int(skip))
     limit = max(1, int(limit))
 
-    # Enforce Counselor scope: they may only see leads assigned to themselves.
-    # Fails closed - a lookup error here must not silently fall through to
-    # "no restriction", which would expose every counselor's leads.
-    try:
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            token_data = decode_access_token(auth_header.split(" ", 1)[1])
-            if token_data and token_data.role == "Counselor":
-                # Use Supabase to get user
-                caller = supabase_data.get_user_by_email(token_data.email)
-                if caller:
-                    assigned_to = caller.get('full_name')
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("Counselor scope check failed in get_leads - failing closed: {}", e)
-        raise HTTPException(status_code=500, detail="Failed to verify account permissions. Please try again.")
+    # ── Lead-visibility scope (hierarchy) ────────────────────────────────────
+    #   Super Admin / Finance / Marketing -> all leads
+    #   Manager / Team Leader             -> own + reporting subtree
+    #   Counselor                         -> own only
+    # Any client-supplied assigned_to filter is INTERSECTED with what the
+    # caller is allowed to see - it can never widen the scope.
+    # Fails closed via _get_request_user.
+    _scope_user = _get_request_user(request)
+    if _scope_user is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    _allowed_names = lead_scope_names(_scope_user)   # None => no restriction
+    if _allowed_names is not None:
+        _requested = []
+        if assigned_to:
+            _requested.append(assigned_to)
+        if assigned_to_in:
+            _requested += [x for x in assigned_to_in.split(',') if x.strip()]
+        _eff = resolve_assignee_filter(_scope_user, _requested)
+        if _eff == []:
+            # caller filtered to names outside their scope -> nothing to show
+            return {"leads": [], "total": 0, "skip": skip, "limit": limit}
+        assigned_to = None
+        assigned_to_in = ",".join(_eff or _allowed_names)
 
     # ── In-memory cache (90 sec TTL) ─────────────────────────────────────────
     _cache_params = dict(
@@ -3030,25 +3080,28 @@ async def get_leads_filter_options():
 async def get_lead(lead_id: str, request: Request):
     """Get single lead by ID - Supabase only"""
 
-    _counselor_name = _get_counselor_name(request)
+    _scope_names = _request_lead_scope(request)   # None => unrestricted
+
+    def _blocked(assigned):
+        if _scope_names is None:
+            return False
+        return norm_name(assigned) not in {norm_name(n) for n in _scope_names}
 
     try:
         # ── 30-second in-memory cache for single lead fetches ──────────────
         _single_key = f"lead:{lead_id}"
         cached = LEAD_CACHE.get(_single_key)
         if cached is not None:
-            # Still enforce counselor visibility on cached data
-            if _counselor_name and cached.get("assigned_to") != _counselor_name:
-                raise HTTPException(status_code=403, detail="Access denied")
+            if _blocked(cached.get("assigned_to")):
+                raise HTTPException(status_code=403, detail="Access denied: this lead is outside your team")
             return cached
 
         lead = supabase_data.get_lead_by_id(lead_id)
         if not lead:
             raise HTTPException(status_code=404, detail="Lead not found")
 
-        # Counselors may only view their own leads
-        if _counselor_name and lead.get("assigned_to") != _counselor_name:
-            raise HTTPException(status_code=403, detail="Access denied")
+        if _blocked(lead.get("assigned_to")):
+            raise HTTPException(status_code=403, detail="Access denied: this lead is outside your team")
 
         # Fetch notes from Supabase using internal ID
         lead_internal_id = lead.get('id')
@@ -3070,20 +3123,28 @@ async def get_lead(lead_id: str, request: Request):
 async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, background_tasks: BackgroundTasks):
     """Update lead - Supabase only"""
 
-    _counselor_name = _get_counselor_name(request)
+    _scope_names = _request_lead_scope(request)   # None => unrestricted
+    _scope_norm = None if _scope_names is None else {norm_name(n) for n in _scope_names}
 
     # Use Supabase REST API
-    
+
     try:
-        # Counselors may only update leads assigned to them
-        if _counselor_name:
-            existing = supabase_data.get_lead_by_id(lead_id)
-            if not existing:
-                raise HTTPException(status_code=404, detail="Lead not found")
-            if existing.get("assigned_to") != _counselor_name:
-                raise HTTPException(status_code=403, detail="Access denied")
-        
+        existing = supabase_data.get_lead_by_id(lead_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Lead not found")
+
+        # Visibility: the lead must be inside the caller's scope
+        if _scope_norm is not None and norm_name(existing.get("assigned_to")) not in _scope_norm:
+            raise HTTPException(status_code=403, detail="Access denied: this lead is outside your team")
+
         update_data = lead_update.dict(exclude_unset=True)
+
+        # Reassignment: a scoped caller can only move a lead to someone inside
+        # their own scope (a Counselor effectively can't reassign at all).
+        if _scope_norm is not None and update_data.get("assigned_to") is not None:
+            if norm_name(update_data["assigned_to"]) not in _scope_norm:
+                raise HTTPException(status_code=403,
+                                    detail="You can only assign leads to members of your team")
         # Convert datetime objects to ISO strings for JSON serialization
         if 'follow_up_date' in update_data and update_data['follow_up_date']:
             dt = update_data['follow_up_date']
@@ -3094,8 +3155,7 @@ async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, b
         # follow-up cycle - clear any follow-up date when moving to one of them.
         _status_after = update_data.get('status')
         if _status_after is None:
-            _existing_for_status = existing if _counselor_name else supabase_data.get_lead_by_id(lead_id)
-            _status_after = (_existing_for_status or {}).get('status')
+            _status_after = (existing or {}).get('status')
         _clear_follow_up = _is_terminal_status(_status_after)
         if _clear_follow_up:
             update_data['follow_up_date'] = None  # (dropped by the data layer; explicit null issued below)
@@ -3105,7 +3165,7 @@ async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, b
             update_data['enrolled_at'] = iso if iso.endswith('Z') or '+' in iso else iso + 'Z'
         
         # Fetch the existing lead BEFORE update so we can diff changed fields
-        existing_for_diff = supabase_data.get_lead_by_id(lead_id) if not _counselor_name else existing
+        existing_for_diff = existing
 
         updated_lead = supabase_data.update_lead(lead_id, update_data)
         if not updated_lead:
@@ -3249,21 +3309,26 @@ async def bulk_update_leads(bulk_data: dict, actor: dict = Depends(require_permi
     if not updates:
         raise HTTPException(status_code=400, detail="No updates provided")
 
-    # Counselor scoping: verify ownership of every targeted lead, and block
-    # reassignment / privileged field changes.
-    _scope = counselor_scope_name(actor)
-    if _scope is not None:
-        if "assigned_to" in updates and norm_name(updates.get("assigned_to")) != norm_name(_scope):
-            raise HTTPException(status_code=403, detail="You cannot reassign leads to another counselor")
+    # Visibility scoping: every targeted lead must be inside the caller's
+    # scope, and a scoped caller may only reassign within that scope.
+    #   Counselor            -> own leads only
+    #   Manager / Team Leader -> own + reporting subtree
+    #   Super Admin / Finance / Marketing -> no restriction
+    _scope_names = lead_scope_names(actor)
+    if _scope_names is not None:
+        _allow = {norm_name(n) for n in _scope_names}
+        if "assigned_to" in updates and norm_name(updates.get("assigned_to")) not in _allow:
+            raise HTTPException(status_code=403,
+                                detail="You can only assign leads to members of your team")
         try:
             owned = supabase_data.client.table("leads").select("lead_id,assigned_to") \
                 .in_("lead_id", [str(x) for x in lead_ids]).execute().data or []
         except Exception as e:
             logger.error("bulk_update ownership check failed: {}", e)
             raise HTTPException(status_code=500, detail="Could not verify lead ownership")
-        bad = [r.get("lead_id") for r in owned if norm_name(r.get("assigned_to")) != norm_name(_scope)]
+        bad = [r.get("lead_id") for r in owned if norm_name(r.get("assigned_to")) not in _allow]
         if bad or len(owned) != len(set(str(x) for x in lead_ids)):
-            raise HTTPException(status_code=403, detail="One or more leads are not assigned to you")
+            raise HTTPException(status_code=403, detail="One or more leads are outside your team")
     
     # Validate enum fields before applying updates
     _valid_statuses = {s.value for s in LeadStatus}
@@ -3328,13 +3393,13 @@ async def add_note(lead_id: str, note: NoteCreate, request: Request, background_
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     
-    # Get the actual logged-in user's name from the request
+    # Visibility: Counselors -> own leads; Managers/Team Leaders -> their
+    # reporting subtree; Super Admin / Finance / Marketing -> any lead.
+    if _scope_blocks_lead(request, lead):
+        raise HTTPException(status_code=403, detail="Access denied: this lead is outside your team")
+
+    # Get the actual logged-in user's name (for the note's created_by)
     counselor_name = _get_counselor_name(request)
-    
-    # Counselors may only add notes to their own leads
-    if counselor_name and lead.get("assigned_to") != counselor_name:
-        raise HTTPException(status_code=403, detail="Access denied: You can only add notes to your assigned leads")
-    
     if not counselor_name:
         # If not a counselor, try to get the user's full name from the token
         try:
@@ -3467,15 +3532,12 @@ async def rescore_lead_supabase(lead_id: str) -> None:
 async def get_notes(lead_id: str, request: Request):
     """Get all notes for a lead - Supabase only"""
 
-    _counselor_name = _get_counselor_name(request)
-    
     lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
-    
-    # Counselors may only view notes for their own leads
-    if _counselor_name and lead.get("assigned_to") != _counselor_name:
-        raise HTTPException(status_code=403, detail="Access denied")
+
+    if _scope_blocks_lead(request, lead):
+        raise HTTPException(status_code=403, detail="Access denied: this lead is outside your team")
 
     lead_internal_id = lead.get('id')
     notes = supabase_data.get_notes_for_lead(lead_internal_id)
@@ -3486,15 +3548,12 @@ async def get_notes(lead_id: str, request: Request):
 async def get_lead_activities(lead_id: str, type: Optional[str] = None, request: Request = None):
     """Get enriched activity timeline for a lead — notes, WhatsApp, calls, emails, status changes. Supabase only."""
     try:
-        _counselor_name = _get_counselor_name(request)
-        
         lead_data = supabase_data.get_lead_by_id(lead_id)
         if not lead_data:
             raise HTTPException(status_code=404, detail="Lead not found")
-        
-        # Counselors may only view activities for their own leads
-        if _counselor_name and lead_data.get("assigned_to") != _counselor_name:
-            raise HTTPException(status_code=403, detail="Access denied")
+
+        if _scope_blocks_lead(request, lead_data):
+            raise HTTPException(status_code=403, detail="Access denied: this lead is outside your team")
         
         lead_internal_id = lead_data.get('id')
         if not lead_internal_id:
@@ -3810,30 +3869,29 @@ async def get_courses(
 
 _NOTIFICATION_PRIORITY = {"error": "high", "warning": "medium", "info": "low", "success": "low"}
 
-def _compute_raw_notifications(counselor_name: Optional[str] = None) -> list:
+def _compute_raw_notifications(scope_names: Optional[list] = None) -> list:
     """Compute the current notification candidates: overdue follow-ups, stale hot
     leads, follow-ups due today, new leads. Shared by GET /api/notifications and
     the read-all endpoint so both agree on what "all" means.
 
-    When counselor_name is given, overdue/stale-hot/due-today are scoped to that
-    counselor's own leads - previously this was always unscoped (top 20 most
-    overdue company-wide), so a counselor with dozens of overdue leads of their
-    own might see none of them if other counselors' leads were more overdue.
-    New-lead notifications stay unscoped since Fresh leads may not be assigned
-    yet and are relevant to whoever might claim them."""
+    scope_names (list) restricts overdue / stale-hot / due-today / new-lead
+    notifications to those `assigned_to` names - the caller's own for a
+    Counselor, own + reporting subtree for a Manager / Team Leader. None =>
+    company-wide (Super Admin / Finance / Marketing)."""
     today = datetime.now(_IST).date()
     now_iso = datetime.utcnow().isoformat()
     notifications = []
 
+    def _scoped(q):
+        return q if scope_names is None else q.in_('assigned_to', scope_names)
+
     # Overdue follow-ups
-    overdue_q = (
+    overdue_q = _scoped(
         supabase_data.client.table('leads')
         .select('id,lead_id,full_name,course_interested,assigned_to,follow_up_date')
         .lt('follow_up_date', now_iso)
         .not_.in_('status', ['Enrolled', 'Not Interested', 'Junk', 'Dropped', 'TMT No Response', 'Test Lead'])
     )
-    if counselor_name:
-        overdue_q = overdue_q.eq('assigned_to', counselor_name)
     overdue_resp = overdue_q.order('follow_up_date', desc=False).limit(50).execute()
     for lead in overdue_resp.data or []:
         if lead.get('follow_up_date'):
@@ -3852,15 +3910,13 @@ def _compute_raw_notifications(counselor_name: Optional[str] = None) -> list:
 
     # Hot leads not contacted in 3+ days
     three_days_ago = (datetime.utcnow() - timedelta(days=3)).isoformat()
-    stale_hot_q = (
+    stale_hot_q = _scoped(
         supabase_data.client.table('leads')
         .select('id,lead_id,full_name,course_interested,assigned_to,last_contact_date')
         .eq('ai_segment', 'Hot')
         .not_.in_('status', ['Enrolled', 'Not Interested'])
         .or_(f'last_contact_date.lt.{three_days_ago},last_contact_date.is.null')
     )
-    if counselor_name:
-        stale_hot_q = stale_hot_q.eq('assigned_to', counselor_name)
     stale_hot_resp = stale_hot_q.limit(10).execute()
     for lead in stale_hot_resp.data or []:
         notifications.append({
@@ -3880,15 +3936,13 @@ def _compute_raw_notifications(counselor_name: Optional[str] = None) -> list:
     today_end_ist = datetime.combine(today, datetime.max.time(), tzinfo=_IST)
     today_start = today_start_ist.astimezone(_timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
     today_end = today_end_ist.astimezone(_timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
-    due_today_q = (
+    due_today_q = _scoped(
         supabase_data.client.table('leads')
         .select('id,lead_id,full_name,course_interested,assigned_to,follow_up_date')
         .gte('follow_up_date', today_start)
         .lte('follow_up_date', today_end)
         .not_.in_('status', ['Enrolled', 'Not Interested', 'Junk', 'Dropped', 'TMT No Response', 'Test Lead'])
     )
-    if counselor_name:
-        due_today_q = due_today_q.eq('assigned_to', counselor_name)
     due_today_resp = due_today_q.limit(20).execute()
     for lead in due_today_resp.data or []:
         notifications.append({
@@ -3902,15 +3956,27 @@ def _compute_raw_notifications(counselor_name: Optional[str] = None) -> list:
             "event_time": lead.get('follow_up_date'),
         })
 
-    # New fresh leads not yet worked (includes website enquiries)
-    fresh_resp = (
+    # New fresh leads not yet worked (includes website enquiries). Unassigned
+    # fresh leads are shown to everyone (anyone may claim them); assigned ones
+    # respect the caller's scope.
+    _fresh_q = (
         supabase_data.client.table('leads')
-        .select('id,lead_id,full_name,course_interested,source,created_at')
+        .select('id,lead_id,full_name,course_interested,source,created_at,assigned_to')
         .eq('status', 'Fresh')
         .order('created_at', desc=True)
-        .limit(20)
-        .execute()
+        .limit(40)
     )
+    _fresh_rows = _fresh_q.execute().data or []
+    if scope_names is not None:
+        _allow = {norm_name(n) for n in scope_names}
+        _fresh_rows = [r for r in _fresh_rows
+                       if not r.get('assigned_to') or norm_name(r.get('assigned_to')) in _allow][:20]
+    else:
+        _fresh_rows = _fresh_rows[:20]
+
+    class _R:  # keep the loop below unchanged
+        data = _fresh_rows
+    fresh_resp = _R()
     for lead in fresh_resp.data or []:
         notifications.append({
             "type": "new_lead",
@@ -3931,10 +3997,10 @@ def _compute_raw_notifications(counselor_name: Optional[str] = None) -> list:
 @app.get("/api/notifications")
 async def get_notifications(current_user: dict = Depends(get_current_user)):
     """Real notifications, enriched with per-user read/snooze state.
-    Counselors only see notifications about their own leads."""
+    Scoped to the caller's lead visibility (Counselor: own; Manager / Team
+    Leader: own + reporting subtree; Super Admin / Finance / Marketing: all)."""
     try:
-        counselor_scope = current_user.get('full_name') if current_user.get('role') == 'Counselor' else None
-        notifications = _compute_raw_notifications(counselor_scope)
+        notifications = _compute_raw_notifications(lead_scope_names(current_user))
         user_email = (current_user.get('email') or '').lower()
 
         state_by_key = {}
@@ -4270,22 +4336,14 @@ async def get_followups_today(request: Request, assigned_to: Optional[str] = Non
     """All leads with follow_up_date = today + overdue, for the daily work view"""
     
     try:
-        # Counselors may only see their own follow-ups. Fails closed: if this
-        # lookup errors, re-raise into the outer handler (which returns an
-        # empty list) rather than silently continuing with no restriction -
-        # that would expose every counselor's follow-ups to this counselor.
-        try:
-            auth_header = request.headers.get("Authorization", "")
-            if auth_header.startswith("Bearer "):
-                token_data = decode_access_token(auth_header.split(" ", 1)[1])
-                if token_data and token_data.role == "Counselor":
-                    # Query Supabase for user
-                    user_resp = supabase_data.client.table('users').select('full_name').eq('email', token_data.email).execute()
-                    if user_resp.data:
-                        assigned_to = user_resp.data[0].get('full_name')
-        except Exception as e:
-            logger.error("Counselor scope check failed in get_followups_today - failing closed: {}", e)
-            raise
+        # Visibility scope: Counselor -> own; Manager / Team Leader -> own +
+        # reporting subtree; Super Admin / Finance / Marketing -> everyone.
+        # Any client assigned_to filter is intersected with what's allowed.
+        _scope_user = _get_request_user(request)
+        if _scope_user is None:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        _scope_names = resolve_assignee_filter(_scope_user, [assigned_to] if assigned_to else [])
+        # _scope_names: None => unrestricted; [] => filtered outside scope; list => restrict
 
         # "Today" means the IST calendar day (the business runs on IST) -
         # datetime.utcnow().date() was wrong for ~5.5 hours around midnight
@@ -4317,6 +4375,11 @@ async def get_followups_today(request: Request, assigned_to: Optional[str] = Non
                 offset += page_size
             return rows
 
+        def _apply_scope(q):
+            if _scope_names is None:
+                return q
+            return q.in_('assigned_to', _scope_names or ["\x00none"])
+
         def _build_overdue():
             q = (
                 supabase_data.client.table('leads')
@@ -4326,7 +4389,7 @@ async def get_followups_today(request: Request, assigned_to: Optional[str] = Non
                 .lt('follow_up_date', today_start)
                 .order('follow_up_date', desc=False)
             )
-            return q.eq('assigned_to', assigned_to) if assigned_to else q
+            return _apply_scope(q)
 
         def _build_today():
             q = (
@@ -4337,7 +4400,7 @@ async def get_followups_today(request: Request, assigned_to: Optional[str] = Non
                 .lte('follow_up_date', today_end)
                 .order('follow_up_date', desc=False)
             )
-            return q.eq('assigned_to', assigned_to) if assigned_to else q
+            return _apply_scope(q)
 
         overdue_rows = _paginate(_build_overdue)
         today_rows = _paginate(_build_today)
@@ -4439,8 +4502,13 @@ async def get_dashboard_stats(request: Request, created_from: Optional[str] = No
     to be hardcoded placeholder percentages on the frontend.
     """
 
-    # Check if user is a counselor and restrict to their leads
-    _counselor_name = _get_counselor_name(request)
+    # Scope stats to the caller's lead visibility (Counselor: own; Manager /
+    # Team Leader: own + reporting subtree; Super Admin / Finance / Marketing:
+    # everything).
+    _scope_names = _request_lead_scope(request)     # None => unrestricted
+
+    def _scope_q(q):
+        return q if _scope_names is None else q.in_('assigned_to', _scope_names)
 
     try:
         now = datetime.utcnow()
@@ -4459,8 +4527,7 @@ async def get_dashboard_stats(request: Request, created_from: Optional[str] = No
         def _window_stats(gte_dt, lt_dt):
             q = supabase_data.client.table('leads').select('status,actual_revenue,ai_segment') \
                 .gte('created_at', gte_dt.isoformat()).lt('created_at', lt_dt.isoformat())
-            if _counselor_name:
-                q = q.ilike('assigned_to', _counselor_name)
+            q = _scope_q(q)
             rows = []
             offset = 0
             while True:
@@ -4512,33 +4579,28 @@ async def get_dashboard_stats(request: Request, created_from: Optional[str] = No
                 'revenue': current_window['revenue'],
             }
         else:
-            basic_stats = supabase_data.get_dashboard_stats(assigned_to=_counselor_name)
+            basic_stats = supabase_data.get_dashboard_stats(assigned_to_names=_scope_names)
         today_start = f"{now.date().isoformat()}T00:00:00"
         week_start = (now - timedelta(days=7)).isoformat()
         month_start = (now - timedelta(days=30)).isoformat()
-        
-        today_query = supabase_data.client.table('leads').select('id', count='exact').gte('created_at', today_start)
-        if _counselor_name:
-            today_query = today_query.ilike('assigned_to', _counselor_name)
-        today_resp = today_query.execute()
-        
-        week_query = supabase_data.client.table('leads').select('id', count='exact').gte('created_at', week_start)
-        if _counselor_name:
-            week_query = week_query.ilike('assigned_to', _counselor_name)
-        week_resp = week_query.execute()
-        
-        month_query = supabase_data.client.table('leads').select('id', count='exact').gte('created_at', month_start)
-        if _counselor_name:
-            month_query = month_query.ilike('assigned_to', _counselor_name)
-        month_resp = month_query.execute()
-        
+
+        today_resp = _scope_q(
+            supabase_data.client.table('leads').select('id', count='exact').gte('created_at', today_start)
+        ).execute()
+
+        week_resp = _scope_q(
+            supabase_data.client.table('leads').select('id', count='exact').gte('created_at', week_start)
+        ).execute()
+
+        month_resp = _scope_q(
+            supabase_data.client.table('leads').select('id', count='exact').gte('created_at', month_start)
+        ).execute()
+
         # Get expected revenue — paginate to bypass Supabase 1000-row default
         expected_revenue = 0.0
         _rev_offset = 0
         while True:
-            _rq = supabase_data.client.table('leads').select('expected_revenue')
-            if _counselor_name:
-                _rq = _rq.ilike('assigned_to', _counselor_name)
+            _rq = _scope_q(supabase_data.client.table('leads').select('expected_revenue'))
             _rr = _rq.range(_rev_offset, _rev_offset + 999).execute()
             _batch = _rr.data or []
             expected_revenue += sum(l.get('expected_revenue', 0) or 0 for l in _batch)
@@ -4550,9 +4612,7 @@ async def get_dashboard_stats(request: Request, created_from: Optional[str] = No
         scores = []
         _sc_offset = 0
         while True:
-            _sq = supabase_data.client.table('leads').select('ai_score').not_.is_('ai_score', 'null')
-            if _counselor_name:
-                _sq = _sq.ilike('assigned_to', _counselor_name)
+            _sq = _scope_q(supabase_data.client.table('leads').select('ai_score').not_.is_('ai_score', 'null'))
             _sr = _sq.range(_sc_offset, _sc_offset + 999).execute()
             _batch = _sr.data or []
             scores.extend(l.get('ai_score', 0) for l in _batch if l.get('ai_score'))
@@ -4970,6 +5030,7 @@ async def create_user(user: UserCreate, actor: dict = Depends(require_permission
         db_user = supabase_data.create_user(payload)
         if not db_user:
             raise HTTPException(status_code=500, detail="Failed to create user")
+        invalidate_org_cache()   # reporting tree changed
         _audit_event("user.create", f"created user {user.email} with role {user.role}",
                      actor=actor, entity_type="user", entity_id=str(db_user.get("id")))
         return sanitize_user(db_user)
@@ -5034,6 +5095,7 @@ async def update_user(user_id: int, user: UserUpdate, actor: dict = Depends(requ
     _changed = sorted(k for k in update_data if k not in ("updated_at", "password"))
     if "password" in (user.dict(exclude_unset=True)):
         _changed.append("password")
+    invalidate_org_cache()   # role / reports_to may have changed
     _audit_event("user.update", f"updated user {db_user.get('email')} fields={_changed}",
                  actor=actor, entity_type="user", entity_id=str(user_id))
     return sanitize_user(updated)
@@ -5054,6 +5116,7 @@ async def delete_user(user_id: int, actor: dict = Depends(require_permission(P.D
     success = supabase_data.delete_user(user_id)
     if not success:
         raise HTTPException(status_code=500, detail="Failed to delete user")
+    invalidate_org_cache()   # reporting tree changed
     _audit_event("user.delete", f"deleted user {db_user.get('email')} (role {db_user.get('role')})",
                  actor=actor, entity_type="user", entity_id=str(user_id))
     return {"message": "User deleted successfully"}
@@ -6977,8 +7040,7 @@ async def mark_all_notifications_read(current_user: dict = Depends(get_current_u
     Must use the same scoping as GET /api/notifications or this would mark
     notifications as read that the user never actually saw."""
     user_email = (current_user.get('email') or '').lower()
-    counselor_scope = current_user.get('full_name') if current_user.get('role') == 'Counselor' else None
-    notifications = _compute_raw_notifications(counselor_scope)
+    notifications = _compute_raw_notifications(lead_scope_names(current_user))
     now_iso = datetime.utcnow().isoformat()
     rows = [
         {'user_email': user_email, 'notification_key': n['id'], 'read_at': now_iso}
@@ -8652,7 +8714,7 @@ async def get_repeated_leads(
             "last_submission_adset,last_submission_campaign,"
             "last_submission_date,last_submission_source,last_submission_tab"
         )
-        _scope = counselor_scope_name(current_user)
+        _scope_names = lead_scope_names(current_user)   # None => all
 
         # Fetch all repeated leads in pages (no 1000-row cap)
         all_rows: list = []
@@ -8664,8 +8726,8 @@ async def get_repeated_leads(
                 .select(COLS)
                 .eq('is_repeated', True)
             )
-            if _scope is not None:
-                _q = _q.eq('assigned_to', _scope)
+            if _scope_names is not None:
+                _q = _q.in_('assigned_to', _scope_names)
             result = (
                 _q.order('last_submission_at', desc=True)
                 .range(offset, offset + page_size - 1)
@@ -9037,13 +9099,14 @@ def _safe_phone(phone_number: str) -> str:
     return p
 
 
-def _wa_scope_name(user: dict) -> Optional[str]:
-    """Full name to filter WhatsApp rows by, or None if the caller may see all.
-    Restricted (own-only) when the role has VIEW_OWN_WHATSAPP but not
-    VIEW_ALL_WHATSAPP - i.e. Counselors."""
-    if rbac.has_permission(user["role"], P.VIEW_ALL_WHATSAPP):
-        return None
-    return (user.get("full_name") or "").strip()
+def _wa_scope_names(user: dict) -> Optional[list[str]]:
+    """Assignee names whose WhatsApp conversations this caller may see, or
+    None for unrestricted. Mirrors lead visibility:
+      Counselor            -> own only
+      Manager / Team Leader -> own + reporting subtree
+      Super Admin           -> all
+    (Finance / Marketing never reach here - no WhatsApp permission.)"""
+    return lead_scope_names(user)
 
 
 @app.post("/api/whatsapp/send")
@@ -9061,9 +9124,9 @@ async def meta_whatsapp_send(
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
-    restricted_name = _wa_scope_name(current_user)
-    if restricted_name is not None and norm_name(lead.get("assigned_to")) != norm_name(restricted_name):
-        raise HTTPException(status_code=403, detail="You can only message your own leads")
+    _wa_scope = _wa_scope_names(current_user)
+    if _wa_scope is not None and norm_name(lead.get("assigned_to")) not in {norm_name(n) for n in _wa_scope}:
+        raise HTTPException(status_code=403, detail="This lead is outside your team")
 
     phone = lead.get("whatsapp") or lead.get("phone")
     if not phone:
@@ -9104,11 +9167,11 @@ async def get_whatsapp_conversations(
     RBAC: requires a WhatsApp view permission. Callers without
           view_all_whatsapp see only conversations for their own leads.
     """
-    restricted_name = _wa_scope_name(current_user)
+    _wa_scope = _wa_scope_names(current_user)
     try:
         query = supabase_data.client.table("whatsapp_conversations").select("*")
-        if restricted_name is not None:
-            query = query.eq("assigned_agent_id", restricted_name)
+        if _wa_scope is not None:
+            query = query.in_("assigned_agent_id", _wa_scope)
         result = query.order("updated_at", desc=True).limit(100).execute()
         return result.data or []
     except Exception as e:
@@ -9127,13 +9190,13 @@ async def get_whatsapp_history(
           lead assigned to them.
     """
     phone_number = _safe_phone(phone_number)
-    restricted_name = _wa_scope_name(current_user)
-    if restricted_name is not None:
+    _wa_scope = _wa_scope_names(current_user)
+    if _wa_scope is not None:
         lead = _get_lead_by_phone(phone_number)
         if not lead:
             raise HTTPException(status_code=404, detail="Lead not found")
-        if norm_name(lead.get("assigned_to")) != norm_name(restricted_name):
-            raise HTTPException(status_code=403, detail="Access denied: not your lead")
+        if norm_name(lead.get("assigned_to")) not in {norm_name(n) for n in _wa_scope}:
+            raise HTTPException(status_code=403, detail="Access denied: this lead is outside your team")
 
     try:
         result = supabase_data.client.table("whatsapp_messages").select("*").or_(
@@ -9153,13 +9216,13 @@ async def mark_whatsapp_read(
     """Mark all messages from a phone number as read and reset unread count."""
     phone_number = _safe_phone(payload.get("phone_number") or "")
 
-    restricted_name = _wa_scope_name(current_user)
-    if restricted_name is not None:
+    _wa_scope = _wa_scope_names(current_user)
+    if _wa_scope is not None:
         lead = _get_lead_by_phone(phone_number)
         # Fail closed: a restricted caller with no matching lead has no
         # business touching this conversation.
-        if not lead or norm_name(lead.get("assigned_to")) != norm_name(restricted_name):
-            raise HTTPException(status_code=403, detail="Access denied: not your lead")
+        if not lead or norm_name(lead.get("assigned_to")) not in {norm_name(n) for n in _wa_scope}:
+            raise HTTPException(status_code=403, detail="Access denied: this lead is outside your team")
 
     try:
         supabase_data.client.table("whatsapp_messages").update(

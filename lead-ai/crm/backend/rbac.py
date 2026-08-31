@@ -27,10 +27,13 @@ from __future__ import annotations
 
 from typing import Callable, Iterable, Optional
 
+import time
+
 from fastapi import Depends, HTTPException, status
 
 from auth import get_current_user
 from logger_config import logger
+from supabase_data_layer import supabase_data
 
 
 # ---------------------------------------------------------------------------
@@ -284,46 +287,152 @@ require_team_leader_up = require_min_rank(ROLE_TEAM_LEADER)
 
 
 # ---------------------------------------------------------------------------
-# Lead scoping (counselor row-level isolation)
+# Lead visibility scope (hierarchy)
 # ---------------------------------------------------------------------------
+#
+#   Super Admin ....... every lead                     (scope = ALL)
+#   Manager ........... own leads + whole reporting subtree  (scope = TEAM)
+#   Team Leader ....... own leads + whole reporting subtree  (scope = TEAM)
+#   Counselor ......... own leads only                 (scope = OWN)
+#   Finance/Marketing . every lead (org-wide read for analytics/finance)
+#
+# "reporting subtree" = every user whose `reports_to` chain leads back to the
+# caller, at any depth (a Manager sees their Team Leaders' counselors too).
 
-def counselor_scope_name(user: dict) -> Optional[str]:
-    """Return the counselor's full name if the caller is *restricted* to their
-    own leads, else None (no row restriction).
+LEAD_SCOPE_ALL = "all"
+LEAD_SCOPE_TEAM = "team"
+LEAD_SCOPE_OWN = "own"
 
-    A caller is restricted when their role grants VIEW_OWN_LEADS but NOT
-    VIEW_ALL_LEADS - today that is only the Counselor role, but this stays
-    correct if the matrix changes.
+ROLE_LEAD_SCOPE = {
+    ROLE_SUPER_ADMIN: LEAD_SCOPE_ALL,
+    ROLE_MANAGER:     LEAD_SCOPE_TEAM,
+    ROLE_TEAM_LEADER: LEAD_SCOPE_TEAM,
+    ROLE_FINANCE:     LEAD_SCOPE_ALL,
+    ROLE_MARKETING:   LEAD_SCOPE_ALL,
+    ROLE_COUNSELOR:   LEAD_SCOPE_OWN,
+}
+
+# Sentinel used when a caller is entitled to a scope but it resolves to no
+# names - a query filtered by this yields nothing (fails closed).
+_NO_LEAD_ACCESS = "\x00__no_lead_access__"
+
+# Short TTL cache for the org chart (reports_to rarely changes).
+_ORG_CACHE: dict = {"at": 0.0, "users": []}
+_ORG_TTL_SECONDS = 120
+
+
+def lead_scope_for(role: Optional[str]) -> str:
+    """OWN is the fail-closed default for an unrecognised role."""
+    return ROLE_LEAD_SCOPE.get((role or "").strip(), LEAD_SCOPE_OWN)
+
+
+def _all_users(force: bool = False) -> list[dict]:
+    now = time.time()
+    if force or (now - _ORG_CACHE["at"]) > _ORG_TTL_SECONDS or not _ORG_CACHE["users"]:
+        try:
+            _ORG_CACHE["users"] = supabase_data.get_all_users() or []
+            _ORG_CACHE["at"] = now
+        except Exception as e:
+            logger.error("rbac: could not load users for org chart: %s", e)
+            # keep whatever we had; empty means TEAM scope falls back to self only
+    return _ORG_CACHE["users"]
+
+
+def invalidate_org_cache() -> None:
+    _ORG_CACHE["at"] = 0.0
+
+
+def team_member_names(user: dict, all_users: Optional[list[dict]] = None) -> list[str]:
+    """Full names of `user` plus every user in their reporting subtree."""
+    users = all_users if all_users is not None else _all_users()
+    children: dict = {}
+    for u in users:
+        rt = u.get("reports_to")
+        if rt is not None:
+            children.setdefault(rt, []).append(u)
+
+    names: set[str] = set()
+    self_name = user_identity(user)
+    if self_name:
+        names.add(self_name)
+
+    stack = [user.get("id")]
+    seen: set = set()
+    while stack:
+        mid = stack.pop()
+        if mid in seen:
+            continue
+        seen.add(mid)
+        for child in children.get(mid, []):
+            cn = (child.get("full_name") or "").strip()
+            if cn:
+                names.add(cn)
+            stack.append(child.get("id"))
+    return sorted(names)
+
+
+def lead_scope_names(user: dict, all_users: Optional[list[dict]] = None) -> Optional[list[str]]:
+    """The set of `assigned_to` names this caller may see.
+
+    Returns None  => no restriction (Super Admin / Finance / Marketing).
+    Returns list  => restrict `assigned_to` to these names (never empty; a
+                     no-access caller gets the impossible sentinel).
     """
-    role = get_role(user)
-    if has_permission(role, P.VIEW_ALL_LEADS):
+    scope = lead_scope_for(get_role(user))
+    if scope == LEAD_SCOPE_ALL:
         return None
-    if has_permission(role, P.VIEW_OWN_LEADS):
+    if scope == LEAD_SCOPE_OWN:
+        n = user_identity(user)
+        return [n] if n else [_NO_LEAD_ACCESS]
+    names = team_member_names(user, all_users)
+    return names or [_NO_LEAD_ACCESS]
+
+
+def own_scope_name(user: dict) -> Optional[str]:
+    """The caller's own name IFF they are restricted to their own leads
+    (Counselor). Used to auto-assign leads a counselor creates. None for
+    every wider scope."""
+    if lead_scope_for(get_role(user)) == LEAD_SCOPE_OWN:
         return user_identity(user)
-    # Role cannot view leads at all - caller code should have blocked earlier;
-    # return an impossible sentinel so a query still yields nothing.
-    return "\x00__no_lead_access__"
+    return None
+
+
+# Back-compat: some call sites still import this. It now means "the assignee
+# names the caller is limited to" and returns a single name only for the OWN
+# scope, else None or (for TEAM) the first item is not meaningful - callers
+# that need the TEAM list must use lead_scope_names().
+def counselor_scope_name(user: dict) -> Optional[str]:
+    names = lead_scope_names(user)
+    if names is None:
+        return None
+    if len(names) == 1:
+        return names[0]
+    return None  # TEAM scope - caller must use lead_scope_names()
+
+
+def _norm_name_set(names) -> set:
+    return {norm_name(n) for n in (names or [])}
 
 
 def scope_supabase_leads(query, user: dict, column: str = "assigned_to"):
-    """Apply counselor row-level filtering to a supabase-py query builder."""
-    name = counselor_scope_name(user)
-    if name is None:
+    """Apply lead-visibility filtering to a supabase-py query builder."""
+    names = lead_scope_names(user)
+    if names is None:
         return query
-    return query.eq(column, name)
+    return query.in_(column, names)
 
 
 def can_view_lead(user: dict, lead: dict) -> bool:
-    name = counselor_scope_name(user)
-    if name is None:
+    names = lead_scope_names(user)
+    if names is None:
         return True
-    return norm_name(lead.get("assigned_to")) == norm_name(name)
+    return norm_name(lead.get("assigned_to")) in _norm_name_set(names)
 
 
 def assert_can_view_lead(user: dict, lead: dict) -> None:
     if not can_view_lead(user, lead):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                            detail="Access denied: this lead is not assigned to you")
+                            detail="Access denied: this lead is outside your team")
 
 
 def assert_can_edit_lead(user: dict, lead: dict) -> None:
@@ -332,6 +441,26 @@ def assert_can_edit_lead(user: dict, lead: dict) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                             detail="Access denied. Required permission: edit_lead")
     assert_can_view_lead(user, lead)
+
+
+def resolve_assignee_filter(user: dict, requested: Optional[list[str]]) -> Optional[list[str]]:
+    """Intersect a client-supplied assigned_to filter with what the caller is
+    allowed to see.
+
+    Returns:
+      None   => no restriction at all (Super Admin & no client filter)
+      []     => the client asked for names they may not see - yield nothing
+      list   => the effective assigned_to names to filter by
+    """
+    allowed = lead_scope_names(user)
+    req = [r.strip() for r in (requested or []) if r and r.strip()]
+    if allowed is None:
+        return req or None
+    allow_norm = _norm_name_set(allowed)
+    if req:
+        eff = [r for r in req if norm_name(r) in allow_norm]
+        return eff  # may be [] -> caller returns an empty page
+    return allowed
 
 
 # ---------------------------------------------------------------------------

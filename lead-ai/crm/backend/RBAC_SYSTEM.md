@@ -32,6 +32,38 @@ act on a role **strictly below** their own and can never grant a role at or
 above their own rank (no self-escalation, no peer promotion). The last active
 Super Admin cannot be demoted / deactivated / deleted.
 
+## Lead visibility scope (hierarchy)
+
+Separate from permissions, every request is scoped to a set of `assigned_to`
+names via `rbac.lead_scope_names(user)`:
+
+| Role                     | Scope  | Sees |
+|--------------------------|--------|------|
+| Super Admin              | `all`  | every lead |
+| Finance / Marketing      | `all`  | every lead (org-wide analytics / finance) |
+| Manager / Team Leader    | `team` | own leads + **the entire `reports_to` subtree** (their Team Leaders' counselors too) |
+| Counselor                | `own`  | only leads assigned to them — regardless of who reports to them |
+
+The subtree is walked from `users.reports_to`, cycle-safe, cached ~120 s
+(`invalidate_org_cache()` is called on every user create / update / delete).
+`view_all_leads` in the permission matrix means "may use the all-leads
+screens & endpoints" — the **data** returned is still scoped by the table
+above. A client-supplied `assigned_to` filter is *intersected* with the
+allowed set, never widened.
+
+Enforcement points (all live-role based):
+* `GET /api/leads`, `/api/leads-repeated`, `/api/leads/followups/today`,
+  `/api/dashboard/stats`, `/api/notifications` — filtered with `.in_(...)`.
+* `GET/PUT /api/leads/{id}` + `/notes` + `/activities` + `/submissions`,
+  every `send-*` / `trigger-*` / `chat` / `communications` / WhatsApp
+  endpoint — `assert_can_view_lead` / `_scope_blocks_lead`.
+* `PUT /api/leads/{id}` and `bulk-update` also block **reassigning** a lead
+  to someone outside the caller's scope.
+Helpers: `lead_scope_names`, `resolve_assignee_filter`, `can_view_lead`,
+`assert_can_view_lead`, `scope_supabase_leads`, `team_member_names`,
+`own_scope_name` (caller's own name only, for auto-assigning a lead a
+Counselor creates).
+
 ## Permission → role matrix
 
 Mirrors `src/config/rbac.js`. Key entries:

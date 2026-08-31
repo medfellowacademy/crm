@@ -960,12 +960,19 @@ class SupabaseDataLayer:
             logger.error(f"Error creating activity: {e}")
             return None
     
-    def get_dashboard_stats(self, assigned_to: Optional[str] = None) -> Dict[str, Any]:
-        """Get dashboard statistics using count queries so the result is never capped at 1000."""
+    def get_dashboard_stats(self, assigned_to: Optional[str] = None,
+                            assigned_to_names: Optional[list] = None) -> Dict[str, Any]:
+        """Get dashboard statistics using count queries so the result is never capped at 1000.
+
+        assigned_to_names (list) scopes to several owners (Manager / Team Leader
+        seeing their whole reporting subtree); assigned_to (str) scopes to one.
+        """
         try:
             def _q():
                 q = self.client.table('leads').select('status,ai_segment,actual_revenue', count='exact')
-                if assigned_to:
+                if assigned_to_names is not None:
+                    q = q.in_('assigned_to', assigned_to_names)
+                elif assigned_to:
                     q = q.ilike('assigned_to', assigned_to)
                 return q
 
