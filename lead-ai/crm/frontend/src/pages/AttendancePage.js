@@ -23,6 +23,7 @@ const STATUS_TAG = {
   late_and_left_early: { color: 'red',     label: 'Late & Left Early' },
   absent:              { color: 'default', label: 'Absent' },
   week_off:            { color: 'purple',  label: 'Week Off' },
+  festival:            { color: 'magenta', label: 'Festival' },
 };
 
 const fmtTime = (iso) => iso ? dayjs(iso).format('hh:mm A') : '—';
@@ -99,6 +100,7 @@ function generateSlipHTML(slip) {
     <tr><td>Late Arrivals</td><td>${slip.days_late}</td></tr>
     <tr><td>Left Early</td><td>${slip.days_left_early}</td></tr>
     <tr><td>Absent</td><td>${slip.days_absent}</td></tr>
+    ${(slip.paid_festival_days || 0) > 0 ? `<tr><td>Festivals / Holidays (paid)</td><td>${slip.paid_festival_days}</td></tr>` : ''}
     <tr><td>Paid Leaves Allowed</td><td>${slip.paid_leaves_allowed}</td></tr>
     <tr><td>Effective Absent (after paid leave)</td><td>${slip.effective_absent}</td></tr>
   </tbody>
@@ -112,6 +114,7 @@ function generateSlipHTML(slip) {
     ${slip.late_deduction_total > 0 ? `<tr class="deduction-row"><td>Late Arrival Deduction (${slip.days_late} days &times; ${fmtINR(slip.late_deduction_per_day)})</td><td>&minus; ${fmtINR(slip.late_deduction_total)}</td></tr>` : ''}
     ${(slip.advance_deduction || 0) > 0 ? `<tr class="deduction-row"><td>Advance Deduction</td><td>&minus; ${fmtINR(slip.advance_deduction)}</td></tr>` : ''}
     ${(slip.leave_payout_amt || 0) > 0 ? `<tr style="color:#389e0d"><td>Leave Encashment (${slip.leave_payout_days} day(s) &times; ${fmtINR(perDay)})</td><td>+ ${fmtINR(slip.leave_payout_amt)}</td></tr>` : ''}
+    ${(slip.incentive_amount || 0) > 0 ? `<tr style="color:#389e0d"><td>Incentive${slip.incentive_note ? ` (${slip.incentive_note})` : ''}</td><td>+ ${fmtINR(slip.incentive_amount)}</td></tr>` : ''}
     <tr class="net-row"><td>Net Salary Payable</td><td>${fmtINR(slip.net_salary)}</td></tr>
   </tbody>
 </table>
@@ -261,6 +264,16 @@ function TeamAttendance() {
     queryFn: () => usersAPI.getAll().then(r => r.data?.users || r.data || []),
   });
 
+  const { data: festivals = [] } = useQuery({
+    queryKey: ['festivals', dateFrom, dateTo],
+    queryFn: () => attendanceAPI.listFestivals(dateFrom, dateTo).then(r => r.data),
+    enabled: !!(dateFrom && dateTo),
+  });
+  const festivalMap = useMemo(
+    () => Object.fromEntries((festivals || []).map(f => [f.date, f.name])),
+    [festivals],
+  );
+
   // Use the report endpoint — returns all users' records when no user_email given (admin)
   const { data: reportData, isLoading } = useQuery({
     queryKey: ['team-report', dateFrom, dateTo, selectedUser],
@@ -282,13 +295,14 @@ function TeamAttendance() {
       while (!cur.isAfter(end)) {
         const ds = cur.format('YYYY-MM-DD');
         const isSun = cur.day() === 0;
+        const isFest = !!festivalMap[ds];
         const rec = byDate[ds];
         rows.push({
-          key: ds, date: ds, isSunday: isSun,
+          key: ds, date: ds, isSunday: isSun, isFestival: isFest, festivalName: festivalMap[ds],
           user_email:  selectedUser,
           user_name:   emp?.full_name || selectedUser,
           role:        emp?.role || '',
-          status:      rec?.status || (isSun ? 'week_off' : 'absent'),
+          status:      isFest ? 'festival' : (rec?.status || (isSun ? 'week_off' : 'absent')),
           check_in_at:  rec?.check_in_at  || null,
           check_out_at: rec?.check_out_at || null,
         });
@@ -300,8 +314,14 @@ function TeamAttendance() {
     return records
       .slice()
       .sort((a, b) => b.date.localeCompare(a.date) || (a.user_name || '').localeCompare(b.user_name || ''))
-      .map(r => ({ key: `${r.user_email}-${r.date}`, isSunday: dayjs(r.date).day() === 0, ...r }));
-  }, [reportData, selectedUser, dateRange, usersData]);
+      .map(r => ({
+        key: `${r.user_email}-${r.date}`,
+        isSunday: dayjs(r.date).day() === 0,
+        isFestival: !!festivalMap[r.date],
+        festivalName: festivalMap[r.date],
+        ...r,
+      }));
+  }, [reportData, selectedUser, dateRange, usersData, festivalMap]);
 
   const markMutation = useMutation({
     mutationFn: (payload) => attendanceAPI.adminMark(payload),
@@ -334,9 +354,14 @@ function TeamAttendance() {
     {
       title: 'Date', dataIndex: 'date', key: 'date', width: 160,
       render: (d, r) => (
-        <span style={{ color: r.isSunday ? '#722ed1' : undefined, fontWeight: r.isSunday ? 600 : undefined }}>
-          {dayjs(d).format('DD MMM YYYY (ddd)')}
-        </span>
+        <Tooltip title={r.isFestival ? r.festivalName : undefined}>
+          <span style={{
+            color: r.isFestival ? '#c41d7f' : r.isSunday ? '#722ed1' : undefined,
+            fontWeight: (r.isFestival || r.isSunday) ? 600 : undefined,
+          }}>
+            {dayjs(d).format('DD MMM YYYY (ddd)')}
+          </span>
+        </Tooltip>
       ),
     },
     { title: 'Check In',  dataIndex: 'check_in_at',  key: 'check_in_at',  width: 95, render: fmtTime },
@@ -345,6 +370,7 @@ function TeamAttendance() {
     {
       title: 'Mark Attendance', key: 'mark',
       render: (_, row) => {
+        if (row.isFestival) return <Tag color="magenta">{row.festivalName ? `Festival — ${row.festivalName}` : 'Festival'}</Tag>;
         if (row.isSunday) return <Tag color="purple">Week Off</Tag>;
         const k = `${row.user_email}-${row.date}`;
         return (
@@ -513,6 +539,10 @@ function SalarySlips() {
       render: v => fmtINR(v),
     },
     {
+      title: 'Incentive', dataIndex: 'incentive_amount', key: 'incentive_amount', width: 110,
+      render: v => (v > 0 ? <span style={{ color: '#389e0d' }}>+ {fmtINR(v)}</span> : '—'),
+    },
+    {
       title: 'Deduction', dataIndex: 'total_deduction', key: 'total_deduction', width: 115,
       render: v => <span style={{ color: '#cf1322' }}>− {fmtINR(v)}</span>,
     },
@@ -611,7 +641,7 @@ function SalarySlips() {
               rowKey="id"
               size="small"
               pagination={{ pageSize: 20 }}
-              scroll={{ x: 1200 }}
+              scroll={{ x: 1310 }}
               rowSelection={{
                 selectedRowKeys: selectedKeys,
                 onChange: setSelectedKeys,
@@ -638,6 +668,10 @@ function AttendanceReport() {
   const [leavesUsed,          setLeavesUsed]          = useState(0);
   const [advanceDeduction,    setAdvanceDeduction]    = useState(0);
   const [selectedAdvanceId,   setSelectedAdvanceId]   = useState(null);
+  const [incentiveAmount,     setIncentiveAmount]     = useState(0);
+  const [incentiveNote,       setIncentiveNote]       = useState('');
+  const [festivalDate,        setFestivalDate]        = useState(null);
+  const [festivalName,        setFestivalName]        = useState('');
 
   const { data: usersData } = useQuery({
     queryKey: ['users-all'],
@@ -647,6 +681,16 @@ function AttendanceReport() {
 
   const dateFrom = dateRange[0]?.format('YYYY-MM-DD');
   const dateTo   = dateRange[1]?.format('YYYY-MM-DD');
+
+  const { data: festivals = [], refetch: refetchFestivals } = useQuery({
+    queryKey: ['festivals', dateFrom, dateTo],
+    queryFn:  () => attendanceAPI.listFestivals(dateFrom, dateTo).then(r => r.data),
+    enabled:  !!(dateFrom && dateTo),
+  });
+  const festivalMap = useMemo(
+    () => Object.fromEntries((festivals || []).map(f => [f.date, f.name])),
+    [festivals],
+  );
 
   const { data: reportData, isLoading } = useQuery({
     queryKey: ['attendance-report', dateFrom, dateTo, selectedUser],
@@ -675,6 +719,25 @@ function AttendanceReport() {
     onError:   (e) => message.error('Failed to save: ' + (e?.response?.data?.detail || e.message)),
   });
 
+  const handleAddFestival = async () => {
+    if (!festivalDate) { message.warning('Pick a date.'); return; }
+    if (!festivalName.trim()) { message.warning('Enter a festival name.'); return; }
+    try {
+      await attendanceAPI.addFestival({ date: festivalDate.format('YYYY-MM-DD'), name: festivalName.trim() });
+      message.success('Festival added — this date is now a paid day for everyone.');
+      setFestivalDate(null);
+      setFestivalName('');
+      refetchFestivals();
+    } catch (e) { message.error('Failed: ' + (e?.response?.data?.detail || e.message)); }
+  };
+
+  const handleDeleteFestival = async (id) => {
+    try {
+      await attendanceAPI.deleteFestival(id);
+      refetchFestivals();
+    } catch (e) { message.error('Failed: ' + (e?.response?.data?.detail || e.message)); }
+  };
+
   const dailyList = useMemo(() => {
     if (!dateRange[0] || !dateRange[1]) return [];
     const records = reportData?.records || [];
@@ -687,30 +750,32 @@ function AttendanceReport() {
     while (!cur.isAfter(end)) {
       const dateStr  = cur.format('YYYY-MM-DD');
       const isSun    = cur.day() === 0;
+      const isFest   = !!festivalMap[dateStr];
       const isFuture = cur.isAfter(today, 'day');
       const rec      = byDate[dateStr];
       rows.push({
         key: dateStr, date: dateStr, dayName: cur.format('ddd'),
-        isSunday: isSun, isFuture,
-        status:       isSun ? 'week_off' : isFuture ? null : (rec?.status || 'absent'),
+        isSunday: isSun, isFestival: isFest, festivalName: festivalMap[dateStr], isFuture,
+        status:       isFest ? 'festival' : isSun ? 'week_off' : isFuture ? null : (rec?.status || 'absent'),
         check_in_at:  rec?.check_in_at  || null,
         check_out_at: rec?.check_out_at || null,
       });
       cur = cur.add(1, 'day');
     }
     return rows;
-  }, [reportData, dateRange]);
+  }, [reportData, dateRange, festivalMap]);
 
   const summary = useMemo(() => {
     const working       = dailyList.filter(r => !r.isFuture).length;  // ALL days incl. Sundays
-    const weekOffs      = dailyList.filter(r => r.isSunday && !r.isFuture).length;
+    const weekOffs      = dailyList.filter(r => r.isSunday && !r.isFestival && !r.isFuture).length;
+    const festivalDays  = dailyList.filter(r => r.isFestival && !r.isFuture).length;
     const present       = dailyList.filter(r => r.status === 'present').length;
     const late          = dailyList.filter(r => r.status === 'late').length;
     const leftEarly     = dailyList.filter(r => r.status === 'left_early').length;
     const lateLeftEarly = dailyList.filter(r => r.status === 'late_and_left_early').length;
     const absent        = dailyList.filter(r => r.status === 'absent').length;
-    const attended      = present + late + leftEarly + lateLeftEarly + weekOffs;
-    return { working, weekOffs, present, late, leftEarly, lateLeftEarly, absent, attended };
+    const attended      = present + late + leftEarly + lateLeftEarly + weekOffs + festivalDays;
+    return { working, weekOffs, festivalDays, present, late, leftEarly, lateLeftEarly, absent, attended };
   }, [dailyList]);
 
   // Leave balance calculation for this month
@@ -735,11 +800,12 @@ function AttendanceReport() {
     const advDeduction    = parseFloat(advanceDeduction || 0);
     // Leave payout when balance would exceed 3 months
     const leavePayoutAmt  = leaveCalc.payoutDays * perDay;
+    const incentive       = Math.max(0, parseFloat(incentiveAmount || 0));
     const totalDeduction  = absentDeduction + lateDeduction + advDeduction;
-    const netSalary       = Math.max(0, sal - totalDeduction + leavePayoutAmt);
+    const netSalary       = Math.max(0, sal - totalDeduction + leavePayoutAmt + incentive);
     return { perDay, effectiveAbsent, absentDeduction, lateDeduction, advDeduction,
-             leavePayoutAmt, totalDeduction, netSalary };
-  }, [monthlySalary, lateDeductionPerDay, advanceDeduction, summary, leaveCalc]);
+             leavePayoutAmt, incentive, totalDeduction, netSalary };
+  }, [monthlySalary, lateDeductionPerDay, advanceDeduction, incentiveAmount, summary, leaveCalc]);
 
   const handleDownloadCSV = async () => {
     if (!dateFrom || !dateTo) return;
@@ -773,6 +839,9 @@ function AttendanceReport() {
       late_deduction_total:  salaryCalc.lateDeduction,
       absent_deduction:      salaryCalc.absentDeduction,
       total_deduction:       salaryCalc.totalDeduction,
+      paid_festival_days:    summary.festivalDays,
+      incentive_amount:      salaryCalc.incentive,
+      incentive_note:        incentiveNote || null,
       net_salary:            salaryCalc.netSalary,
       advance_deduction:     salaryCalc.advDeduction,
       leave_opening:         leaveCalc.opening,
@@ -817,19 +886,22 @@ function AttendanceReport() {
     {
       title: 'Date', dataIndex: 'date', key: 'date', width: 120,
       render: (d, r) => (
-        <span style={{ color: r.isSunday ? '#722ed1' : undefined }}>
-          {dayjs(d).format('DD MMM')}
-        </span>
+        <Tooltip title={r.isFestival ? r.festivalName : undefined}>
+          <span style={{ color: r.isFestival ? '#c41d7f' : r.isSunday ? '#722ed1' : undefined }}>
+            {dayjs(d).format('DD MMM')}
+          </span>
+        </Tooltip>
       ),
     },
     {
       title: 'Day', dataIndex: 'dayName', key: 'dayName', width: 60,
-      render: (d, r) => <span style={{ color: r.isSunday ? '#722ed1' : undefined }}>{d}</span>,
+      render: (d, r) => <span style={{ color: r.isFestival ? '#c41d7f' : r.isSunday ? '#722ed1' : undefined }}>{d}</span>,
     },
     {
       title: 'Status', dataIndex: 'status', key: 'status', width: 160,
       render: (s, r) => {
         if (r.isFuture || !s) return <Text type="secondary">—</Text>;
+        if (r.isFestival) return <Tag color="magenta">{r.festivalName ? `Festival — ${r.festivalName}` : 'Festival'}</Tag>;
         return <Tag color={STATUS_TAG[s]?.color || 'default'}>{STATUS_TAG[s]?.label || s}</Tag>;
       },
     },
@@ -880,12 +952,60 @@ function AttendanceReport() {
         </Space>
       </Card>
 
+      {/* ── Festivals / Holidays ── */}
+      <Card
+        size="small"
+        title={<Space><CalendarOutlined />Festivals / Holidays <Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>— a paid day for every employee</Text></Space>}
+        style={{ marginBottom: 16 }}
+      >
+        {isAdmin && (
+          <Space wrap align="end" style={{ marginBottom: festivals.length ? 12 : 0 }}>
+            <div>
+              <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Date</div>
+              <DatePicker
+                value={festivalDate}
+                onChange={setFestivalDate}
+                placeholder="Pick a date"
+              />
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Festival name</div>
+              <Input
+                style={{ width: 220 }}
+                placeholder="e.g. Diwali"
+                value={festivalName}
+                onChange={e => setFestivalName(e.target.value)}
+                onPressEnter={handleAddFestival}
+              />
+            </div>
+            <Button type="primary" icon={<PlusOutlined />} onClick={handleAddFestival}>Add</Button>
+          </Space>
+        )}
+        <div>
+          {festivals.length === 0
+            ? <Text type="secondary" style={{ fontSize: 12 }}>No festivals in this date range.</Text>
+            : festivals.map(f => (
+                <Tag
+                  key={f.id}
+                  color="magenta"
+                  closable={isAdmin}
+                  onClose={(e) => { e.preventDefault(); handleDeleteFestival(f.id); }}
+                  style={{ marginBottom: 4 }}
+                >
+                  {dayjs(f.date).format('DD MMM YYYY')} — {f.name}
+                </Tag>
+              ))
+          }
+        </div>
+      </Card>
+
       {/* ── Summary stats ── */}
       <Row gutter={12} style={{ marginBottom: 16 }}>
         {[
           { label: 'Total Days',       value: summary.working,                           color: '#1890ff' },
           { label: 'Days Came',        value: summary.present + summary.late + summary.leftEarly + summary.lateLeftEarly, color: '#52c41a' },
           { label: 'Week Offs (Sun)',  value: summary.weekOffs,                          color: '#722ed1' },
+          { label: 'Festivals (paid)', value: summary.festivalDays,                      color: '#c41d7f' },
           { label: 'Late',             value: summary.late,                              color: '#fa8c16' },
           { label: 'Left Early',       value: summary.leftEarly + summary.lateLeftEarly, color: '#fadb14' },
           { label: 'Absent',           value: summary.absent,                            color: '#ff4d4f' },
@@ -906,6 +1026,7 @@ function AttendanceReport() {
         <span style={{ fontWeight: 600 }}>Payable days:</span>{' '}
         {summary.present + summary.late + summary.leftEarly + summary.lateLeftEarly} came
         {summary.weekOffs > 0 && <> + {summary.weekOffs} week off</>}
+        {summary.festivalDays > 0 && <> + {summary.festivalDays} festival</>}
         {' '}= <span style={{ fontWeight: 700, color: '#389e0d' }}>{summary.attended}</span>
         {' '}out of {summary.working} total days
         {summary.absent > 0 && <span style={{ color: '#ff4d4f' }}> · {summary.absent} absent</span>}
@@ -957,6 +1078,23 @@ function AttendanceReport() {
               </Tooltip>
             </Col>
             <Col xs={24} sm={6}>
+              <Tooltip title="One-off amount added to net pay this month (bonus / incentive).">
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 6 }}>Incentive / Bonus (₹)</div>
+                  <InputNumber
+                    style={{ width: '100%' }} placeholder="e.g. 2000" min={0}
+                    value={incentiveAmount} onChange={(v) => setIncentiveAmount(v ?? 0)}
+                    formatter={v => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+                    parser={v => v.replace(/,/g, '')} size="large"
+                  />
+                  <Input
+                    style={{ marginTop: 6 }} placeholder="Incentive note (optional)"
+                    value={incentiveNote} onChange={e => setIncentiveNote(e.target.value)}
+                  />
+                </div>
+              </Tooltip>
+            </Col>
+            <Col xs={24} sm={6}>
               <div style={{ marginBottom: 16 }}>
                 <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 6 }}>Notes (for slip)</div>
                 <TextArea rows={2} placeholder="e.g. Includes bonus, incentive…" value={slipNotes} onChange={e => setSlipNotes(e.target.value)} />
@@ -976,9 +1114,12 @@ function AttendanceReport() {
                 </Col>
                 <Col xs={12} sm={6} style={{ marginBottom: 8 }}>
                   <Card size="small" bodyStyle={{ padding: '12px 16px', background: '#e6f7ff', borderColor: '#91d5ff' }}>
-                    <div style={{ fontSize: 11, color: '#8c8c8c' }}>Payable Days (came + Sun)</div>
+                    <div style={{ fontSize: 11, color: '#8c8c8c' }}>Payable Days (came + Sun + festival)</div>
                     <div style={{ fontSize: 20, fontWeight: 700, color: '#1890ff' }}>{summary.attended}</div>
-                    <div style={{ fontSize: 11, color: '#8c8c8c' }}>{summary.attended - summary.weekOffs} came + {summary.weekOffs} Sun</div>
+                    <div style={{ fontSize: 11, color: '#8c8c8c' }}>
+                      {summary.attended - summary.weekOffs - summary.festivalDays} came + {summary.weekOffs} Sun
+                      {summary.festivalDays > 0 && ` + ${summary.festivalDays} festival`}
+                    </div>
                   </Card>
                 </Col>
                 <Col xs={12} sm={6} style={{ marginBottom: 8 }}>
@@ -1024,6 +1165,7 @@ function AttendanceReport() {
                     <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 4 }}>
                       {fmtINR(parseFloat(monthlySalary))} − {fmtINR(salaryCalc.totalDeduction)}
                       {salaryCalc.leavePayoutAmt > 0 && ` + ${fmtINR(salaryCalc.leavePayoutAmt)} leave encashment`}
+                      {salaryCalc.incentive > 0 && ` + ${fmtINR(salaryCalc.incentive)} incentive`}
                     </div>
                   </Card>
                 </Col>

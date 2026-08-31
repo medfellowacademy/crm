@@ -325,6 +325,111 @@ async def admin_mark_attendance(payload: AdminMarkPayload, request: Request):
         raise HTTPException(status_code=500, detail="Failed to mark attendance")
 
 
+# ── Festivals / Holidays ─────────────────────────────────────────────────────
+# A date listed here is a paid day for EVERY employee — the attendance report
+# and salary calculator treat it like a week-off (counts as payable, never absent).
+
+class FestivalPayload(BaseModel):
+    date: str   # YYYY-MM-DD
+    name: str
+
+
+@router.get("/festivals")
+async def list_festivals(
+    request: Request,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    month: Optional[str] = None,
+):
+    """List festival/holiday dates. Any authenticated user can read them —
+    they're needed to render reports and compute salary for everyone."""
+    _current_user(request)
+
+    if month and not (date_from and date_to):
+        try:
+            year, mon = map(int, month.split("-"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+        _, dim = _monthrange(year, mon)
+        date_from = f"{year}-{mon:02d}-01"
+        date_to   = f"{year}-{mon:02d}-{dim:02d}"
+
+    try:
+        q = supabase_data.client.table("attendance_festivals").select("*")
+        if date_from:
+            q = q.gte("date", date_from)
+        if date_to:
+            q = q.lte("date", date_to)
+        resp = q.order("date").execute()
+        return resp.data or []
+    except Exception as e:
+        logger.error("Failed to list festivals: {}", e)
+        raise HTTPException(status_code=500, detail="Failed to list festivals")
+
+
+@router.post("/festivals")
+async def add_festival(payload: FestivalPayload, request: Request):
+    """Add (or rename) a festival/holiday date. Admin only."""
+    current = _current_user(request)
+    if current["role"] not in ("Super Admin", "Manager", "Team Leader"):
+        raise HTTPException(status_code=403, detail="Admin role required")
+
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Festival name is required")
+    try:
+        datetime.strptime(payload.date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+
+    record = {
+        "date": payload.date,
+        "name": name,
+        "created_by": current["email"],
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        existing = (supabase_data.client.table("attendance_festivals")
+                    .select("id").eq("date", payload.date).execute())
+        if existing.data:
+            resp = (supabase_data.client.table("attendance_festivals")
+                    .update({"name": name, "updated_at": record["updated_at"]})
+                    .eq("id", existing.data[0]["id"]).execute())
+        else:
+            resp = supabase_data.client.table("attendance_festivals").insert(record).execute()
+        logger.info("Festival {} on {} by {}", name, payload.date, current["email"])
+        return resp.data[0] if resp.data else record
+    except Exception as e:
+        logger.error("Failed to add festival: {}", e)
+        raise HTTPException(status_code=500, detail="Failed to add festival")
+
+
+@router.delete("/festivals/{festival_id}")
+async def delete_festival(festival_id: int, request: Request):
+    """Remove a festival/holiday date. Admin only."""
+    current = _current_user(request)
+    if current["role"] not in ("Super Admin", "Manager", "Team Leader"):
+        raise HTTPException(status_code=403, detail="Admin role required")
+    try:
+        supabase_data.client.table("attendance_festivals").delete().eq("id", festival_id).execute()
+        logger.info("Festival {} removed by {}", festival_id, current["email"])
+        return {"ok": True}
+    except Exception as e:
+        logger.error("Failed to delete festival: {}", e)
+        raise HTTPException(status_code=500, detail="Failed to delete festival")
+
+
+def _festival_map(date_from: str, date_to: str) -> dict:
+    """{ 'YYYY-MM-DD': name } for the given range."""
+    try:
+        resp = (supabase_data.client.table("attendance_festivals")
+                .select("date,name").gte("date", date_from).lte("date", date_to).execute())
+        return {r["date"]: r["name"] for r in (resp.data or [])}
+    except Exception as e:
+        logger.error("Failed to load festival map: {}", e)
+        return {}
+
+
 @router.get("/export-csv")
 async def export_attendance_csv(
     request: Request,
@@ -400,6 +505,7 @@ async def export_attendance_csv(
 
     from datetime import date as _date
     today = _date.today()
+    festivals = _festival_map(date_from, date_to)
     _start = _date.fromisoformat(date_from)
     _end   = _date.fromisoformat(date_to)
     _days  = [_start + timedelta(days=i) for i in range((_end - _start).days + 1)]
@@ -407,6 +513,9 @@ async def export_attendance_csv(
         for dt in _days:
             date_str = dt.isoformat()
             day_name = dt.strftime("%a")
+            if date_str in festivals:  # paid festival / holiday for everyone
+                writer.writerow([name, date_str, day_name, f"Festival — {festivals[date_str]}", "", ""])
+                continue
             if dt.weekday() == 6:  # Sunday
                 writer.writerow([name, date_str, day_name, "Week Off", "", ""])
                 continue
@@ -448,6 +557,9 @@ class SalarySlipPayload(BaseModel):
     late_deduction_total: float = 0
     absent_deduction: float = 0
     total_deduction: float = 0
+    paid_festival_days: int = 0
+    incentive_amount: float = 0
+    incentive_note: Optional[str] = None
     net_salary: float
     notes: Optional[str] = None
 
