@@ -35,6 +35,7 @@ import {
   WarningOutlined,
   FireOutlined,
   DeleteOutlined,
+  RetweetOutlined,
 } from '@ant-design/icons';
 import { leadsAPI, coursesAPI, counselorsAPI, usersAPI } from '../api/api';
 import { COUNTRIES } from '../config/countries';
@@ -130,6 +131,7 @@ const parseDate = (s) => {
 };
 
 import ActivityTimeline from '../features/activity/ActivityTimeline';
+import SubmissionTimeline from '../components/leads/SubmissionTimeline';
 import AIAssistantPanel from '../features/ai/AIAssistantPanel';
 import CallTimeWidget from '../components/leads/CallTimeWidget';
 import WhatsAppTemplateDrawer from '../components/whatsapp/WhatsAppTemplateDrawer';
@@ -1378,6 +1380,17 @@ const LeadDetails = () => {
               </div>
             </Card>
           )}
+
+          {/* Submission History — first submission + every repeat */}
+          <Card
+            title={<span><RetweetOutlined /> Submission History</span>}
+            style={{ marginBottom: '24px' }}
+            extra={lead?.submission_count > 1
+              ? <Tag color="volcano">{lead.submission_count} submissions</Tag>
+              : <Tag>1 submission</Tag>}
+          >
+            <SubmissionTimeline leadId={leadId} />
+          </Card>
 
           {/* Activity Timeline */}
           {isFeatureEnabled('ACTIVITY_TIMELINE') && (

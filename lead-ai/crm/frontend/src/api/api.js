@@ -290,6 +290,8 @@ export const duplicatesAPI = {
   repeated:        ()        => api.get('/api/leads-repeated'),
   refreshRepeated: ()        => api.post('/api/leads/refresh-repeated'),
   cleanup:         ()        => api.post('/api/leads/cleanup-duplicates'),
+  // Full submission timeline (first submission + every repeat) for one lead
+  submissions:     (leadId)  => api.get(`/api/leads/${leadId}/submissions`),
 };
 
 // Google Sheets / Meta Leads Sync API

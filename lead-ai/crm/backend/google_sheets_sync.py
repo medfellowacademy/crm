@@ -189,35 +189,56 @@ def _phone_tail(phone: str) -> str:
 
 def find_existing_lead_by_contact(phone: str, email: str) -> Optional[Dict]:
     """
-    Look up an existing CRM lead matching this email address ONLY.
-    Phone-tail matching was removed because last-N-digit matching causes
-    false positives for international numbers (e.g. an Indian +91 number
-    and a Saudi +966 number can share the same last 10 digits), causing new
-    leads to silently update the wrong existing record instead of being inserted.
-    """
-    if not email or '@' not in email:
-        return None
+    Look up the existing CRM lead this contact belongs to.
 
+    Match is EXACT only:
+      * full phone digit string (after stripping +, spaces, punctuation), or
+      * lowercased trimmed email.
+    No last-N-digit / tail matching (that caused international false positives,
+    e.g. +91 vs +966 sharing the last 10 digits).
+    """
     from supabase_client import supabase_manager
     client = supabase_manager.get_client()
     SELECT = (
-        "id,lead_id,full_name,email,phone,status,meta_lead_id,"
-        "adset_name,source,assigned_to,created_at,"
-        "submission_count,meta_submission_ids,course_interested,country"
+        "id,lead_id,full_name,email,phone,whatsapp,status,meta_lead_id,"
+        "adset_name,campaign_name,source,assigned_to,created_at,"
+        "submission_count,is_repeated,meta_submission_ids,course_interested,country"
     )
 
-    try:
-        result = (
-            client.table("leads")
-            .select(SELECT)
-            .ilike("email", email.strip())
-            .limit(1)
-            .execute()
-        )
-        return result.data[0] if result.data else None
-    except Exception as e:
-        logger.warning(f"Email dedup lookup failed: {e}")
+    em = (email or "").strip().lower()
+    ph_digits = _re.sub(r"\D", "", str(phone or ""))
+    if len(ph_digits) < 8 or len(set(ph_digits)) <= 1:
+        ph_digits = ""
+
+    hits: Dict[int, Dict] = {}
+
+    if em and "@" in em:
+        try:
+            r = client.table("leads").select(SELECT).ilike("email", em).limit(5).execute()
+            for row in (r.data or []):
+                if (row.get("email") or "").strip().lower() == em:
+                    hits[row["id"]] = row
+        except Exception as e:
+            logger.warning(f"Email dedup lookup failed: {e}")
+
+    if ph_digits:
+        try:
+            r = (client.table("leads").select(SELECT)
+                 .or_(f"phone.eq.{ph_digits},phone.eq.+{ph_digits},"
+                      f"whatsapp.eq.{ph_digits},whatsapp.eq.+{ph_digits}")
+                 .limit(5).execute())
+            for row in (r.data or []):
+                p = _re.sub(r"\D", "", str(row.get("phone") or ""))
+                w = _re.sub(r"\D", "", str(row.get("whatsapp") or ""))
+                if ph_digits in (p, w):
+                    hits.setdefault(row["id"], row)
+        except Exception as e:
+            logger.warning(f"Phone dedup lookup failed: {e}")
+
+    if not hits:
         return None
+    # canonical = oldest matching lead
+    return min(hits.values(), key=lambda x: x.get("created_at") or "9999-12-31")
 
 
 # ── sheet fetching ─────────────────────────────────────────────────────────────
@@ -627,6 +648,33 @@ def sync_sheet_to_crm() -> Dict:
 
                 try:
                     client.table("leads").update(meta_update).eq('lead_id', existing_uuid).execute()
+
+                    # Structured repeat-tracking history row (the source of truth
+                    # for submission_count / is_repeated / the timeline UI).
+                    try:
+                        from repeat_leads import record_submission
+                        record_submission(
+                            {"id": existing_int_id, "lead_id": existing_uuid,
+                             "assigned_to": existing.get("assigned_to"),
+                             "submission_count": old_count},
+                            channel="google_sheet",
+                            source=lead.get("source"),
+                            campaign_name=lead.get("campaign_name"),
+                            adset_name=lead.get("adset_name"),
+                            ad_name=lead.get("ad_name"),
+                            utm_source=lead.get("utm_source"),
+                            utm_medium=lead.get("utm_medium"),
+                            utm_campaign=lead.get("utm_campaign"),
+                            matched_on="meta_id",
+                            external_id=meta_id,
+                            occurred_at=sub_date,
+                            raw_payload=lead,
+                            note=(f"Meta re-submission · tab {tab['name']} · "
+                                  f"ad set {lead.get('adset_name') or 'Unknown'}"),
+                        )
+                    except Exception as _re_err:
+                        logger.warning(f"repeat: record_submission failed for {existing_uuid}: {_re_err}")
+
                     # System note so counselors see the re-submission
                     if existing_int_id:
                         try:
@@ -676,6 +724,26 @@ def sync_sheet_to_crm() -> Dict:
                     result = client.table("leads").insert(lead).execute()
                     # result.data may be empty if Supabase returns no rows (e.g. RLS),
                     # but we treat any non-exception as a successful insert.
+                    _new_row = (result.data or [None])[0]
+                    if _new_row and _new_row.get("id"):
+                        try:
+                            from repeat_leads import record_submission
+                            record_submission(
+                                _new_row, channel="google_sheet",
+                                source=lead.get("source"),
+                                campaign_name=lead.get("campaign_name"),
+                                adset_name=lead.get("adset_name"),
+                                ad_name=lead.get("ad_name"),
+                                utm_source=lead.get("utm_source"),
+                                utm_medium=lead.get("utm_medium"),
+                                utm_campaign=lead.get("utm_campaign"),
+                                matched_on="new", external_id=meta_id,
+                                occurred_at=lead.get("created_at"),
+                                raw_payload=lead, is_first=True,
+                                note=f"First submission via Meta ad · tab {tab['name']}",
+                            )
+                        except Exception as _re_err:
+                            logger.warning(f"repeat: first-submission record failed: {_re_err}")
                     synced_ids.add(meta_id)
                     new_count += 1
                     tab_new += 1

@@ -610,7 +610,32 @@ const LeadsPageEnhanced = () => {
   // ── Mutations ──────────────────────────────────────────────────────────────
   const createMutation = useMutation({
     mutationFn: (d) => leadsAPI.create(d),
-    onSuccess: () => { message.success('Lead created!'); setDrawerVisible(false); form.resetFields(); queryClient.invalidateQueries({ queryKey: ['leads'] }); },
+    onSuccess: (res) => {
+      const data = res?.data || {};
+      if (data.repeated) {
+        // The contact already exists — the backend recorded a repeat
+        // submission on the existing lead and kept it with its owner.
+        const owner = data.owner || 'Unassigned';
+        if (data.action === 'blocked') {
+          Modal.info({
+            title: 'This lead already belongs to someone',
+            content: `${data.message || ''} It stays assigned to ${owner}. Your entry was logged as a repeat submission.`,
+          });
+        } else {
+          message.warning(
+            `Existing lead (owner: ${owner}) — logged as repeat submission #${data.sequence_no || ''}.`,
+            5,
+          );
+        }
+        setDrawerVisible(false); form.resetFields();
+        queryClient.invalidateQueries({ queryKey: ['leads'] });
+        queryClient.invalidateQueries({ queryKey: ['repeated-leads'] });
+        if (data.lead_id) queryClient.invalidateQueries({ queryKey: ['lead-submissions', data.lead_id] });
+        return;
+      }
+      message.success('Lead created!'); setDrawerVisible(false); form.resetFields();
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+    },
     onError: (e) => {
       console.error('Create lead error:', e);
       const detail = e.response?.data?.detail;
@@ -1114,16 +1139,19 @@ const LeadsPageEnhanced = () => {
                   </>
                 )}
                 {decayBadge}
-                {repeatedLeadIds.has(r.lead_id) && (
+                {(r.is_repeated || (r.submission_count || 1) > 1 || repeatedLeadIds.has(r.lead_id)) && (
                   <Tooltip title={
-                    (repeatedReasonMap[r.lead_id] || []).map(t =>
-                      t === 'same_phone' ? 'Same phone number' :
-                      t === 'same_email' ? 'Same email address' :
-                      'Same name'
-                    ).join(' · ')
+                    `${r.submission_count || 2} submissions` +
+                    (r.first_submission_at ? ` · first ${dayjs(r.first_submission_at).format('D MMM')}` : '') +
+                    (r.last_submission_at ? ` · last ${dayjs(r.last_submission_at).format('D MMM')}` : '') +
+                    ' · click to see full history'
                   }>
-                    <Tag color="volcano" style={{ fontSize: 10, margin: '0 0 0 2px', cursor: 'help', padding: '0 4px' }}>
-                      Repeated
+                    <Tag
+                      color="volcano"
+                      onClick={() => navigate(`/leads/${r.lead_id}`)}
+                      style={{ fontSize: 10, margin: '0 0 0 2px', cursor: 'pointer', padding: '0 4px' }}
+                    >
+                      Repeated ×{r.submission_count || 2}
                     </Tag>
                   </Tooltip>
                 )}

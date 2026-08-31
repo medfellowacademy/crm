@@ -14,7 +14,8 @@ FEATURES:
 """
 
 from fastapi import FastAPI, HTTPException, Depends, Query, BackgroundTasks, UploadFile, File, Header
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -70,6 +71,7 @@ from auth import (
 
 # Centralized RBAC (role hierarchy + permission matrix + dependencies)
 import rbac
+import repeat_leads
 from rbac import (
     P,
     current_user as current_active_user,
@@ -2369,13 +2371,56 @@ async def root():
 # ============================================================================
 
 @app.post("/api/leads", response_model=LeadResponse)
-async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, request: Request):
-    """Create a new lead with AI scoring - SUPABASE ONLY"""
+async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, request: Request,
+                      allow_duplicate: bool = False, _ingest_channel: str = "manual"):
+    """Create a new lead with AI scoring - SUPABASE ONLY.
+
+    Repeat-safe: if the phone or email already belongs to an existing lead the
+    submission is recorded on that lead (kept with its original owner) instead
+    of creating a competing row. Managers/Admins can force a new row with
+    ?allow_duplicate=true.
+    """
+
+    _actor = _get_request_user(request)
+    _actor_role = (_actor or {}).get("role")
+    _actor_name = (_actor or {}).get("full_name")
 
     # Auto-assign to counselor if they are creating the lead
     _counselor_name = _get_counselor_name(request)
     if _counselor_name:
         lead.assigned_to = _counselor_name  # Override assigned_to for counselors
+
+    # ---- repeated-lead detection -------------------------------------------
+    _force_new = bool(allow_duplicate) and rbac.has_permission(_actor_role or "", P.ASSIGN_LEAD)
+    if not _force_new:
+        _existing, _meta = repeat_leads.find_canonical_lead(lead.phone, lead.email)
+        if _existing:
+            reg = repeat_leads.register_incoming_lead(
+                {
+                    "full_name": lead.full_name, "phone": lead.phone, "email": lead.email,
+                    "source": lead.source, "country": lead.country,
+                    "course_interested": lead.course_interested,
+                    "utm_source": lead.utm_source, "utm_medium": lead.utm_medium,
+                    "utm_campaign": lead.utm_campaign,
+                    "note": f"Re-submitted via CRM new-lead form by {_actor_name or 'unknown'}",
+                },
+                channel=_ingest_channel, actor_name=_actor_name, actor_role=_actor_role,
+            )
+            invalidate_cache(LEAD_CACHE)
+            invalidate_cache(STATS_CACHE)
+            _fresh = reg.get("lead") or _existing
+            return JSONResponse(status_code=200, content={
+                "repeated": True,
+                "action": reg.get("action"),          # "repeat" | "blocked"
+                "matched_on": reg.get("matched_on"),
+                "needs_review": reg.get("needs_review"),
+                "owner": reg.get("owner"),
+                "submission_count": (reg.get("submission") or {}).get("submission_count"),
+                "sequence_no": (reg.get("submission") or {}).get("sequence_no"),
+                "message": reg.get("message"),
+                "lead_id": _fresh.get("lead_id"),
+                "lead": jsonable_encoder(_fresh),
+            })
 
     # Normalize input values to match CRM standards
     normalized = normalize_lead_values({
@@ -2476,13 +2521,32 @@ async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, reque
                 description=f"Lead created from {lead.source}",
                 created_by="System"
             )
-        
+
+        # Record the first submission in the repeat-tracking history
+        try:
+            repeat_leads.record_submission(
+                created, channel=_ingest_channel, source=lead.source,
+                utm_source=lead.utm_source, utm_medium=lead.utm_medium,
+                utm_campaign=lead.utm_campaign, matched_on="new",
+                is_first=True, note="First submission",
+            )
+        except Exception as _e:
+            logger.warning("repeat: first-submission record failed: {}", _e)
+
         # Invalidate caches
         invalidate_cache(STATS_CACHE)
         invalidate_cache(LEAD_CACHE)
 
         # Push to MBG Conversation Cloud (non-blocking)
         background_tasks.add_task(_push_lead_to_mbg, created)
+
+        # feature_importance is stored as a JSON string but LeadResponse expects
+        # a dict — parse it back so response validation doesn't 500.
+        if isinstance(created.get("feature_importance"), str):
+            try:
+                created["feature_importance"] = json.loads(created["feature_importance"])
+            except Exception:
+                created["feature_importance"] = None
 
         return created
     except HTTPException:
@@ -2533,7 +2597,23 @@ async def create_website_lead(
         source="Website",
         course_interested=payload.course_interested or "General Enquiry",
     )
-    created = await create_lead(lead=lead, background_tasks=background_tasks, request=request)
+    created = await create_lead(lead=lead, background_tasks=background_tasks, request=request,
+                                _ingest_channel="website")
+
+    # create_lead returns a JSONResponse when the contact already exists
+    # (repeat submission recorded on the existing lead, kept with its owner).
+    if isinstance(created, JSONResponse):
+        import json as _json
+        body = _json.loads(created.body.decode() or "{}")
+        _lead_obj = body.get("lead") or {}
+        if payload.message and _lead_obj.get("id"):
+            note_prefix = f"[{payload.form_type}] " if payload.form_type else ""
+            supabase_data.create_note(
+                lead_id=_lead_obj["id"],
+                content=f"{note_prefix}{payload.message}",
+                channel="manual", created_by="Website",
+            )
+        return created
 
     if payload.message and created.get("id"):
         note_prefix = f"[{payload.form_type}] " if payload.form_type else ""
@@ -2573,6 +2653,7 @@ async def bulk_create_leads(leads: list[LeadCreate], background_tasks: Backgroun
     results = {
         "success": [],
         "failed": [],
+        "repeated": [],          # matched an existing lead -> recorded as a repeat submission
         "total": len(leads)
     }
     
@@ -2591,24 +2672,44 @@ async def bulk_create_leads(leads: list[LeadCreate], background_tasks: Backgroun
             _rand = _uuid.uuid4().hex[:4].upper()
             lead_id = f"LEAD{_ts}{_rand}"
             
-            # Check for duplicates by phone (primary unique identifier)
+            # Repeated-lead detection: phone OR email already in the CRM.
+            # Instead of rejecting, record it as a repeat submission on the
+            # existing lead and keep that lead with its original owner.
             try:
-                existing = supabase_data.client.table('leads').select("lead_id,assigned_to,status,full_name").eq("phone", lead.phone).limit(1).execute()
-                if existing.data and len(existing.data) > 0:
-                    ex = existing.data[0]
-                    owner = ex.get("assigned_to") or "Unassigned"
-                    results["failed"].append({
+                _existing, _meta = repeat_leads.find_canonical_lead(lead.phone, lead.email)
+                if _existing:
+                    _owner = _existing.get("assigned_to") or "Unassigned"
+                    _rec = repeat_leads.record_submission(
+                        _existing, channel="bulk_import",
+                        source=lead.source,
+                        utm_source=lead.utm_source, utm_medium=lead.utm_medium,
+                        utm_campaign=lead.utm_campaign,
+                        matched_on=_meta["matched_on"],
+                        match_value=(repeat_leads.clean_phone(lead.phone)
+                                     if "phone" in _meta["matched_on"]
+                                     else repeat_leads.clean_email(lead.email)),
+                        needs_review=_meta["needs_review"],
+                        raw_payload={"full_name": lead.full_name, "phone": lead.phone,
+                                     "email": lead.email, "source": lead.source},
+                        note=f"Repeat via bulk import by {importer_name}",
+                    )
+                    repeat_leads._fill_blank_fields(_existing, {
+                        "email": lead.email, "source": lead.source,
+                        "course_interested": lead.course_interested, "country": lead.country,
+                    })
+                    results["repeated"].append({
                         "index": idx,
                         "name": lead.full_name,
-                        "error": f"Duplicate phone number: {lead.phone}",
-                        "duplicate": True,
-                        "existing_lead_id": ex.get("lead_id", ""),
-                        "existing_owner": owner,
-                        "existing_status": ex.get("status", ""),
+                        "existing_lead_id": _existing.get("lead_id", ""),
+                        "existing_owner": _owner,
+                        "existing_status": _existing.get("status", ""),
+                        "matched_on": _meta["matched_on"],
+                        "submission_count": _rec.get("submission_count"),
+                        "needs_review": _meta["needs_review"],
                     })
                     continue
             except Exception as dup_check_err:
-                logger.warning(f"Duplicate check failed for lead {idx}: {dup_check_err}")
+                logger.warning(f"Repeat check failed for lead {idx}: {dup_check_err}")
             
             # Normalize input values to match CRM standards
             normalized = normalize_lead_values({
@@ -2683,7 +2784,16 @@ async def bulk_create_leads(leads: list[LeadCreate], background_tasks: Backgroun
                             channel="manual",
                             created_by=importer_name
                         )
-                    
+                    try:
+                        repeat_leads.record_submission(
+                            created, channel="bulk_import", source=lead.source,
+                            utm_source=lead.utm_source, utm_medium=lead.utm_medium,
+                            utm_campaign=lead.utm_campaign, matched_on="new",
+                            is_first=True, note=f"First submission (bulk import by {importer_name})",
+                        )
+                    except Exception as _e:
+                        logger.warning("repeat: bulk first-submission record failed: {}", _e)
+
                     results["success"].append({"index": idx, "lead_id": lead_id, "name": lead.full_name})
                 else:
                     results["failed"].append({
@@ -3462,6 +3572,38 @@ async def get_lead_activities(lead_id: str, type: Optional[str] = None, request:
         logger.error(f"Failed to get activities for {lead_id}: {e}", exc_info=True)
         # Return empty list instead of failing
         return []
+
+
+@app.get("/api/leads/{lead_id}/submissions")
+async def get_lead_submissions(lead_id: str, request: Request):
+    """Full submission timeline for a lead — first (original) submission plus
+    every repeat, newest field first. Managers+ also get the raw payload.
+
+    Access: anyone who can view the lead (counselors: own leads only)."""
+    lead = supabase_data.get_lead_by_id(lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    user = _get_request_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    assert_can_view_lead(user, lead)
+
+    include_raw = rbac.has_any_permission(user["role"], (P.VIEW_TEAM_ANALYTICS, P.VIEW_AUDIT_LOGS))
+    rows = repeat_leads.list_submissions(lead["id"], include_raw=include_raw)
+
+    return {
+        "lead_id": lead.get("lead_id"),
+        "full_name": lead.get("full_name"),
+        "assigned_to": lead.get("assigned_to"),
+        "submission_count": lead.get("submission_count") or len(rows) or 1,
+        "is_repeated": bool(lead.get("is_repeated")),
+        "first_submission_at": lead.get("first_submission_at"),
+        "last_submission_at": lead.get("last_submission_at"),
+        "repeat_channels": lead.get("repeat_channels") or [],
+        "needs_review": any(r.get("needs_review") for r in rows),
+        "submissions": rows,
+    }
 
 
 @app.get("/api/leads/{lead_id}/ai-summary")
@@ -8450,30 +8592,36 @@ def _lead_row(db_lead) -> dict:
 @app.get("/api/leads-repeated")
 async def get_repeated_leads(
     request: Request,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(current_active_user)
 ):
-    """Return all leads marked is_repeated=true with full submission history."""
-    _verify_token(request)
+    """Return all leads marked is_repeated=true with repeat-tracking summary.
+    Counselors see only their own repeated leads."""
     try:
         COLS = (
-            "lead_id,full_name,phone,email,country,source,"
+            "id,lead_id,full_name,phone,email,country,source,"
             "course_interested,status,assigned_to,created_at,"
             "adset_name,campaign_name,"
-            "is_repeated,submission_count,"
+            "is_repeated,submission_count,repeat_channels,"
+            "first_submission_at,last_submission_at,"
             "last_submission_adset,last_submission_campaign,"
-            "last_submission_date,last_submission_tab"
+            "last_submission_date,last_submission_source,last_submission_tab"
         )
+        _scope = counselor_scope_name(current_user)
 
         # Fetch all repeated leads in pages (no 1000-row cap)
         all_rows: list = []
         page_size = 1000
         offset = 0
         while True:
-            result = (
+            _q = (
                 supabase_data.client.table('leads')
                 .select(COLS)
                 .eq('is_repeated', True)
-                .order('last_submission_date', desc=True)
+            )
+            if _scope is not None:
+                _q = _q.eq('assigned_to', _scope)
+            result = (
+                _q.order('last_submission_at', desc=True)
                 .range(offset, offset + page_size - 1)
                 .execute()
             )

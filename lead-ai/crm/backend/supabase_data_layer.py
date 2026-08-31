@@ -131,7 +131,7 @@ class SupabaseDataLayer:
             "qualification,company,loss_reason,loss_note,"
             "utm_source,utm_medium,utm_campaign,"
             "meta_lead_id,adset_name,campaign_name,ad_name,"
-            "is_repeated"
+            "is_repeated,submission_count,first_submission_at,last_submission_at,repeat_channels"
         )
         LIST_COLUMNS_COMPAT = (
             LIST_COLUMNS
@@ -140,6 +140,7 @@ class SupabaseDataLayer:
             .replace(",company", "")
             .replace(",utm_source,utm_medium,utm_campaign", "")
             .replace(",meta_lead_id,adset_name,campaign_name,ad_name", "")
+            .replace(",is_repeated,submission_count,first_submission_at,last_submission_at,repeat_channels", "")
             .replace(",is_repeated", "")
         )
 
@@ -572,62 +573,81 @@ class SupabaseDataLayer:
     
     def refresh_repeated_marks(self) -> int:
         """
-        Re-sync is_repeated flags from the ground truth stored in meta_submission_ids.
-        A lead is repeated only when meta_submission_ids contains 2+ distinct IDs
-        (i.e. the sync confirmed at least one genuine second submission with a different
-        meta_lead_id). Does NOT reset existing correct flags — only corrects discrepancies.
-        Returns total number of leads currently marked as repeated.
+        Recompute submission_count / is_repeated / first_submission_at /
+        last_submission_at / repeat_channels for every lead from the
+        lead_submissions history table (the source of truth since the
+        2026-08-31 lead_repeat_tracking migration).
+
+        Returns the number of leads currently flagged is_repeated=true.
         """
         try:
+            # Pull the whole history table in pages and fold per lead.
+            agg: dict = {}   # lead_id(int) -> {"cnt":int,"first":str,"last":str,"channels":set}
             page_size = 1000
             offset = 0
-            to_mark_true: list = []
-            to_mark_false: list = []
-
             while True:
                 batch = (
-                    self.client.table('leads')
-                    .select('lead_id,is_repeated,meta_submission_ids')
-                    .not_.is_('meta_lead_id', 'null')
+                    self.client.table('lead_submissions')
+                    .select('lead_id,occurred_at,channel')
                     .range(offset, offset + page_size - 1)
                     .execute()
                 )
                 rows = batch.data or []
                 for r in rows:
-                    ids_str = r.get('meta_submission_ids') or ''
-                    # Genuinely repeated = 2+ comma-separated IDs
-                    is_genuine = ',' in ids_str
-                    currently = r.get('is_repeated') or False
-                    if is_genuine and not currently:
-                        to_mark_true.append(r['lead_id'])
-                    elif not is_genuine and currently:
-                        to_mark_false.append(r['lead_id'])
+                    lid = r.get('lead_id')
+                    if lid is None:
+                        continue
+                    a = agg.setdefault(lid, {"cnt": 0, "first": None, "last": None, "channels": set()})
+                    a["cnt"] += 1
+                    occ = r.get('occurred_at')
+                    if occ:
+                        a["first"] = occ if a["first"] is None or occ < a["first"] else a["first"]
+                        a["last"] = occ if a["last"] is None or occ > a["last"] else a["last"]
+                    if r.get('channel'):
+                        a["channels"].add(r['channel'])
                 if len(rows) < page_size:
                     break
                 offset += page_size
 
-            for i in range(0, len(to_mark_true), 100):
-                self.client.table('leads').update({'is_repeated': True}).in_(
-                    'lead_id', to_mark_true[i:i+100]).execute()
-            for i in range(0, len(to_mark_false), 100):
-                self.client.table('leads').update({'is_repeated': False}).in_(
-                    'lead_id', to_mark_false[i:i+100]).execute()
+            # Only the leads that actually have >1 submission are interesting to
+            # recompute. Single-submission leads already read count=1 / repeated
+            # =false (set at migration time and by record_submission going
+            # forward); touching all 6k+ one-by-one over REST is far too slow.
+            multi = {lid: a for lid, a in agg.items() if a["cnt"] > 1}
 
-            total_repeated = len(to_mark_true) + sum(
-                1 for _ in to_mark_false  # those were already true, subtract
-            )
-            # Re-count actual total
-            result = (
-                self.client.table('leads')
-                .select('lead_id', count='exact')
-                .not_.is_('meta_lead_id', 'null')
-                .eq('is_repeated', True)
-                .execute()
-            )
-            total_repeated = result.count or 0
-            logger.info(f"refresh_repeated_marks: {total_repeated} leads marked as repeated "
-                        f"({len(to_mark_true)} newly added, {len(to_mark_false)} corrected to false)")
-            return total_repeated
+            # Also clear the flag on anything still marked repeated that no longer
+            # has multiple submissions.
+            try:
+                flagged = (self.client.table('leads').select('id')
+                           .eq('is_repeated', True).execute().data) or []
+                for row in flagged:
+                    if row['id'] not in multi:
+                        self.client.table('leads').update({
+                            'is_repeated': False, 'submission_count': 1,
+                        }).eq('id', row['id']).execute()
+            except Exception as e:
+                logger.warning(f"refresh_repeated_marks: stale-flag cleanup failed: {e}")
+
+            repeated = 0
+            for lid, a in multi.items():
+                patch = {
+                    "submission_count": a["cnt"],
+                    "is_repeated": True,
+                    "repeat_channels": sorted(a["channels"]) or None,
+                }
+                if a["first"]:
+                    patch["first_submission_at"] = a["first"]
+                if a["last"]:
+                    patch["last_submission_at"] = a["last"]
+                patch = {k: v for k, v in patch.items() if v is not None}
+                try:
+                    self.client.table('leads').update(patch).eq('id', lid).execute()
+                    repeated += 1
+                except Exception as e:
+                    logger.warning(f"refresh_repeated_marks: update failed for lead id={lid}: {e}")
+
+            logger.info(f"refresh_repeated_marks: {repeated} repeated leads recomputed")
+            return repeated
         except Exception as e:
             logger.error(f"refresh_repeated_marks failed: {e}")
             return 0
