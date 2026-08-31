@@ -2,12 +2,13 @@ import React, { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Card, Button, Tag, Table, Typography, Space, Alert, Spin, Tabs, DatePicker,
-  Empty, Select, InputNumber, Row, Col, Statistic, Divider, Tooltip, message, Input,
+  Empty, Select, InputNumber, Row, Col, Statistic, Divider, Tooltip, message, Input, Popconfirm,
 } from 'antd';
 import {
   LoginOutlined, LogoutOutlined, EnvironmentOutlined, ClockCircleOutlined,
   CheckCircleOutlined, WarningOutlined, DownloadOutlined, FileTextOutlined,
   DollarOutlined, TeamOutlined, CalendarOutlined, SaveOutlined, FilePdfOutlined, PlusOutlined,
+  DeleteOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { attendanceAPI, usersAPI } from '../api/api';
@@ -488,11 +489,13 @@ function bulkSlipHTML(selectedSlips) {
 
 // ── Salary Slips List ────────────────────────────────────────────────────────
 function SalarySlips() {
+  const queryClient = useQueryClient();
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
   const isAdmin = ['Super Admin', 'Manager', 'Team Leader'].includes(currentUser.role);
   const [filterMonth,   setFilterMonth]   = useState(null);
   const [filterUser,    setFilterUser]    = useState(isAdmin ? null : currentUser.email);
   const [selectedKeys,  setSelectedKeys]  = useState([]);
+  const [deletingId,    setDeletingId]    = useState(null);
 
   const { data: usersData } = useQuery({
     queryKey: ['users-all'],
@@ -504,6 +507,18 @@ function SalarySlips() {
     queryKey: ['salary-slips', filterMonth, filterUser],
     queryFn: () => attendanceAPI.listSlips(filterMonth || undefined, filterUser || undefined).then(r => r.data),
     onSuccess: () => setSelectedKeys([]),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id) => attendanceAPI.deleteSlip(id),
+    onMutate: (id) => setDeletingId(id),
+    onSuccess: () => {
+      message.success('Salary slip deleted.');
+      setSelectedKeys([]);
+      queryClient.invalidateQueries({ queryKey: ['salary-slips'] });
+    },
+    onError: (e) => message.error('Failed to delete: ' + (e?.response?.data?.detail || e.message)),
+    onSettled: () => setDeletingId(null),
   });
 
   const handleBulkPDF = () => {
@@ -555,16 +570,29 @@ function SalarySlips() {
       render: v => v ? v.split('@')[0] : '—',
     },
     {
-      title: '', key: 'actions', width: 90, fixed: 'right',
+      title: '', key: 'actions', width: isAdmin ? 150 : 90, fixed: 'right',
       render: (_, slip) => (
-        <Button size="small" icon={<FilePdfOutlined />} onClick={() => {
-          const w = window.open('', '_blank');
-          w.document.write(generateSlipHTML(slip));
-          w.document.close();
-          setTimeout(() => w.print(), 500);
-        }}>
-          PDF
-        </Button>
+        <Space size={4}>
+          <Button size="small" icon={<FilePdfOutlined />} onClick={() => {
+            const w = window.open('', '_blank');
+            w.document.write(generateSlipHTML(slip));
+            w.document.close();
+            setTimeout(() => w.print(), 500);
+          }}>
+            PDF
+          </Button>
+          {isAdmin && (
+            <Popconfirm
+              title="Delete this salary slip?"
+              description={`${slip.user_name} — ${dayjs((slip.month || '2025-01') + '-01').format('MMMM YYYY')}`}
+              okText="Delete"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => deleteMutation.mutate(slip.id)}
+            >
+              <Button size="small" danger icon={<DeleteOutlined />} loading={deletingId === slip.id} />
+            </Popconfirm>
+          )}
+        </Space>
       ),
     },
   ];
@@ -641,7 +669,7 @@ function SalarySlips() {
               rowKey="id"
               size="small"
               pagination={{ pageSize: 20 }}
-              scroll={{ x: 1310 }}
+              scroll={{ x: 1370 }}
               rowSelection={{
                 selectedRowKeys: selectedKeys,
                 onChange: setSelectedKeys,

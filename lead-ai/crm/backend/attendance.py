@@ -603,6 +603,28 @@ async def list_salary_slips(
         raise HTTPException(status_code=500, detail="Failed to list salary slips")
 
 
+@router.delete("/salary-slips/{slip_id}")
+async def delete_salary_slip(slip_id: int, request: Request):
+    """Delete a saved salary slip. Admin only."""
+    current = _current_user(request)
+    if current["role"] not in ("Super Admin", "Manager", "Team Leader"):
+        raise HTTPException(status_code=403, detail="Admin role required to delete salary slips")
+    try:
+        existing = (supabase_data.client.table("salary_slips")
+                    .select("id,user_email,month").eq("id", slip_id).execute())
+        if not existing.data:
+            raise HTTPException(status_code=404, detail="Salary slip not found")
+        supabase_data.client.table("salary_slips").delete().eq("id", slip_id).execute()
+        logger.info("Salary slip {} ({} {}) deleted by {}", slip_id,
+                    existing.data[0].get("user_email"), existing.data[0].get("month"), current["email"])
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to delete salary slip {}: {}", slip_id, e)
+        raise HTTPException(status_code=500, detail="Failed to delete salary slip")
+
+
 # ── Leave Balances ────────────────────────────────────────────────────────────
 
 class LeaveBalancePayload(BaseModel):

@@ -341,6 +341,7 @@ export const attendanceAPI = {
   exportCsv:  (dateFrom, dateTo, userEmail) => api.get('/api/attendance/export-csv', { params: { date_from: dateFrom, date_to: dateTo, ...(userEmail ? { user_email: userEmail } : {}) }, responseType: 'blob' }),
   saveSlip:      (payload)                       => api.post('/api/attendance/salary-slips', payload),
   listSlips:     (month, userEmail)              => api.get('/api/attendance/salary-slips', { params: { ...(month ? { month } : {}), ...(userEmail ? { user_email: userEmail } : {}) } }),
+  deleteSlip:    (id)                            => api.delete(`/api/attendance/salary-slips/${id}`),
   getLeaveBalance: (userEmail, month)            => api.get('/api/attendance/leave-balance', { params: { user_email: userEmail, month } }),
   saveLeaveBalance: (payload)                    => api.post('/api/attendance/leave-balance', payload),
   listAdvances:  (userEmail, status)             => api.get('/api/attendance/advances', { params: { ...(userEmail ? { user_email: userEmail } : {}), ...(status ? { status } : {}) } }),
