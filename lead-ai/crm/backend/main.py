@@ -636,6 +636,18 @@ class LeadSegment(str, enum.Enum):
     COLD = "Cold"
     JUNK = "Junk"
 
+# Statuses with no active follow-up cycle. A follow-up date on one of these
+# leads is meaningless and must never surface in overdue / due-today /
+# follow-up views or reminders. Setting a lead to one of these clears its
+# follow_up_date.
+TERMINAL_STATUSES = {"Enrolled", "Junk", "Not Interested"}
+
+def _is_terminal_status(status) -> bool:
+    if status is None:
+        return False
+    val = status.value if hasattr(status, "value") else str(status)
+    return val in TERMINAL_STATUSES
+
 class DBLead(Base):
     __tablename__ = "leads"
     
@@ -2487,7 +2499,9 @@ async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, reque
             "utm_source": lead.utm_source,
             "utm_medium": lead.utm_medium,
             "utm_campaign": lead.utm_campaign,
-            "follow_up_date": lead.follow_up_date.isoformat() if lead.follow_up_date else None,
+            "follow_up_date": (lead.follow_up_date.isoformat()
+                               if (lead.follow_up_date and not _is_terminal_status(db_lead.status))
+                               else None),
             "status": db_lead.status.value if hasattr(db_lead.status, 'value') else db_lead.status,
             "ai_score": db_lead.ai_score or 0.0,
             "ml_score": db_lead.ml_score,
@@ -3075,6 +3089,16 @@ async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, b
             dt = update_data['follow_up_date']
             iso = dt.isoformat() if hasattr(dt, 'isoformat') else str(dt)
             update_data['follow_up_date'] = iso if iso.endswith('Z') or '+' in iso else iso + 'Z'
+
+        # Terminal statuses (Enrolled / Junk / Not Interested) have no active
+        # follow-up cycle - clear any follow-up date when moving to one of them.
+        _status_after = update_data.get('status')
+        if _status_after is None:
+            _existing_for_status = existing if _counselor_name else supabase_data.get_lead_by_id(lead_id)
+            _status_after = (_existing_for_status or {}).get('status')
+        _clear_follow_up = _is_terminal_status(_status_after)
+        if _clear_follow_up:
+            update_data['follow_up_date'] = None  # (dropped by the data layer; explicit null issued below)
         if 'enrolled_at' in update_data and update_data['enrolled_at']:
             dt = update_data['enrolled_at']
             iso = dt.isoformat() if hasattr(dt, 'isoformat') else str(dt)
@@ -3086,6 +3110,17 @@ async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, b
         updated_lead = supabase_data.update_lead(lead_id, update_data)
         if not updated_lead:
             raise HTTPException(status_code=404, detail="Lead not found")
+
+        # The data layer strips None values, so an explicit null is needed to
+        # actually clear follow_up_date for a terminal-status lead.
+        if _clear_follow_up and (updated_lead or {}).get('follow_up_date'):
+            try:
+                supabase_data.client.table('leads').update(
+                    {'follow_up_date': None}
+                ).eq('lead_id', lead_id).execute()
+                updated_lead['follow_up_date'] = None
+            except Exception as _e:
+                logger.warning("could not clear follow_up_date for terminal lead {}: {}", lead_id, _e)
 
         # Evict single-lead cache so next GET returns fresh data with notes
         LEAD_CACHE.pop(f"lead:{lead_id}", None)
@@ -3251,11 +3286,22 @@ async def bulk_update_leads(bulk_data: dict, actor: dict = Depends(require_permi
         # Add updated_at timestamp with explicit Z suffix
         updates['updated_at'] = datetime.utcnow().isoformat() + 'Z'
 
+        # Moving leads to a terminal status clears their follow-up date.
+        _bulk_terminal = _is_terminal_status(updates.get('status'))
+        if _bulk_terminal:
+            updates.pop('follow_up_date', None)
+
         # Bulk update via Supabase - update all matching lead_ids
         for lead_id in lead_ids:
             result = supabase_data.update_lead(lead_id, updates)
             if result:
                 updated_count += 1
+        if _bulk_terminal and lead_ids:
+            try:
+                supabase_data.client.table('leads').update({'follow_up_date': None}) \
+                    .in_('lead_id', [str(x) for x in lead_ids]).execute()
+            except Exception as _e:
+                logger.warning("bulk terminal follow_up_date clear failed: {}", _e)
         
         # Invalidate cache after bulk update
         invalidate_cache(LEAD_CACHE)

@@ -50,6 +50,18 @@ const { Option } = Select;
 const { Text, Title } = Typography;
 const { Dragger } = Upload;
 
+// Statuses with no active follow-up cycle — a follow-up date is meaningless
+// on these and they must never count as overdue / due-today.
+const TERMINAL_STATUSES = new Set(['Enrolled', 'Junk', 'Not Interested']);
+const isTerminalStatus = (s) => TERMINAL_STATUSES.has(s);
+const isActiveOverdue = (lead) =>
+  !!lead?.follow_up_date &&
+  !isTerminalStatus(lead.status) &&
+  parseDate(lead.follow_up_date).isBefore(dayjs(), 'day');
+
+// How often the overdue-leads reminder pops up on the Leads page.
+const OVERDUE_REMINDER_MS = 30 * 60 * 1000;
+
 // ── Date filter helper ──────────────────────────────────────────────────────
 const makeDateFilter = (fieldKey) => ({
   filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }) => {
@@ -600,8 +612,8 @@ const LeadsPageEnhanced = () => {
       hot: leads.filter(l => l.status === 'Hot').length,
       warm: leads.filter(l => l.status === 'Warm').length,
       enrolled: leads.filter(l => l.status === 'Enrolled').length,
-      followUpToday: leads.filter(l => l.follow_up_date && parseDate(l.follow_up_date).isSame(today, 'day')).length,
-      overdue: leads.filter(l => l.follow_up_date && parseDate(l.follow_up_date).isBefore(today, 'day')).length,
+      followUpToday: leads.filter(l => l.follow_up_date && !isTerminalStatus(l.status) && parseDate(l.follow_up_date).isSame(today, 'day')).length,
+      overdue: leads.filter(isActiveOverdue).length,
       avgScore: leads.length ? (leads.reduce((s, l) => s + (l.ai_score || 0), 0) / leads.length).toFixed(1) : 0,
       revenue: leads.filter(l => l.status === 'Enrolled').reduce((s, l) => s + (l.actual_revenue || 0), 0),
     };
@@ -696,6 +708,74 @@ const LeadsPageEnhanced = () => {
     const timers = _inlineTimer.current;
     return () => Object.values(timers).forEach(clearTimeout);
   }, []);
+
+  // ── Overdue-follow-up reminder — pops up on load and every 30 min ──────────
+  const _overdueModalOpen = useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+
+    const showOverdueReminder = async () => {
+      if (cancelled || _overdueModalOpen.current) return;
+      try {
+        // Backend scopes counselors to their own leads and already excludes
+        // Enrolled / Junk / Not Interested.
+        const res = await leadsAPI.getAll({ overdue: true, limit: 100 });
+        const rows = (res.data?.leads || res.data || []).filter(isActiveOverdue);
+        if (cancelled || !rows.length) return;
+
+        rows.sort((a, b) => parseDate(a.follow_up_date) - parseDate(b.follow_up_date));
+        const shown = rows.slice(0, 8);
+
+        _overdueModalOpen.current = true;
+        Modal.warning({
+          title: `${rows.length} overdue follow-up${rows.length === 1 ? '' : 's'}`,
+          width: 520,
+          okText: 'Got it',
+          onOk: () => { _overdueModalOpen.current = false; },
+          onCancel: () => { _overdueModalOpen.current = false; },
+          content: (
+            <div style={{ maxHeight: 340, overflowY: 'auto', marginTop: 8 }}>
+              {shown.map((l) => {
+                const days = dayjs().startOf('day').diff(parseDate(l.follow_up_date).startOf('day'), 'day');
+                return (
+                  <div
+                    key={l.lead_id}
+                    onClick={() => { _overdueModalOpen.current = false; Modal.destroyAll(); navigate(`/leads/${l.lead_id}`); }}
+                    style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '6px 0',
+                             borderBottom: '1px solid #f0f0f0', cursor: 'pointer' }}
+                  >
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, fontSize: 13 }}>{l.full_name}</div>
+                      <div style={{ fontSize: 11, color: '#8c8c8c' }}>
+                        {l.course_interested || 'No course'}
+                        {!authUser?.role?.toLowerCase?.().includes('counselor') && l.assigned_to
+                          ? ` · ${l.assigned_to}` : ''}
+                      </div>
+                    </div>
+                    <Tag color="red" style={{ height: 22, alignSelf: 'center' }}>
+                      {days <= 0 ? 'due' : `${days}d overdue`}
+                    </Tag>
+                  </div>
+                );
+              })}
+              {rows.length > shown.length && (
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginTop: 8 }}>
+                  +{rows.length - shown.length} more — use the “⚠️ Overdue” filter to see all.
+                </div>
+              )}
+            </div>
+          ),
+        });
+      } catch {
+        /* transient — try again on the next tick */
+      }
+    };
+
+    const firstTimer = setTimeout(showOverdueReminder, 4000); // let the page settle
+    const interval = setInterval(showOverdueReminder, OVERDUE_REMINDER_MS);
+    return () => { cancelled = true; clearTimeout(firstTimer); clearInterval(interval); };
+    // eslint-disable-next-line
+  }, [authUser?.email]);
 
   // Handle Table onChange — extracts Ant Design column filter values and maps
   // them to server-side query params. This makes ALL column filters accurate
@@ -1095,7 +1175,7 @@ const LeadsPageEnhanced = () => {
       render: (_, r) => {
         // Compute decay risk badge
         let decayBadge = null;
-        if (decayConfig?.enabled && r.last_contact_date) {
+        if (decayConfig?.enabled && r.last_contact_date && !isTerminalStatus(r.status)) {
           const hoursSilent = (Date.now() - new Date(r.last_contact_date).getTime()) / 3600000;
           if (r.ai_segment === 'Hot') {
             const threshold = decayConfig.hot_to_warm_hours || 48;
@@ -1407,6 +1487,10 @@ const LeadsPageEnhanced = () => {
       sorter: (a, b) => new Date(a.follow_up_date || 0) - new Date(b.follow_up_date || 0),
       ...makeDateFilter('follow_up_date'),
       render: (date, r) => {
+        // Terminal leads (Enrolled / Junk / Not Interested) have no follow-up cycle.
+        if (isTerminalStatus(r.status)) {
+          return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
+        }
         const d = date ? parseDate(date) : null;
         const overdue = d && d.isBefore(dayjs(), 'day');
         const isToday  = d && d.isSame(dayjs(), 'day');
@@ -1704,7 +1788,7 @@ const LeadsPageEnhanced = () => {
             showQuickJumper: true,
           }}
           locale={{ emptyText: <Empty description="No leads found"><Button type="primary" icon={<PlusOutlined />} onClick={() => { form.resetFields(); form.setFieldsValue({ assigned_to: authUser?.full_name || null }); setDrawerVisible(true); }}>Add First Lead</Button></Empty> }}
-          rowClassName={r => r.follow_up_date && parseDate(r.follow_up_date).isBefore(dayjs(), 'day') ? 'overdue-row' : ''}
+          rowClassName={r => isActiveOverdue(r) ? 'overdue-row' : ''}
         />
       </Card>
 
@@ -2086,13 +2170,23 @@ const LeadsPageEnhanced = () => {
           </Row>
           <Row gutter={16}>
             <Col span={12}>
-              <Form.Item name="follow_up_date" label="Follow-up Date & Time">
-                <DatePicker
-                  showTime={{ format: 'hh:mm A', use12Hours: true }}
-                  format="MMM DD, YYYY hh:mm A"
-                  style={{ width: '100%' }}
-                  placeholder="Select date and time"
-                />
+              <Form.Item noStyle shouldUpdate={(p, c) => p.status !== c.status}>
+                {({ getFieldValue }) => isTerminalStatus(getFieldValue('status')) ? (
+                  <Form.Item label="Follow-up Date & Time">
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      Not applicable for {getFieldValue('status')} leads
+                    </Text>
+                  </Form.Item>
+                ) : (
+                  <Form.Item name="follow_up_date" label="Follow-up Date & Time">
+                    <DatePicker
+                      showTime={{ format: 'hh:mm A', use12Hours: true }}
+                      format="MMM DD, YYYY hh:mm A"
+                      style={{ width: '100%' }}
+                      placeholder="Select date and time"
+                    />
+                  </Form.Item>
+                )}
               </Form.Item>
             </Col>
           </Row>
@@ -2190,13 +2284,23 @@ const LeadsPageEnhanced = () => {
               notFoundContent={!users || users.length === 0 ? "Loading users..." : "No users found"}
               options={(users || []).map(u => ({ label: `${u.full_name} (${u.role})`, value: u.full_name }))} />
           </Form.Item>
-          <Form.Item name="follow_up_date" label="Follow-up Date & Time">
-            <DatePicker
-              showTime={{ format: 'hh:mm A', use12Hours: true }}
-              format="MMM DD, YYYY hh:mm A"
-              style={{ width: '100%' }}
-              placeholder="Select date and time"
-            />
+          <Form.Item noStyle shouldUpdate={(p, c) => p.status !== c.status}>
+            {({ getFieldValue }) => isTerminalStatus(getFieldValue('status')) ? (
+              <Form.Item label="Follow-up Date & Time">
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  Cleared automatically — {getFieldValue('status')} leads have no follow-up
+                </Text>
+              </Form.Item>
+            ) : (
+              <Form.Item name="follow_up_date" label="Follow-up Date & Time">
+                <DatePicker
+                  showTime={{ format: 'hh:mm A', use12Hours: true }}
+                  format="MMM DD, YYYY hh:mm A"
+                  style={{ width: '100%' }}
+                  placeholder="Select date and time"
+                />
+              </Form.Item>
+            )}
           </Form.Item>
           <Form.Item name="source" label="Source">
             <Select placeholder="Keep unchanged" allowClear>

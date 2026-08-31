@@ -214,15 +214,22 @@ class SupabaseDataLayer:
                 q = q.gte('ai_score', min_score)
             if max_score is not None:
                 q = q.lte('ai_score', max_score)
+            # Terminal statuses have no active follow-up cycle - a follow-up
+            # date on an Enrolled / Junk / Not Interested lead must never show
+            # up in overdue / due-today / follow-up views.
+            _TERMINAL_STATUSES = ("Enrolled", "Junk", "Not Interested")
             if follow_up_from:
                 q = q.gte('follow_up_date', follow_up_from)
             if follow_up_to:
                 q = q.lte('follow_up_date', follow_up_to)
+            if (follow_up_from or follow_up_to) and not overdue:
+                q = q.not_.in_('status', _TERMINAL_STATUSES)
             if created_today:
                 today = datetime.utcnow().date().isoformat()
                 q = q.gte('created_at', f"{today}T00:00:00").lte('created_at', f"{today}T23:59:59")
             if overdue:
                 q = q.lt('follow_up_date', datetime.utcnow().isoformat())
+                q = q.not_.in_('status', _TERMINAL_STATUSES)
             if search:
                 safe_search = re.sub(r"[%_\(\),\"]", "", str(search)).strip()[:100]
                 if safe_search:
