@@ -422,6 +422,35 @@ def scope_supabase_leads(query, user: dict, column: str = "assigned_to"):
     return query.in_(column, names)
 
 
+def scope_cache_suffix(user: dict) -> str:
+    """A stable, short cache-key fragment for the caller's visibility scope.
+
+    "all" for an unrestricted caller (Super Admin / Finance / Marketing), else
+    a hash of the sorted in-scope names. Analytics endpoints that filter their
+    result by scope MUST fold this into their STATS_CACHE key so one manager's
+    team-only view is never served to another caller.
+    """
+    names = lead_scope_names(user)
+    if names is None:
+        return "all"
+    import hashlib
+    joined = ",".join(sorted(norm_name(n) for n in names))
+    return hashlib.md5(joined.encode()).hexdigest()[:12]
+
+
+def filter_by_assignee(rows: list, user: dict, key: str = "assigned_to") -> list:
+    """Drop rows whose `key` value is a person outside the caller's lead scope.
+
+    Pass-through (returns `rows` unchanged) when the caller is unrestricted.
+    Used to scope pre-aggregated analytics rows that are keyed by counsellor
+    name (`assigned_to` / `user` / `name`)."""
+    names = lead_scope_names(user)
+    if names is None:
+        return rows
+    allow = _norm_name_set(names)
+    return [r for r in (rows or []) if norm_name((r or {}).get(key)) in allow]
+
+
 def can_view_lead(user: dict, lead: dict) -> bool:
     names = lead_scope_names(user)
     if names is None:

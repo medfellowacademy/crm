@@ -7,6 +7,9 @@ import {
 } from 'recharts';
 import { cohortAPI } from '../api/api';
 
+const CURRENT_USER = JSON.parse(localStorage.getItem('user') || '{}');
+const IS_TEAM_SCOPED = ['Manager', 'Team Leader'].includes(CURRENT_USER.role);
+
 /* ─── colour helpers ─────────────────────────────────────── */
 // Heat-map cell: 0 % = white, 100 % = deep green
 // below-avg cells lean amber/red
@@ -242,6 +245,11 @@ const CohortAnalysisPage = () => {
           under-performing cohorts before they age out.
         </p>
       </div>
+
+      {IS_TEAM_SCOPED && (
+        <Alert type="info" showIcon style={{ marginBottom: 12, borderRadius: 10 }}
+          message="Showing your team only — leads owned by people in your reporting line." />
+      )}
 
       {/* Alert strip — underperforming */}
       {underperf.length > 0 && (

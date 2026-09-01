@@ -7,6 +7,9 @@ import {
 } from 'recharts';
 import { conversionTimeAPI } from '../api/api';
 
+const CURRENT_USER = JSON.parse(localStorage.getItem('user') || '{}');
+const IS_TEAM_SCOPED = ['Manager', 'Team Leader'].includes(CURRENT_USER.role);
+
 /* ─── palette & helpers ────────────────────────────────── */
 const SPEED_PALETTE = [
   '#10b981', '#34d399', '#6ee7b7',
@@ -304,6 +307,16 @@ const ConversionTimePage = () => {
           />
         </Space>
       </div>
+
+      {IS_TEAM_SCOPED && (
+        <div style={{
+          marginBottom: 16, padding: '8px 14px', borderRadius: 8, fontSize: 13,
+          background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.25)',
+          color: 'var(--text-secondary,#4b5563)',
+        }}>
+          Showing your team only — leads owned by people in your reporting line.
+        </div>
+      )}
 
       {/* KPI strip */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 28 }}>

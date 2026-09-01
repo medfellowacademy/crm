@@ -29,6 +29,9 @@ function DeltaCell({ value, teamAvg, suffix = '', lowerIsBetter = false }) {
   );
 }
 
+const CURRENT_USER = JSON.parse(localStorage.getItem('user') || '{}');
+const IS_TEAM_SCOPED = ['Manager', 'Team Leader'].includes(CURRENT_USER.role);
+
 export default function TeamPerformancePage() {
   const [dateRange, setDateRange] = React.useState([null, null]);
   const dateParams = dateRange[0] && dateRange[1] ? {
@@ -148,6 +151,15 @@ export default function TeamPerformancePage() {
           />
         </Space>
       </div>
+
+      {IS_TEAM_SCOPED && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="Showing your team only — people in your reporting line."
+        />
+      )}
 
       <Alert
         type="info"

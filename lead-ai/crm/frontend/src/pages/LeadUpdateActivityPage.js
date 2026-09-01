@@ -12,7 +12,7 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import { useNavigate } from 'react-router-dom';
-import api from '../api/api';
+import api, { counselorsAPI } from '../api/api';
 
 const { Title, Text } = Typography;
 
@@ -92,6 +92,21 @@ export default function LeadUpdateActivityPage() {
   });
 
   const rows = data?.rows || [];
+
+  // ── Per-person performance (conversion / response time / cadence) ──────────
+  // Same endpoint the Team Performance page uses; already hierarchy-scoped
+  // server-side, so this only ever returns people the caller may monitor.
+  const { data: perfData } = useQuery({
+    queryKey: ['counselor-performance-comparison', 'all-time'],
+    queryFn: () => counselorsAPI.getPerformanceComparison({}).then(r => r.data),
+    staleTime: 5 * 60 * 1000,
+  });
+  const perfByName = useMemo(() => {
+    const m = {};
+    (perfData?.counselors || []).forEach(c => { m[(c.name || '').trim().toLowerCase()] = c; });
+    return m;
+  }, [perfData]);
+  const teamAvg = perfData?.team_average || {};
 
   // ── Derived: all users for filter dropdown ─────────────────────────────────
   const allUsers = useMemo(() => {
@@ -535,6 +550,57 @@ export default function LeadUpdateActivityPage() {
       >
         {drawerRow && (
           <>
+            {/* ── Per-person performance (all-time) ── */}
+            {(() => {
+              const p = perfByName[(drawerRow.user || '').trim().toLowerCase()];
+              if (!p) return null;
+              const fmt = (v, s = '') => (v == null ? '—' : `${v}${s}`);
+              const delta = (v, avg, lowerBetter) => {
+                if (v == null || avg == null) return null;
+                const d = +(v - avg).toFixed(1);
+                if (d === 0) return <Text type="secondary" style={{ fontSize: 11 }}>at team avg</Text>;
+                const good = lowerBetter ? d < 0 : d > 0;
+                return (
+                  <Text style={{ fontSize: 11, color: good ? '#16a34a' : '#dc2626' }}>
+                    {d > 0 ? '+' : ''}{d} vs avg
+                  </Text>
+                );
+              };
+              return (
+                <Card size="small" title={<Text strong>Performance (all-time)</Text>}
+                  style={{ marginBottom: 16, borderRadius: 10 }}>
+                  <Row gutter={16}>
+                    <Col span={6}>
+                      <Statistic title="Leads owned" value={p.total_leads ?? 0} valueStyle={{ fontSize: 18 }} />
+                    </Col>
+                    <Col span={6}>
+                      <Statistic title="Enrolled" value={p.enrolled ?? 0} valueStyle={{ fontSize: 18, color: '#16a34a' }} />
+                    </Col>
+                    <Col span={6}>
+                      <Statistic title="Conversion" value={fmt(p.conversion_rate, '%')} valueStyle={{ fontSize: 18 }} />
+                      <div>{delta(p.conversion_rate, teamAvg.conversion_rate, false)}</div>
+                    </Col>
+                    <Col span={6}>
+                      <Statistic title="Avg response" value={fmt(p.avg_response_hours, 'h')} valueStyle={{ fontSize: 18 }} />
+                      <div>{delta(p.avg_response_hours, teamAvg.avg_response_hours, true)}</div>
+                    </Col>
+                  </Row>
+                  <Row gutter={16} style={{ marginTop: 8 }}>
+                    <Col span={12}>
+                      <Statistic title="Follow-up cadence" value={fmt(p.avg_days_between_notes, 'd')} valueStyle={{ fontSize: 16 }} />
+                      <div>{delta(p.avg_days_between_notes, teamAvg.avg_days_between_notes, true)}</div>
+                    </Col>
+                    {p.top_objection && (
+                      <Col span={12}>
+                        <Text type="secondary" style={{ fontSize: 12 }}>Top objection</Text>
+                        <div><Tag color="volcano">{p.top_objection}</Tag></div>
+                      </Col>
+                    )}
+                  </Row>
+                </Card>
+              );
+            })()}
+
             {/* ── Activity type breakdown ── */}
             <Card
               size="small"

@@ -4140,11 +4140,21 @@ async def get_lead_update_activity(
 ):
     """
     Per-user lead-update activity summary.
-    Counselors are always scoped to their own name; admins/managers see all.
+
+    Hierarchy-scoped: a Counselor only sees their own name; a Manager / Team
+    Leader only sees users in their reporting subtree; Super Admin sees all.
     """
-    counselor_roles = {"Counselor"}
-    if current_user.get("role") in counselor_roles:
-        user = current_user.get("full_name") or current_user.get("email")
+    _scope = rbac.lead_scope_names(current_user)     # None => unrestricted
+    _scope_allow = None if _scope is None else {rbac.norm_name(n) for n in _scope}
+    if _scope_allow is not None:
+        if user:
+            # A specific user was requested — honour it only if in scope.
+            if rbac.norm_name(user) not in _scope_allow:
+                return {"rows": [], "total_users": 0, "date_from": "", "date_to": ""}
+        elif len(_scope_allow) == 1:
+            # Counselor (or a manager whose subtree is just themselves):
+            # push the filter down to the query for efficiency.
+            user = current_user.get("full_name") or current_user.get("email")
     try:
         from datetime import timezone
 
@@ -4321,10 +4331,17 @@ async def get_lead_update_activity(
                     "leads":          leads_detail,
                 })
 
+        # Hierarchy scope: keep only users the caller is allowed to monitor
+        # (Manager / Team Leader -> reporting subtree). "Unknown" actor rows
+        # are dropped for a scoped caller.
+        if _scope_allow is not None:
+            rows = [r for r in rows if rbac.norm_name(r.get("user")) in _scope_allow]
+
         # Sort by date desc, then user
         rows.sort(key=lambda r: (r["date"], r["user"]), reverse=True)
 
-        return {"rows": rows, "total_users": len(buckets), "date_from": date_from[:10], "date_to": date_to[:10]}
+        _scoped_users = len({r["user"] for r in rows}) if _scope_allow is not None else len(buckets)
+        return {"rows": rows, "total_users": _scoped_users, "date_from": date_from[:10], "date_to": date_to[:10]}
 
     except Exception as e:
         logger.error(f"Lead update activity error: {e}", exc_info=True)
@@ -4458,7 +4475,8 @@ async def get_followups_today(request: Request, assigned_to: Optional[str] = Non
 
 
 def _fetch_all_leads(columns: str, filters: dict = None, date_from: str = None,
-                      date_to: str = None, date_column: str = 'created_at') -> list:
+                      date_to: str = None, date_column: str = 'created_at',
+                      assigned_to_in: Optional[list] = None) -> list:
     """Fetch ALL leads from Supabase by paginating through 1000-row pages.
     Supabase default limit is 1000 rows; without explicit pagination, queries
     silently truncate results. Use this helper for any analytics/stats query
@@ -4477,6 +4495,11 @@ def _fetch_all_leads(columns: str, filters: dict = None, date_from: str = None,
         if filters:
             for col, val in filters.items():
                 q = q.eq(col, val)
+        if assigned_to_in is not None:
+            # Caller's lead-visibility scope (Manager/Team Leader -> subtree).
+            # An empty list would match nothing, which is the correct fail-closed
+            # behaviour for a caller entitled to a scope that resolves to no one.
+            q = q.in_('assigned_to', assigned_to_in or ['\x00__no_lead_access__'])
         if date_from:
             q = q.gte(date_column, date_from)
         if date_to:
@@ -4730,13 +4753,20 @@ async def get_department_kpis(current_user: dict = Depends(get_current_user)):
 
 
 @app.get("/api/counselors", response_model=List[CounselorResponse])
-async def get_counselors():
-    """Get all counselors from users table"""
-    
+async def get_counselors(actor: dict = Depends(current_active_user)):
+    """Get all counselors from users table.
+
+    Hierarchy-scoped: a Manager / Team Leader (and a Counselor) only sees
+    themselves + their reporting subtree. Super Admin sees everyone."""
+
     try:
         # Get users with counselor roles
         all_users = supabase_data.get_all_users()
         users = [u for u in all_users if u.get('role') in ['Counselor', 'Team Leader', 'Manager'] and u.get('is_active')]
+        _scope = rbac.lead_scope_names(actor)   # None => unrestricted
+        if _scope is not None:
+            _allow = {rbac.norm_name(n) for n in _scope}
+            users = [u for u in users if rbac.norm_name(u.get('full_name')) in _allow]
         
         # Get all leads for stats calculation
         all_leads = _fetch_all_leads('assigned_to,status')
@@ -4768,16 +4798,24 @@ async def get_counselors():
 
 @app.get("/api/counselors/performance",
          dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
-async def get_counselor_performance():
+async def get_counselor_performance(current_user: dict = Depends(current_active_user)):
     """Live counselor performance computed from leads table - SUPABASE ONLY.
+
+    Hierarchy-scoped: a Manager / Team Leader only sees their own reporting
+    subtree. Cached 1 minute per visibility scope.
 
     Note: field names (`name`, `revenue`, `overdue`, `followups_today`,
     `avg_ai_score`) must match what CounselorPerformanceWidget.js expects —
     this previously returned `counselor` and omitted 4 of the widget's
     columns, so most of the dashboard widget was silently rendering undefined."""
 
+    _scope = rbac.lead_scope_names(current_user)   # None => unrestricted
+    _ck = f"counselor_performance:{rbac.scope_cache_suffix(current_user)}"
+    if _ck in STATS_CACHE:
+        return STATS_CACHE[_ck]
     try:
-        leads = _fetch_all_leads('assigned_to,status,ai_segment,ai_score,actual_revenue,follow_up_date')
+        leads = _fetch_all_leads('assigned_to,status,ai_segment,ai_score,actual_revenue,follow_up_date',
+                                 assigned_to_in=_scope)
 
         today = datetime.utcnow().date()
         closed_statuses = {'Enrolled', 'Not Interested', 'Junk'}
@@ -4832,6 +4870,7 @@ async def get_counselor_performance():
             })
 
         results.sort(key=lambda r: -r['conversion_rate'])
+        STATS_CACHE[_ck] = results
         return results
     except Exception as e:
         logger.error("Error getting counselor performance: {}", e)
@@ -4840,21 +4879,33 @@ async def get_counselor_performance():
 
 @app.get("/api/counselors/performance-comparison",
          dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
-@cache_async_result(STATS_CACHE, "counselor_performance_comparison")
-async def get_counselor_performance_comparison(created_from: Optional[str] = None, created_to: Optional[str] = None):
+async def get_counselor_performance_comparison(
+    created_from: Optional[str] = None,
+    created_to: Optional[str] = None,
+    current_user: dict = Depends(current_active_user),
+):
     """Deeper counselor performance: response time, follow-up cadence, and
-    objection-mix, benchmarked against the team average. Cached 1 minute —
-    this scans the full notes/activities tables, which is too expensive to
-    run on every dashboard refresh.
+    objection-mix, benchmarked against the team average. Cached 1 minute per
+    visibility scope — this scans the full notes/activities tables, which is
+    too expensive to run on every dashboard refresh.
+
+    Hierarchy-scoped: a Manager / Team Leader only sees their own reporting
+    subtree; the team average is computed over that subtree too.
 
     Honest caveat: with only ~21 conversions across the whole company, a
     per-counselor conversion rate is a very small-sample statistic. Response
     time and cadence (computed from thousands of notes/activities, not just
     the rare conversion event) are the more statistically stable signals here."""
 
+    _scope = rbac.lead_scope_names(current_user)   # None => unrestricted
+    _ck = f"counselor_performance_comparison:{rbac.scope_cache_suffix(current_user)}:{created_from}:{created_to}"
+    if _ck in STATS_CACHE:
+        return STATS_CACHE[_ck]
+
     try:
         leads = _fetch_all_leads('id,assigned_to,status,primary_objection,created_at',
-                                  date_from=created_from, date_to=created_to)
+                                  date_from=created_from, date_to=created_to,
+                                  assigned_to_in=_scope)
 
         def _fetch_all_table(table, columns, page_size=1000):
             rows, start = [], 0
@@ -4942,7 +4993,7 @@ async def get_counselor_performance_comparison(created_from: Optional[str] = Non
 
         results.sort(key=lambda r: -r['conversion_rate'])
 
-        return {
+        _result = {
             'counselors': results,
             'team_average': {
                 'conversion_rate': round(team_conversion, 2),
@@ -4950,6 +5001,8 @@ async def get_counselor_performance_comparison(created_from: Optional[str] = Non
                 'avg_days_between_notes': _avg(all_gaps),
             },
         }
+        STATS_CACHE[_ck] = _result
+        return _result
     except Exception as e:
         logger.error("Error getting counselor performance comparison: {}", e)
         return {'counselors': [], 'team_average': {}}
@@ -4981,9 +5034,18 @@ def _count_active_super_admins(exclude_id=None) -> int:
 @app.get("/api/users")
 async def get_users(actor: dict = Depends(require_permission(P.VIEW_USERS))):
     """List users. Requires view_users (Super Admin / Manager / Team Leader).
-    Secrets (password hashes, tokens) are stripped from the response."""
+    Secrets (password hashes, tokens) are stripped from the response.
+
+    Hierarchy-scoped: a Manager / Team Leader only sees themselves plus their
+    reporting subtree (this also scopes every employee dropdown in the UI,
+    which all read this endpoint). Super Admin sees everyone.
+    """
     try:
         users = supabase_data.get_all_users()
+        names = rbac.lead_scope_names(actor)   # None => unrestricted
+        if names is not None:
+            allow = {rbac.norm_name(n) for n in names}
+            users = [u for u in users if rbac.norm_name(u.get("full_name")) in allow]
         return sanitize_users(users)
     except Exception as e:
         logger.error(f"Error fetching users: {e}")
@@ -5521,17 +5583,26 @@ async def reassign_lead(
 
 @app.get("/api/counselors/workload",
          dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
-@cache_async_result(STATS_CACHE, "counselor_workload")
-async def get_counselor_workloads():
-    """Get workload statistics for all counselors (cached for 1 minute) - SUPABASE ONLY"""
-    
+async def get_counselor_workloads(actor: dict = Depends(current_active_user)):
+    """Get workload statistics for all counselors - SUPABASE ONLY.
+
+    Hierarchy-scoped (Manager/Team Leader -> own reporting subtree). Cached
+    for 1 minute per visibility scope."""
+
+    _ck = f"counselor_workload:{rbac.scope_cache_suffix(actor)}"
+    if _ck in STATS_CACHE:
+        return STATS_CACHE[_ck]
     try:
-        # Get counselors
+        # Get counselors, scoped to the caller's reporting subtree
         users = supabase_data.get_all_users()
         counselors = [u for u in users if u.get('role') in ['Counselor', 'Manager', 'Team Leader'] and u.get('is_active')]
-        
-        # Get all leads
-        leads_data = _fetch_all_leads('assigned_to,status,ai_score')
+        _scope = rbac.lead_scope_names(actor)   # None => unrestricted
+        if _scope is not None:
+            _allow = {rbac.norm_name(n) for n in _scope}
+            counselors = [u for u in counselors if rbac.norm_name(u.get('full_name')) in _allow]
+
+        # Get all leads (scoped)
+        leads_data = _fetch_all_leads('assigned_to,status,ai_score', assigned_to_in=_scope)
         
         workloads = []
         for counselor in counselors:
@@ -5552,12 +5623,14 @@ async def get_counselor_workloads():
                 "status": "overloaded" if active_count > 30 else "busy" if active_count > 20 else "available"
             })
         
-        return {
+        _result = {
             "counselors": workloads,
             "total_counselors": len(workloads),
             "total_active_leads": sum(c["active_leads"] for c in workloads),
             "average_workload": round(sum(c["active_leads"] for c in workloads) / len(workloads), 1) if workloads else 0
         }
+        STATS_CACHE[_ck] = _result
+        return _result
     except Exception as e:
         logger.error(f"Error getting counselor workloads: {e}")
         return {"counselors": [], "total_counselors": 0, "total_active_leads": 0, "average_workload": 0}
@@ -6713,25 +6786,27 @@ async def get_admin_stats():
 
 @app.get("/api/admin/team-performance",
          dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
-@cache_async_result(STATS_CACHE, "admin_team_performance")
-async def get_team_performance():
-    """Admin dashboard: per-counselor performance metrics - SUPABASE ONLY"""
-    
+async def get_team_performance(current_user: dict = Depends(current_active_user)):
+    """Admin dashboard: per-counselor performance metrics - SUPABASE ONLY.
+
+    Hierarchy-scoped (Manager/Team Leader -> reporting subtree). Cached 1
+    minute per visibility scope."""
+
+    _scope = rbac.lead_scope_names(current_user)   # None => unrestricted
+    _ck = f"admin_team_performance:{rbac.scope_cache_suffix(current_user)}"
+    if _ck in STATS_CACHE:
+        return STATS_CACHE[_ck]
     try:
-        # Get counselors
+        # Get counselors, scoped to the caller's reporting subtree
         users = supabase_data.get_all_users()
         counselors = [u for u in users if u.get('role') == 'Counselor']
-        
-        # Paginate to get ALL leads (Supabase default cap is 1000 rows)
-        all_leads = []
-        _offset = 0
-        while True:
-            _resp = supabase_data.client.table('leads').select('assigned_to,status,ai_segment,expected_revenue').range(_offset, _offset + 999).execute()
-            _batch = _resp.data or []
-            all_leads.extend(_batch)
-            if len(_batch) < 1000:
-                break
-            _offset += 1000
+        if _scope is not None:
+            _allow = {rbac.norm_name(n) for n in _scope}
+            counselors = [u for u in counselors if rbac.norm_name(u.get('full_name')) in _allow]
+
+        # Paginate to get ALL leads (Supabase default cap is 1000 rows), scoped
+        all_leads = _fetch_all_leads('assigned_to,status,ai_segment,expected_revenue',
+                                     assigned_to_in=_scope)
 
         result = []
         for u in counselors:
@@ -6757,7 +6832,8 @@ async def get_team_performance():
         result.sort(key=lambda x: x['conversion_rate'], reverse=True)
         for i, r in enumerate(result):
             r['rank'] = i + 1
-        
+
+        STATS_CACHE[_ck] = result
         return result
     except Exception as e:
         logger.error("Team performance error: {}", e)
@@ -7606,8 +7682,16 @@ async def get_sla_compliance():
 
 @app.get("/api/admin/cohort-analysis",
          dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
-async def get_cohort_analysis():
-    """Cohort analysis grouped by signup month, with conversion-rate benchmarks - SUPABASE ONLY"""
+async def get_cohort_analysis(current_user: dict = Depends(current_active_user)):
+    """Cohort analysis grouped by signup month, with conversion-rate benchmarks - SUPABASE ONLY.
+
+    Hierarchy-scoped: a Manager / Team Leader only sees their own reporting
+    subtree's leads. Cached 1 minute per visibility scope."""
+
+    _scope = rbac.lead_scope_names(current_user)   # None => unrestricted
+    _ck = f"cohort_analysis:{rbac.scope_cache_suffix(current_user)}"
+    if _ck in STATS_CACHE:
+        return STATS_CACHE[_ck]
 
     empty_response = {"cohorts": [], "benchmarks": {}, "underperforming": []}
     TERMINAL = {"Enrolled", "Not Interested", "Junk", "Dropped", "TMT No Response", "Test Lead"}
@@ -7628,7 +7712,8 @@ async def get_cohort_analysis():
         return None
 
     try:
-        all_leads = _fetch_all_leads('created_at,status,updated_at,enrolled_at')
+        all_leads = _fetch_all_leads('assigned_to,created_at,status,updated_at,enrolled_at',
+                                     assigned_to_in=_scope)
 
         # Group by cohort month
         cohorts = defaultdict(list)
@@ -7716,11 +7801,13 @@ async def get_cohort_analysis():
             if r["mature_90"] and avg90 is not None and (avg90 - r["rate_90"]) >= threshold
         ]
 
-        return {
+        _result = {
             "cohorts":        rows,
             "benchmarks":     benchmarks,
             "underperforming": underperforming,
         }
+        STATS_CACHE[_ck] = _result
+        return _result
     except Exception as e:
         logger.error(f"Cohort analysis error: {e}")
         return empty_response
@@ -7732,8 +7819,17 @@ async def get_cohort_analysis():
 
 @app.get("/api/admin/conversion-time",
          dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
-async def get_conversion_time(created_from: Optional[str] = None, created_to: Optional[str] = None):
-    """Compute days from creation to enrollment, with histogram + breakdowns - SUPABASE ONLY"""
+async def get_conversion_time(created_from: Optional[str] = None, created_to: Optional[str] = None,
+                              current_user: dict = Depends(current_active_user)):
+    """Compute days from creation to enrollment, with histogram + breakdowns - SUPABASE ONLY.
+
+    Hierarchy-scoped: a Manager / Team Leader only sees their own reporting
+    subtree's leads. Cached 1 minute per visibility scope."""
+
+    _scope = rbac.lead_scope_names(current_user)   # None => unrestricted
+    _ck = f"conversion_time:{rbac.scope_cache_suffix(current_user)}:{created_from}:{created_to}"
+    if _ck in STATS_CACHE:
+        return STATS_CACHE[_ck]
 
     empty_response = {"overall": {"count": 0}, "distribution": [], "by_counselor": [], "by_course": [], "by_country": []}
 
@@ -7769,7 +7865,8 @@ async def get_conversion_time(created_from: Optional[str] = None, created_to: Op
 
     try:
         enrolled = _fetch_all_leads('created_at,updated_at,enrolled_at,assigned_to,course_interested,country',
-                                     {'status': 'Enrolled'}, date_from=created_from, date_to=created_to)
+                                     {'status': 'Enrolled'}, date_from=created_from, date_to=created_to,
+                                     assigned_to_in=_scope)
 
         all_days = [d for lead in enrolled if (d := days_to_convert(lead)) is not None]
         if not all_days:
@@ -7803,13 +7900,15 @@ async def get_conversion_time(created_from: Optional[str] = None, created_to: Op
                 for k, v in sorted(groups.items(), key=lambda x: (agg(x[1])["avg_days"] or 9999))
             ]
 
-        return {
+        _result = {
             "overall": agg(all_days),
             "distribution": distribution,
             "by_counselor": group_by(lambda l: l.get('assigned_to')),
             "by_course": group_by(lambda l: l.get('course_interested')),
             "by_country": group_by(lambda l: l.get('country')),
         }
+        STATS_CACHE[_ck] = _result
+        return _result
     except Exception as e:
         logger.error(f"Conversion time error: {e}")
         return empty_response
