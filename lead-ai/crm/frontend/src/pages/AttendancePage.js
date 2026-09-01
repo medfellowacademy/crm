@@ -530,7 +530,7 @@ function downloadPayrollCSV(slips, monthTag) {
 function SalarySlips() {
   const queryClient = useQueryClient();
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
-  const isAdmin = ['Super Admin', 'Manager', 'Team Leader'].includes(currentUser.role);
+  const isAdmin = currentUser.role === 'Super Admin';
   const [filterMonth,   setFilterMonth]   = useState(null);
   const [filterUser,    setFilterUser]    = useState(isAdmin ? null : currentUser.email);
   const [selectedKeys,  setSelectedKeys]  = useState([]);
@@ -736,7 +736,7 @@ function SalarySlips() {
 // ── Reports + Salary Calculator ─────────────────────────────────────────────
 function AttendanceReport() {
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
-  const isAdmin     = ['Super Admin', 'Manager', 'Team Leader'].includes(currentUser.role);
+  const isAdmin     = currentUser.role === 'Super Admin';
 
   const [dateRange,           setDateRange]           = useState([dayjs().startOf('month'), dayjs()]);
   const [selectedUser,        setSelectedUser]        = useState(isAdmin ? null : currentUser.email);
@@ -1494,20 +1494,20 @@ function AdvancesPanel() {
 // ── Page ─────────────────────────────────────────────────────────────────────
 export default function AttendancePage() {
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
-  const isAdmin     = ['Super Admin', 'Manager', 'Team Leader'].includes(currentUser.role);
+  const isAdmin     = currentUser.role === 'Super Admin';
 
+  // Everyone gets their own check-in / history. Team Attendance, Reports,
+  // Salary Slips and Advances are Super Admin only.
   const items = [
     { key: 'self', label: <Space><ClockCircleOutlined />My Attendance</Space>, children: <SelfAttendance /> },
   ];
   if (isAdmin) {
-    items.push({ key: 'team', label: <Space><TeamOutlined />Team Attendance</Space>, children: <TeamAttendance /> });
-  }
-  items.push(
-    { key: 'reports', label: <Space><FileTextOutlined />Reports</Space>, children: <AttendanceReport /> },
-    { key: 'slips',   label: <Space><DollarOutlined />{isAdmin ? 'Salary Slips' : 'My Pay Slips'}</Space>, children: <SalarySlips /> },
-  );
-  if (isAdmin) {
-    items.push({ key: 'advances', label: <Space><DollarOutlined />Advances</Space>, children: <AdvancesPanel /> });
+    items.push(
+      { key: 'team',     label: <Space><TeamOutlined />Team Attendance</Space>,   children: <TeamAttendance /> },
+      { key: 'reports',  label: <Space><FileTextOutlined />Reports</Space>,        children: <AttendanceReport /> },
+      { key: 'slips',    label: <Space><DollarOutlined />Salary Slips</Space>,     children: <SalarySlips /> },
+      { key: 'advances', label: <Space><DollarOutlined />Advances</Space>,         children: <AdvancesPanel /> },
+    );
   }
 
   return (
