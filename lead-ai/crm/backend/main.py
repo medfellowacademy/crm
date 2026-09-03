@@ -676,6 +676,7 @@ class LeadStatus(str, enum.Enum):
     TMT_NO_RESPONSE = "TMT No Response"
     RE_ASSIGNED_LEAD = "Re-assigned Lead"
     TEST_LEAD = "Test Lead"
+    PG_NEET = "PG-NEET"
 
 class LeadSegment(str, enum.Enum):
     HOT = "Hot"
@@ -1032,7 +1033,7 @@ _STATUS_NORMALISE_MAP: dict[str, str] = {
 }
 
 # Valid enum values set for fast lookup
-_VALID_STATUSES = {"Fresh", "Follow Up", "Warm", "Hot", "Not Interested", "Junk", "Not Answering", "Enrolled", "Will Enroll Later", "Dropped", "TMT No Response", "Re-assigned Lead", "Test Lead"}
+_VALID_STATUSES = {"Fresh", "Follow Up", "Warm", "Hot", "Not Interested", "Junk", "Not Answering", "Enrolled", "Will Enroll Later", "Dropped", "TMT No Response", "Re-assigned Lead", "Test Lead", "PG-NEET"}
 
 def _normalise_status(v):
     if not v:
@@ -1584,6 +1585,10 @@ def normalize_lead_values(lead_data: dict) -> dict:
         'reassigned': 'Re-assigned Lead',
         'test lead': 'Test Lead',
         'test': 'Test Lead',
+        'pg-neet': 'PG-NEET',
+        'pg neet': 'PG-NEET',
+        'pgneet': 'PG-NEET',
+        'pg_neet': 'PG-NEET',
     }
     
     # Country normalization - common variations

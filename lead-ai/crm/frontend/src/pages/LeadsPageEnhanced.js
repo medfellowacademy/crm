@@ -214,7 +214,7 @@ const parseSpreadsheet = (data, isBinary) => {
 };
 
 const REQUIRED_COLS = ['full_name', 'phone'];
-const STATUS_OPTIONS = ['Fresh', 'Follow Up', 'Warm', 'Hot', 'Not Interested', 'Not Answering', 'Enrolled', 'Junk', 'Will Enroll Later', 'Dropped', 'TMT No Response', 'Re-assigned Lead', 'Test Lead'];
+const STATUS_OPTIONS = ['Fresh', 'Follow Up', 'Warm', 'Hot', 'Not Interested', 'Not Answering', 'Enrolled', 'Junk', 'Will Enroll Later', 'Dropped', 'TMT No Response', 'Re-assigned Lead', 'Test Lead', 'PG-NEET'];
 
 // Auto-retry countdown shown when the server times out (cold-start)
 const AutoRetryCountdown = ({ onRetry, seconds = 15 }) => {
@@ -226,7 +226,7 @@ const AutoRetryCountdown = ({ onRetry, seconds = 15 }) => {
   }, [count, onRetry]);
   return <span style={{ fontSize: 12, color: '#d97706' }}>Auto-retry in {count}s</span>;
 };
-const SOURCE_OPTIONS = ['Website', 'Instagram', 'Facebook', 'Referral', 'WhatsApp'];
+const SOURCE_OPTIONS = ['Website', 'Instagram', 'Facebook', 'Referral', 'WhatsApp', 'PG-NEET'];
 
 // Map any import alias → canonical source name.
 // Keys are lowercase patterns that appear in raw imported values.
@@ -278,6 +278,7 @@ const STATUS_COLOR_MAP = {
   'Not Interested': 'default', 'Not Answering': 'gray', Junk: 'volcano',
   'Will Enroll Later': 'cyan', Dropped: 'magenta',
   'TMT No Response': 'gold', 'Re-assigned Lead': 'geekblue', 'Test Lead': 'default',
+  'PG-NEET': 'lime',
 };
 const COMPANY_OPTIONS = ['MED', 'Others'];
 
@@ -2131,7 +2132,7 @@ const LeadsPageEnhanced = () => {
             <Col span={12}>
               <Form.Item name="source" label="Source">
                 <Select placeholder="Lead source">
-                  {['Website','Facebook','Google Ads','Instagram','WhatsApp','Referral','Direct','LinkedIn','YouTube'].map(s => <Option key={s} value={s}>{s}</Option>)}
+                  {['Website','Facebook','Google Ads','Instagram','WhatsApp','Referral','Direct','LinkedIn','YouTube','PG-NEET'].map(s => <Option key={s} value={s}>{s}</Option>)}
                 </Select>
               </Form.Item>
             </Col>

@@ -40,7 +40,7 @@ import {
 import { leadsAPI, coursesAPI, counselorsAPI, usersAPI } from '../api/api';
 import { COUNTRIES } from '../config/countries';
 
-const SOURCE_OPTIONS = ['Website', 'Instagram', 'Facebook', 'Referral', 'WhatsApp'];
+const SOURCE_OPTIONS = ['Website', 'Instagram', 'Facebook', 'Referral', 'WhatsApp', 'PG-NEET'];
 
 // Plain-English labels for the AI model's internal feature names, shown in
 // the "Score Drivers" panel. Without this, counselors saw raw column names
@@ -691,6 +691,7 @@ const LeadDetails = () => {
                       lead?.status === 'Junk' ? 'red' :
                       lead?.status === 'TMT No Response' ? 'gold' :
                       lead?.status === 'Re-assigned Lead' ? 'geekblue' :
+                      lead?.status === 'PG-NEET' ? 'lime' :
                       lead?.status === 'Test Lead' ? 'default' : 'blue'
                     }>
                       {lead?.status}
@@ -710,6 +711,7 @@ const LeadDetails = () => {
                         <Option value="Junk">Junk</Option>
                         <Option value="Not Answering">Not Answering</Option>
                         <Option value="Test Lead">Test Lead</Option>
+                        <Option value="PG-NEET">PG-NEET</Option>
                         <Option value="Enrolled">Enrolled</Option>
                       </Select>
                     </Form.Item>
