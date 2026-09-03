@@ -3044,13 +3044,29 @@ async def get_leads(
         raise HTTPException(status_code=500, detail="Failed to fetch leads from database")
 
 
+_FILTER_OPT_KEYS = ("countries", "courses", "sources", "companies", "qualifications",
+                    "assigned_to", "utm_sources", "utm_mediums", "utm_campaigns", "ad_names")
+
+
 @app.get("/api/leads/filter-options")
 @cache_async_result(STATS_CACHE, "leads_filter_options")
 async def get_leads_filter_options():
     """Distinct values for every Leads-page filter dropdown (country, course,
     source, company, qualification, assigned_to, UTM source/medium/campaign,
     ad name), computed from the FULL leads table — not just whatever page is
-    currently loaded — so filter lists are always complete."""
+    currently loaded — so filter lists are always complete.
+
+    Primary path: the `lead_filter_options()` Postgres function (one ~30ms
+    in-DB aggregate). Falls back to an app-side scan if the function isn't
+    deployed / errors."""
+    try:
+        resp = supabase_data.client.rpc("lead_filter_options").execute()
+        data = resp.data or None
+        if isinstance(data, dict) and data:
+            return {k: sorted(data.get(k) or []) for k in _FILTER_OPT_KEYS}
+    except Exception as e:
+        logger.warning(f"lead_filter_options RPC unavailable, falling back to scan: {e}")
+
     try:
         rows = _fetch_all_leads(
             'country,course_interested,source,company,qualification,assigned_to,'
@@ -3074,9 +3090,7 @@ async def get_leads_filter_options():
         }
     except Exception as e:
         logger.error(f"Leads filter-options error: {e}")
-        return {"countries": [], "courses": [], "sources": [], "companies": [],
-                "qualifications": [], "assigned_to": [], "utm_sources": [],
-                "utm_mediums": [], "utm_campaigns": [], "ad_names": []}
+        return {k: [] for k in _FILTER_OPT_KEYS}
 
 
 @app.get("/api/leads/{lead_id}")
@@ -8802,47 +8816,40 @@ def _lead_row(db_lead) -> dict:
 @app.get("/api/leads-repeated")
 async def get_repeated_leads(
     request: Request,
+    limit: int = 500,
     current_user: dict = Depends(current_active_user)
 ):
-    """Return all leads marked is_repeated=true with repeat-tracking summary.
-    Counselors see only their own repeated leads."""
+    """Repeated (is_repeated=true) leads with repeat-tracking summary, newest
+    repeat first. Counselors / Managers are scoped to their own subtree.
+
+    Only the columns the Repeated-Leads drawer actually renders are selected,
+    and the row list is capped (`limit`, default 500) so the payload stays
+    small even when there are thousands of repeats — `total` still reflects
+    the true count."""
     try:
         COLS = (
-            "id,lead_id,full_name,phone,email,country,source,"
-            "course_interested,status,assigned_to,created_at,"
-            "adset_name,campaign_name,"
-            "is_repeated,submission_count,repeat_channels,"
-            "first_submission_at,last_submission_at,"
-            "last_submission_adset,last_submission_campaign,"
-            "last_submission_date,last_submission_source,last_submission_tab"
+            "id,lead_id,full_name,phone,email,course_interested,status,assigned_to,"
+            "submission_count,repeat_channels,first_submission_at,last_submission_at,"
+            "last_submission_campaign"
         )
         _scope_names = lead_scope_names(current_user)   # None => all
+        limit = max(1, min(int(limit or 500), 2000))
 
-        # Fetch all repeated leads in pages (no 1000-row cap)
-        all_rows: list = []
-        page_size = 1000
-        offset = 0
-        while True:
-            _q = (
-                supabase_data.client.table('leads')
-                .select(COLS)
-                .eq('is_repeated', True)
-            )
+        def _base():
+            q = supabase_data.client.table('leads').select(COLS, count='exact').eq('is_repeated', True)
             if _scope_names is not None:
-                _q = _q.in_('assigned_to', _scope_names)
-            result = (
-                _q.order('last_submission_at', desc=True)
-                .range(offset, offset + page_size - 1)
-                .execute()
-            )
-            batch = result.data or []
-            all_rows.extend(batch)
-            if len(batch) < page_size:
-                break
-            offset += page_size
+                q = q.in_('assigned_to', _scope_names)
+            return q
 
-        logger.info(f"Repeated leads: {len(all_rows)} leads with is_repeated=true")
-        return {"repeated": all_rows, "total": len(all_rows)}
+        resp = (_base()
+                .order('last_submission_at', desc=True)
+                .range(0, limit - 1)
+                .execute())
+        rows = resp.data or []
+        total = resp.count if resp.count is not None else len(rows)
+
+        logger.info(f"Repeated leads: returned {len(rows)} of {total}")
+        return {"repeated": rows, "total": total, "capped": total > len(rows)}
     except Exception as e:
         logger.error(f"Error fetching repeated leads: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to fetch repeated leads")

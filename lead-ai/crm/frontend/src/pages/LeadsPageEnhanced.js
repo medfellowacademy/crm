@@ -2668,7 +2668,16 @@ const LeadsPageEnhanced = () => {
               showIcon
               style={{ marginBottom: 16 }}
               message={`${repeatedData?.total || 0} ${(repeatedData?.total || 0) === 1 ? 'person has' : 'people have'} submitted more than once`}
-              description="Each stays on its original lead with the first owner — no duplicate row is created. Expand a lead to see every submission: when it came in, from which campaign, and who owned it at the time."
+              description={
+                <>
+                  Each stays on its original lead with the first owner — no duplicate row is created. Expand a lead to see every submission: when it came in, from which campaign, and who owned it at the time.
+                  {repeatedData?.capped && (
+                    <div style={{ marginTop: 6, fontWeight: 600 }}>
+                      Showing the {repeatedLeadsList.length} most recently re-submitted. Use the Leads filters for the rest.
+                    </div>
+                  )}
+                </>
+              }
             />
             <Collapse
               accordion
