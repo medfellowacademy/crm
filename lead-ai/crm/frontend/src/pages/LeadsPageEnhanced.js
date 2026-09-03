@@ -375,6 +375,16 @@ const LeadsPageEnhanced = () => {
 
   // Inline cell editing — tracks which cell (leadId + field) is actively being edited
   const [editingCell,  setEditingCell]  = useState({});   // { leadId, field }
+
+  // Keep the Leads page's cold-start burst small: the table only needs
+  // `leads` + `users` + `filter-options`. Everything else (decay badges,
+  // the full course list, the repeated-leads drawer) is fetched lazily —
+  // a short delay after mount, or when the feature that needs it is opened.
+  const [deferredReady, setDeferredReady] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setDeferredReady(true), 2500);
+    return () => clearTimeout(t);
+  }, []);
   const [editingValue, setEditingValue] = useState(null);
 
   const commitEdit = (leadId, field, value) => {
@@ -504,12 +514,21 @@ const LeadsPageEnhanced = () => {
   const leads = leadsResponse?.leads || [];
   const totalLeads = leadsResponse?.total || 0;
 
+  // Secondary data (filters, users, courses, decay badges) loads as soon as
+  // the leads table has painted — or 2.5s in, whichever comes first — so it
+  // never competes with the one query that matters on a cold backend.
+  const canDeferLoad = deferredReady || !isLoading;
+
   // Repeated leads: use is_repeated field from lead data (set in DB) for badge
   // Drawer uses the dedicated /api/leads/repeated endpoint for grouped view
+  // Only fetched when the Repeated Leads drawer is actually opened (keeps it
+  // off the page-load critical path). `keepData` keeps the result cached
+  // after the drawer closes so re-opening is instant.
   const { data: repeatedData, refetch: refetchRepeated } = useQuery({
     queryKey: ['repeated-leads'],
     queryFn: () => duplicatesAPI.repeated().then(r => r.data),
     staleTime: 2 * 60 * 1000,
+    enabled: repeatDrawerVisible,
   });
   const repeatedLeadIds = useMemo(
     () => new Set(leads.filter(l => l.is_repeated).map(l => l.lead_id)),
@@ -522,27 +541,36 @@ const LeadsPageEnhanced = () => {
     [repeatedData]
   );
 
+  // Full course list (with prices) is only needed by the Add/Edit Lead drawer
+  // and the inline course editor — fetch it lazily. The course *filter*
+  // dropdown falls back to filterOptions.courses until then.
   const { data: courses = [] } = useQuery({
     queryKey: ['courses'],
     queryFn: async () => { try { return (await coursesAPI.getAll()).data || []; } catch { return []; } },
     staleTime: 10 * 60 * 1000, // 10 minutes - courses don't change often
     gcTime: 30 * 60 * 1000,
+    enabled: canDeferLoad || drawerVisible || editingCell?.field === "course_interested",
   });
 
+  // Feeds the assignee filter + inline assignee editor + Add form — not the
+  // table rows themselves — so it can wait until just after first paint.
   const { data: usersData } = useQuery({
     queryKey: ['users'],
     queryFn: async () => { try { return (await usersAPI.getAll()).data; } catch (err) { console.error('Users fetch error:', err); return { users: [] }; } },
     staleTime: 5 * 60 * 1000, // 5 minutes - users don't change often
     gcTime: 15 * 60 * 1000,
+    enabled: canDeferLoad || drawerVisible || !!editingCell?.field,
   });
 
   const users = Array.isArray(usersData) ? usersData : (usersData?.users || []);
 
-  // Decay config — used to compute "at risk" badges in the table
+  // Decay config — only drives cosmetic "at risk" row badges, so fetch it a
+  // beat after the table renders instead of in the page-load burst.
   const { data: decayConfig } = useQuery({
     queryKey: ['decay-config'],
     queryFn: async () => { try { return (await decayAPI.getConfig()).data; } catch { return null; } },
     staleTime: 10 * 60 * 1000,
+    enabled: canDeferLoad,
   });
 
   // Distinct filter-dropdown values computed server-side from the FULL leads
@@ -554,6 +582,9 @@ const LeadsPageEnhanced = () => {
     queryFn: async () => { try { return (await leadsAPI.getFilterOptions()).data; } catch { return null; } },
     staleTime: 5 * 60 * 1000,
     gcTime: 15 * 60 * 1000,
+    // Only powers the filter dropdowns — defer past first paint. (This one is
+    // a full-table scan server-side, so keeping it out of the burst matters.)
+    enabled: canDeferLoad || filterDrawerVisible,
   });
 
   // ── Computed filter options (memoized for performance) ────────────────────
@@ -1667,10 +1698,14 @@ const LeadsPageEnhanced = () => {
               <Button icon={<ExportOutlined />} loading={isExporting || isMbgExporting}>Export</Button>
             </Dropdown>
             <Button icon={<ReloadOutlined />} onClick={() => refetch()} />
-            <Badge count={repeatedData?.total || 0} size="small" color="volcano">
+            <Badge
+              count={repeatedData?.total || repeatedLeadIds.size || 0}
+              size="small" color="volcano"
+              title={repeatedData ? undefined : 'Open to load the full count'}
+            >
               <Button
                 icon={<WarningOutlined />}
-                danger={(repeatedData?.total || 0) > 0}
+                danger={(repeatedData?.total || repeatedLeadIds.size || 0) > 0}
                 onClick={() => setRepeatDrawerVisible(true)}
               >
                 Repeated Leads
