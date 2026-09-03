@@ -414,12 +414,15 @@ def _get_request_user(request: Request) -> dict | None:
         token_data = decode_access_token(auth_header.split(" ", 1)[1])
         if not token_data or not token_data.email:
             return None
-        user = supabase_data.get_user_by_email(token_data.email)
+        # raise_on_error=True: a transient DB failure must NOT collapse to
+        # None here (that becomes a 401 below and logs the user out). Let it
+        # raise -> 503 (retryable, not a logout).
+        user = supabase_data.get_user_by_email(token_data.email, raise_on_error=True)
     except HTTPException:
         raise
     except Exception as e:
         logger.error("_get_request_user failed - failing closed: {}", e)
-        raise HTTPException(status_code=500, detail="Failed to verify account permissions. Please try again.")
+        raise HTTPException(status_code=503, detail="Couldn't verify your account just now — please retry.")
 
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
@@ -684,7 +687,7 @@ class LeadSegment(str, enum.Enum):
 # leads is meaningless and must never surface in overdue / due-today /
 # follow-up views or reminders. Setting a lead to one of these clears its
 # follow_up_date.
-TERMINAL_STATUSES = {"Enrolled", "Junk", "Not Interested"}
+TERMINAL_STATUSES = {"Enrolled", "Junk", "Not Interested", "Dropped", "TMT No Response", "Test Lead"}
 
 def _is_terminal_status(status) -> bool:
     if status is None:
@@ -4818,7 +4821,7 @@ async def get_counselor_performance(current_user: dict = Depends(current_active_
                                  assigned_to_in=_scope)
 
         today = datetime.utcnow().date()
-        closed_statuses = {'Enrolled', 'Not Interested', 'Junk'}
+        closed_statuses = TERMINAL_STATUSES
 
         counselor_stats = {}
         for lead in leads:

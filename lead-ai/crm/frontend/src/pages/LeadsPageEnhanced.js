@@ -53,7 +53,10 @@ const { Dragger } = Upload;
 
 // Statuses with no active follow-up cycle — a follow-up date is meaningless
 // on these and they must never count as overdue / due-today.
-const TERMINAL_STATUSES = new Set(['Enrolled', 'Junk', 'Not Interested']);
+// Keep in sync with backend main.py TERMINAL_STATUSES.
+const TERMINAL_STATUSES = new Set([
+  'Enrolled', 'Junk', 'Not Interested', 'Dropped', 'TMT No Response', 'Test Lead',
+]);
 const isTerminalStatus = (s) => TERMINAL_STATUSES.has(s);
 const isActiveOverdue = (lead) =>
   !!lead?.follow_up_date &&

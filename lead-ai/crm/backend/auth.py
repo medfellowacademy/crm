@@ -6,6 +6,7 @@ Provides JWT token generation, password hashing, and user verification
 from datetime import datetime, timedelta
 from typing import Optional
 import os
+import time
 from jose import JWTError, jwt
 import bcrypt
 from fastapi import Depends, HTTPException, status
@@ -129,12 +130,23 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
 
     token_data = decode_access_token(token)
 
-    try:
-        user = supabase_data.get_user_by_email(token_data.email)
-    except Exception as e:
-        # DB unavailable (e.g. Supabase cold-start, sync load) — return 503 so the
-        # frontend does NOT interpret this as an expired token and log the user out.
-        logger.warning(f"get_current_user DB lookup failed (transient): {e}")
+    # A transient Supabase failure (cold start, sync load, network blip) must
+    # NOT look like an auth failure — otherwise every such blip logs the user
+    # out. get_user_by_email(raise_on_error=True) turns a DB error into an
+    # exception; we retry once, then fall back to 503 (the frontend does not
+    # log out on 503). Only a real "no such row" reaches the 401 below.
+    user = None
+    last_err = None
+    for _attempt in range(2):
+        try:
+            user = supabase_data.get_user_by_email(token_data.email, raise_on_error=True)
+            last_err = None
+            break
+        except Exception as e:  # noqa: BLE001 - want any DB failure here
+            last_err = e
+            time.sleep(0.25)
+    if last_err is not None:
+        logger.warning(f"get_current_user DB lookup failed (transient): {last_err}")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Service temporarily unavailable — please retry",

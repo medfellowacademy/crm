@@ -33,14 +33,17 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
-    // A client-side timeout (ECONNABORTED) on Render's free tier almost
-    // always means the request itself woke a spun-down dyno — the dyno is
-    // warm by the time we'd retry, so one automatic retry turns what would
-    // be a hard-fail into a few extra seconds of wait instead of an error
-    // the user has to manually refresh past.
-    if (error.code === 'ECONNABORTED' && error.config && !error.config._retried) {
+    // A client-side timeout (ECONNABORTED) OR a transient 502/503/504 on
+    // Render's free tier almost always means the request itself woke a
+    // spun-down dyno (or hit it mid-cold-start). The dyno is warm by the time
+    // we'd retry, so one automatic retry (after a short back-off for the
+    // 5xx case) turns what would be a hard-fail — or a spurious bounce to
+    // login — into a few extra seconds of wait.
+    const _transient5xx = [502, 503, 504].includes(error.response?.status);
+    if ((error.code === 'ECONNABORTED' || _transient5xx) && error.config && !error.config._retried) {
       error.config._retried = true;
       try {
+        if (_transient5xx) await new Promise(r => setTimeout(r, 1500));
         return await api(error.config);
       } catch (retryError) {
         error = retryError;

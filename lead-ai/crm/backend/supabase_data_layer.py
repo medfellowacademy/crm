@@ -215,9 +215,11 @@ class SupabaseDataLayer:
             if max_score is not None:
                 q = q.lte('ai_score', max_score)
             # Terminal statuses have no active follow-up cycle - a follow-up
-            # date on an Enrolled / Junk / Not Interested lead must never show
-            # up in overdue / due-today / follow-up views.
-            _TERMINAL_STATUSES = ("Enrolled", "Junk", "Not Interested")
+            # date on one of these leads must never show up in overdue /
+            # due-today / follow-up views. Keep in sync with
+            # main.py TERMINAL_STATUSES and frontend LeadsPageEnhanced.js.
+            _TERMINAL_STATUSES = ("Enrolled", "Junk", "Not Interested",
+                                  "Dropped", "TMT No Response", "Test Lead")
             if follow_up_from:
                 q = q.gte('follow_up_date', follow_up_from)
             if follow_up_to:
@@ -559,14 +561,21 @@ class SupabaseDataLayer:
             logger.error(f"Error deleting lead {lead_id}: {e}")
             return False
     
-    def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
-        """Get user by email"""
+    def get_user_by_email(self, email: str, raise_on_error: bool = False) -> Optional[Dict[str, Any]]:
+        """Get user by email.
+
+        By default a DB error is swallowed and None is returned (legacy
+        behaviour). Auth code MUST pass raise_on_error=True so a transient
+        Supabase failure surfaces as an exception (-> 503) instead of looking
+        like "user not found" (-> 401 -> the frontend logs the user out)."""
         try:
             # Case-insensitive email lookup
             response = self.client.table('users').select("*").ilike('email', email.strip()).execute()
             return response.data[0] if response.data else None
         except Exception as e:
             logger.error(f"Error fetching user by email {email}: {e}")
+            if raise_on_error:
+                raise
             return None
     
     def get_all_users(self) -> List[Dict[str, Any]]:
