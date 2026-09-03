@@ -2893,7 +2893,7 @@ async def bulk_create_leads(leads: list[LeadCreate], background_tasks: Backgroun
 
 
 @app.get("/api/leads")
-async def get_leads(
+def get_leads(
     request: Request,
     skip: int = 0,
     limit: int = 50,
@@ -3050,7 +3050,7 @@ _FILTER_OPT_KEYS = ("countries", "courses", "sources", "companies", "qualificati
 
 @app.get("/api/leads/filter-options")
 @cache_async_result(STATS_CACHE, "leads_filter_options")
-async def get_leads_filter_options():
+def get_leads_filter_options():
     """Distinct values for every Leads-page filter dropdown (country, course,
     source, company, qualification, assigned_to, UTM source/medium/campaign,
     ad name), computed from the FULL leads table — not just whatever page is
@@ -3094,7 +3094,7 @@ async def get_leads_filter_options():
 
 
 @app.get("/api/leads/{lead_id}")
-async def get_lead(lead_id: str, request: Request):
+def get_lead(lead_id: str, request: Request):
     """Get single lead by ID - Supabase only"""
 
     _scope_names = _request_lead_scope(request)   # None => unrestricted
@@ -3863,7 +3863,7 @@ async def create_course(course: CourseCreate):
 
 @app.get("/api/courses", response_model=List[CourseResponse])
 @cache_async_result(COURSE_CACHE, "courses_list")
-async def get_courses(
+def get_courses(
     skip: int = 0,
     limit: int = 100,
     category: Optional[str] = None,
@@ -4012,7 +4012,7 @@ def _compute_raw_notifications(scope_names: Optional[list] = None) -> list:
 
 
 @app.get("/api/notifications")
-async def get_notifications(current_user: dict = Depends(get_current_user)):
+def get_notifications(current_user: dict = Depends(get_current_user)):
     """Real notifications, enriched with per-user read/snooze state.
     Scoped to the caller's lead visibility (Counselor: own; Manager / Team
     Leader: own + reporting subtree; Super Admin / Finance / Marketing: all)."""
@@ -4531,7 +4531,7 @@ def _fetch_all_leads(columns: str, filters: dict = None, date_from: str = None,
 
 @app.get("/api/dashboard/stats", response_model=DashboardStats)
 @cache_async_result(STATS_CACHE, "dashboard_stats")
-async def get_dashboard_stats(request: Request, created_from: Optional[str] = None, created_to: Optional[str] = None):
+def get_dashboard_stats(request: Request, created_from: Optional[str] = None, created_to: Optional[str] = None):
     """Get dashboard statistics (cached for 1 minute). Counselors see only their stats.
 
     created_from/created_to optionally scope total_leads/hot_leads/etc. to a
@@ -4770,7 +4770,7 @@ async def get_department_kpis(current_user: dict = Depends(get_current_user)):
 
 
 @app.get("/api/counselors", response_model=List[CounselorResponse])
-async def get_counselors(actor: dict = Depends(current_active_user)):
+def get_counselors(actor: dict = Depends(current_active_user)):
     """Get all counselors from users table.
 
     Hierarchy-scoped: a Manager / Team Leader (and a Counselor) only sees
@@ -5049,7 +5049,7 @@ def _count_active_super_admins(exclude_id=None) -> int:
 
 
 @app.get("/api/users")
-async def get_users(actor: dict = Depends(require_permission(P.VIEW_USERS))):
+def get_users(actor: dict = Depends(require_permission(P.VIEW_USERS))):
     """List users. Requires view_users (Super Admin / Manager / Team Leader).
     Secrets (password hashes, tokens) are stripped from the response.
 
@@ -6276,7 +6276,7 @@ async def upload_lead_document(
 # ============================================================================
 
 @app.get("/health")
-async def health_check():
+def health_check():
     """Health check endpoint with Supabase status - SUPABASE ONLY"""
     
     health_status = {
@@ -8212,7 +8212,7 @@ async def _decay_scheduler_loop():
 
 @app.get("/api/admin/decay-config",
          dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
-async def get_decay_config(
+def get_decay_config(
     current_user: dict = Depends(get_current_user),
 ):
     # Return default decay config (requires Supabase table migration)
@@ -8814,7 +8814,7 @@ def _lead_row(db_lead) -> dict:
 
 
 @app.get("/api/leads-repeated")
-async def get_repeated_leads(
+def get_repeated_leads(
     request: Request,
     limit: int = 500,
     current_user: dict = Depends(current_active_user)

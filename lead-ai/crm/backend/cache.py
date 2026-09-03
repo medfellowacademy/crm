@@ -6,6 +6,7 @@ Implements multi-layer caching: in-memory (TTL) + Redis for distributed caching
 from typing import Optional, Any, Callable
 from functools import wraps
 import hashlib
+import inspect
 import json
 import time
 from cachetools import TTLCache, LRUCache
@@ -89,53 +90,48 @@ def cache_result(cache: Any, key_prefix: str = ""):
 
 def cache_async_result(cache: Any, key_prefix: str = ""):
     """
-    Decorator to cache async function results
-    
-    Usage:
-        @cache_async_result(STATS_CACHE, "stats")
-        async def get_stats():
-            # ... expensive async operation
-            return result
+    Decorator to cache a route/handler result in an in-memory TTLCache.
+
+    Works whether the wrapped function is `async def` OR a plain `def`. This
+    matters for FastAPI: a plain `def` handler runs in the threadpool (so a
+    blocking Supabase call doesn't freeze the single-worker event loop),
+    while an `async def` handler runs on the loop. Keeping the wrapper's
+    sync/async-ness matching the wrapped function preserves that dispatch.
     """
     def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            # Generate cache key
-            cache_key = f"{key_prefix}:{get_cache_key(*args, **kwargs)}"
-            
-            # Try to get from cache
+        is_async = inspect.iscoroutinefunction(func)
+
+        def _get(cache_key):
             if cache_key in cache:
-                logger.debug(
-                    f"🎯 Cache HIT: {func.__name__}",
-                    extra={"cache_key": cache_key, "performance": True}
-                )
-                return cache[cache_key]
-            
-            # Cache miss - execute function
-            logger.debug(
-                f"❌ Cache MISS: {func.__name__}",
-                extra={"cache_key": cache_key, "performance": True}
-            )
-            
-            start_time = time.time()
-            result = await func(*args, **kwargs)
-            duration = time.time() - start_time
-            
-            # Store in cache
+                logger.debug(f"🎯 Cache HIT: {func.__name__}",
+                             extra={"cache_key": cache_key, "performance": True})
+                return True, cache[cache_key]
+            logger.debug(f"❌ Cache MISS: {func.__name__}",
+                         extra={"cache_key": cache_key, "performance": True})
+            return False, None
+
+        if is_async:
+            @wraps(func)
+            async def awrapper(*args, **kwargs):
+                cache_key = f"{key_prefix}:{get_cache_key(*args, **kwargs)}"
+                hit, val = _get(cache_key)
+                if hit:
+                    return val
+                result = await func(*args, **kwargs)
+                cache[cache_key] = result
+                return result
+            return awrapper
+
+        @wraps(func)
+        def swrapper(*args, **kwargs):
+            cache_key = f"{key_prefix}:{get_cache_key(*args, **kwargs)}"
+            hit, val = _get(cache_key)
+            if hit:
+                return val
+            result = func(*args, **kwargs)
             cache[cache_key] = result
-            
-            logger.debug(
-                f"💾 Cached async result: {func.__name__} ({duration*1000:.2f}ms)",
-                extra={
-                    "cache_key": cache_key,
-                    "duration_ms": round(duration * 1000, 2),
-                    "performance": True
-                }
-            )
-            
             return result
-        
-        return wrapper
+        return swrapper
     return decorator
 
 
