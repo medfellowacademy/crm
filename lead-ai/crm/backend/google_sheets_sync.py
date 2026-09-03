@@ -614,11 +614,20 @@ def sync_sheet_to_crm() -> Dict:
     tabs = get_sheet_tabs()
     client = supabase_manager.get_client()
 
+    # This runs in-process on the web dyno. A one-shot marathon (e.g. a
+    # ~1000-row backfill = thousands of sequential Supabase calls) starves the
+    # API and can OOM a small instance. Cap the WRITE work per run; the next
+    # run resumes automatically because already-imported rows are in
+    # synced_ids. Reads/skips are cheap and not capped, so a steady-state
+    # sync still covers every tab in one pass.
+    _MAX_WRITES_PER_RUN = int(os.getenv("SHEET_SYNC_MAX_WRITES_PER_RUN", "400"))
+
     new_count = 0
     updated_count = 0
     skip_count = 0
     dropped_count = 0   # rows with a real person but no usable id / no contact
     error_count = 0
+    partial = False     # True if we hit _MAX_WRITES_PER_RUN and stopped early
 
     tab_stats: List[Dict] = []
 
@@ -634,10 +643,19 @@ def sync_sheet_to_crm() -> Dict:
             logger.warning(f"Tab '{tab['name']}': skipped (0 rows returned)")
             tab_stats.append({"tab": tab["name"], "rows": 0, "new": 0, "updated": 0, "skipped": 0, "errors": 0, "status": "empty", "sample_error": None})
             continue
+        if partial:
+            break
         tab_new = tab_upd = tab_skip = tab_err = tab_dropped = 0
         tab_sample_err = None
         tab_sample_drop = None
         for row in rows:
+            if (new_count + updated_count) >= _MAX_WRITES_PER_RUN:
+                partial = True
+                logger.warning(
+                    f"Sync hit the per-run write cap ({_MAX_WRITES_PER_RUN}); "
+                    f"stopping early — the next run resumes from here."
+                )
+                break
             lead, skip_reason = row_to_lead(row, tab["name"])
             if not lead:
                 if skip_reason in ("no_id", "no_contact"):
@@ -886,12 +904,13 @@ def sync_sheet_to_crm() -> Dict:
         "skipped":       skip_count,
         "dropped":       dropped_count,
         "errors":        error_count,
+        "partial":       partial,   # hit the per-run write cap — run again to continue
         "tabs_synced":   len(tabs),
         "tabs_with_drops": [t["tab"] for t in tab_stats if t.get("dropped")],
         "synced_at":     datetime.utcnow().isoformat(),
         "per_tab":       tab_stats,
     }
-    logger.info(f"Sheet sync complete: {stats}")
+    logger.info(f"Sheet sync {'PARTIAL (cap hit)' if partial else 'complete'}: {stats}")
     _mark_sync_status("completed", last_sync_stats=stats)
     return stats
 
