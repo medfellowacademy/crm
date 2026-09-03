@@ -377,26 +377,46 @@ def _pick(row: Dict, *keys: str) -> str:
     return ""
 
 
-def row_to_lead(row: Dict, tab_name: str) -> Optional[Dict]:
-    """Convert a sheet row dict to a CRM lead dict. Returns None to skip."""
+def row_to_lead(row: Dict, tab_name: str):
+    """Convert a sheet row dict to a CRM lead dict.
+
+    Returns (lead_dict, None) on success, or (None, reason) to skip, where
+    reason is one of: "no_contact", "test_lead", "no_id". The caller uses the
+    reason to tell a genuinely-dropped row ("no_id"/"no_contact") apart from a
+    row it deliberately ignores — previously every None looked identical to
+    "already synced" in the stats, hiding whole tabs that never imported.
+    """
     # Meta has used several column names for the lead ID over time
-    raw_id = _pick(row, "id", "lead_id", "meta_lead_id", "form_lead_id", "leadgen_id")
+    raw_id = _pick(row, "id", "lead_id", "meta_lead_id", "form_lead_id",
+                   "leadgen_id", "leadgen id", "lead gen id", "leadgenid",
+                   "lead_gen_id", "form_id")
     meta_id = _clean_meta_id(raw_id)
-    if not meta_id:
-        return None
 
     full_name = _pick(row, "full_name", "name", "full name", "contact_name")
     email     = _pick(row, "email", "email_address", "e_mail").lower()
     phone     = _clean_phone(_pick(row, "phone", "phone_number", "mobile", "mobile_number", "contact_number"))
 
     if not full_name and not email and not phone:
-        return None
+        return None, "no_contact"
 
     # Skip Meta's test/dummy leads — they cycle on every sync and inflate counts
     _TEST_NAMES = ("<test lead", "dummy data", "test lead:")
     _TEST_EMAILS = ("test@meta.com", "test@facebook.com")
     if email in _TEST_EMAILS or any(t in (full_name or "").lower() for t in _TEST_NAMES):
-        return None
+        return None, "test_lead"
+
+    if not meta_id:
+        # No Meta lead-gen id on this row (a manually-maintained tab, or a
+        # form export without the id column). Don't silently drop a real
+        # person: synthesise a STABLE id from the tab + contact so re-syncs
+        # dedupe it, and the normal phone/email dedup below still merges it
+        # with a Meta lead if one arrives for the same person later.
+        if phone or email:
+            import hashlib
+            _basis = f"{tab_name}|{phone}|{email}".lower()
+            meta_id = "sheet:" + hashlib.sha1(_basis.encode()).hexdigest()[:20]
+        else:
+            return None, "no_id"
 
     adset    = (row.get("adset_name")    or "").strip()
     campaign = (row.get("campaign_name") or "").strip()
@@ -460,7 +480,7 @@ def row_to_lead(row: Dict, tab_name: str) -> Optional[Dict]:
     }
     if created_dt:
         lead["created_at"] = created_dt
-    return lead
+    return lead, None
 
 
 # ── sync ───────────────────────────────────────────────────────────────────────
@@ -560,6 +580,7 @@ def sync_sheet_to_crm() -> Dict:
     new_count = 0
     updated_count = 0
     skip_count = 0
+    dropped_count = 0   # rows with a real person but no usable id / no contact
     error_count = 0
 
     tab_stats: List[Dict] = []
@@ -576,13 +597,32 @@ def sync_sheet_to_crm() -> Dict:
             logger.warning(f"Tab '{tab['name']}': skipped (0 rows returned)")
             tab_stats.append({"tab": tab["name"], "rows": 0, "new": 0, "updated": 0, "skipped": 0, "errors": 0, "status": "empty", "sample_error": None})
             continue
-        tab_new = tab_upd = tab_skip = tab_err = 0
+        tab_new = tab_upd = tab_skip = tab_err = tab_dropped = 0
         tab_sample_err = None
+        tab_sample_drop = None
         for row in rows:
-            lead = row_to_lead(row, tab["name"])
+            lead, skip_reason = row_to_lead(row, tab["name"])
             if not lead:
-                skip_count += 1
-                tab_skip += 1
+                if skip_reason in ("no_id", "no_contact"):
+                    # A row that looks like a real lead but we couldn't use it.
+                    # Surface it (was previously indistinguishable from
+                    # "already synced") so a mis-named id column / broken tab
+                    # is visible in the sync report instead of silent.
+                    dropped_count += 1
+                    tab_dropped += 1
+                    if tab_sample_drop is None:
+                        tab_sample_drop = {
+                            "reason": skip_reason,
+                            "headers": list(row.keys())[:15],
+                            "sample": {k: str(row[k])[:60] for k in list(row)[:8]},
+                        }
+                    logger.warning(
+                        f"Tab '{tab['name']}': dropped row ({skip_reason}); "
+                        f"headers={list(row.keys())[:12]}"
+                    )
+                else:  # test_lead — deliberately ignored
+                    skip_count += 1
+                    tab_skip += 1
                 continue
 
             meta_id = lead["meta_lead_id"]
@@ -767,17 +807,20 @@ def sync_sheet_to_crm() -> Dict:
 
         logger.info(
             f"Tab '{tab['name']}': rows={len(rows)} new={tab_new} updated={tab_upd} "
-            f"skipped={tab_skip} errors={tab_err}"
+            f"skipped={tab_skip} dropped={tab_dropped} errors={tab_err}"
         )
+        _status = "errors" if tab_err else ("dropped" if tab_dropped else "ok")
         tab_stats.append({
             "tab": tab["name"],
             "rows": len(rows),
             "new": tab_new,
             "updated": tab_upd,
             "skipped": tab_skip,
+            "dropped": tab_dropped,
             "errors": tab_err,
-            "status": "ok" if tab_err == 0 else "errors",
+            "status": _status,
             "sample_error": tab_sample_err,
+            "sample_drop": tab_sample_drop,
         })
 
     # Persist last-synced timestamp
@@ -804,8 +847,10 @@ def sync_sheet_to_crm() -> Dict:
         "new_leads":     new_count,
         "updated_leads": updated_count,
         "skipped":       skip_count,
+        "dropped":       dropped_count,
         "errors":        error_count,
         "tabs_synced":   len(tabs),
+        "tabs_with_drops": [t["tab"] for t in tab_stats if t.get("dropped")],
         "synced_at":     datetime.utcnow().isoformat(),
         "per_tab":       tab_stats,
     }

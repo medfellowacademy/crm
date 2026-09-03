@@ -9640,15 +9640,17 @@ async def diagnose_sheet_sync(current_user: dict = Depends(get_current_user)):
             if rows:
                 tab_info["headers"] = list(rows[0].keys())
                 # Try parsing first row
-                sample = row_to_lead(rows[0], tab["name"])
+                sample, sample_reason = row_to_lead(rows[0], tab["name"])
                 tab_info["first_row_parsed"] = bool(sample)
                 if sample:
                     tab_info["sample_meta_lead_id"] = sample.get("meta_lead_id")
                     tab_info["sample_name"] = sample.get("full_name")
                 else:
+                    tab_info["first_row_skip_reason"] = sample_reason
                     tab_info["first_row_raw"] = {k: v for k, v in list(rows[0].items())[:8]}
                     report["issues"].append(
-                        f"Tab '{tab['name']}': row_to_lead() returned None for the first row. "
+                        f"Tab '{tab['name']}': row_to_lead() skipped the first row "
+                        f"(reason: {sample_reason}). "
                         f"Headers found: {list(rows[0].keys())[:10]}. "
                         f"Check that 'id'/'lead_id' and 'full_name'/'name' columns exist."
                     )
