@@ -320,11 +320,17 @@ def fetch_tab_rows(tab_name: str) -> List[Dict]:
                 logger.warning(f"Tab '{tab_name}': API returned 0 rows (attempt {attempt+1})")
                 return []
 
-            headers = [str(h).strip().lower() for h in raw_rows[0]]
+            # Some tabs have stray data row(s) above the real header — find it
+            # instead of blindly using row 0 (that dropped the whole tab).
+            hidx = _find_header_row(raw_rows)
+            if hidx > 0:
+                logger.warning(f"Tab '{tab_name}': real header row is at index {hidx} "
+                               f"({hidx} stray row(s) above it) — using it")
+            headers = [str(h).strip().lower() for h in raw_rows[hidx]]
             rows = []
-            for row_vals in raw_rows[1:]:
+            for row_vals in raw_rows[hidx + 1:]:
                 # Pad short rows with empty strings
-                padded = row_vals + [""] * (len(headers) - len(row_vals))
+                padded = list(row_vals) + [""] * (len(headers) - len(row_vals))
                 rows.append(dict(zip(headers, padded)))
             logger.info(f"Tab '{tab_name}': fetched {len(rows)} data rows, headers={headers[:6]}")
             return rows
@@ -337,6 +343,28 @@ def fetch_tab_rows(tab_name: str) -> List[Dict]:
             logger.error(f"Sheets API values fetch failed for tab '{tab_name}': {e}")
             return []
     return []
+
+
+# Tokens that identify the real header row. Some tabs in the sheet have a
+# stray data row pasted ABOVE the header, which made fetch code take row 0
+# (a data row) as headers and mis-key every subsequent row -> the whole tab
+# was dropped as "no_contact". Scan the first few rows for the true header.
+_HEADER_TOKENS = {
+    "id", "lead_id", "leadgen_id", "created_time", "full_name", "name",
+    "email", "phone", "phone_number", "campaign_name", "campaign_id",
+    "ad_name", "ad_id", "adset_name", "adset_id", "platform",
+    "form_id", "form_name",
+}
+
+
+def _find_header_row(raw_rows: List[list], scan: int = 6) -> int:
+    """Index of the row that looks like the column header (>=3 known tokens).
+    Falls back to 0 so behaviour is unchanged for well-formed tabs."""
+    for idx in range(min(scan, len(raw_rows))):
+        cells = [str(c).strip().lower() for c in (raw_rows[idx] or [])]
+        if sum(1 for c in cells if c in _HEADER_TOKENS) >= 3:
+            return idx
+    return 0
 
 
 def _fetch_rows_for_tab(tab: Dict) -> List[Dict]:
@@ -357,9 +385,18 @@ def _fetch_rows_for_tab(tab: Dict) -> List[Dict]:
             logger.error(f"CSV export returned HTTP {resp.status_code} for tab gid={tab['gid']}")
             return []
         content = resp.content.decode("utf-8-sig")
-        rows = list(csv.DictReader(io.StringIO(content)))
-        if not rows:
+        raw = [r for r in csv.reader(io.StringIO(content))]
+        if not raw:
             logger.warning(f"Tab gid={tab['gid']}: CSV returned 0 rows")
+            return []
+        hidx = _find_header_row(raw)
+        headers = [str(h).strip().lower() for h in raw[hidx]]
+        rows = []
+        for vals in raw[hidx + 1:]:
+            padded = list(vals) + [""] * (len(headers) - len(vals))
+            rows.append(dict(zip(headers, padded)))
+        if hidx > 0:
+            logger.warning(f"Tab gid={tab['gid']}: header row was at index {hidx} (stray rows above it)")
         return rows
     except Exception as e:
         logger.error(f"CSV fallback failed (gid={tab['gid']}): {e}")
