@@ -5,8 +5,8 @@ Provides JWT token generation, password hashing, and user verification
 
 from datetime import datetime, timedelta
 from typing import Optional
+import asyncio
 import os
-import time
 from jose import JWTError, jwt
 import bcrypt
 from fastapi import Depends, HTTPException, status
@@ -144,7 +144,10 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
             break
         except Exception as e:  # noqa: BLE001 - want any DB failure here
             last_err = e
-            time.sleep(0.25)
+            # NEVER time.sleep() here — this coroutine runs on the event loop
+            # and a blocking sleep under a burst of auth checks stalls the
+            # whole server. asyncio.sleep yields instead.
+            await asyncio.sleep(0.2)
     if last_err is not None:
         logger.warning(f"get_current_user DB lookup failed (transient): {last_err}")
         raise HTTPException(
