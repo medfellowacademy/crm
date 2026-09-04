@@ -1048,7 +1048,7 @@ def _normalise_status(v):
 
 
 # Canonical source values and their import aliases
-_CANONICAL_SOURCES = ['Website', 'Instagram', 'Facebook', 'Referral', 'WhatsApp']
+_CANONICAL_SOURCES = ['Website', 'Instagram', 'Facebook', 'Referral', 'WhatsApp', 'PG-NEET']
 _SOURCE_ALIAS_MAP = {
     # Website / Google
     'website': 'Website', 'web': 'Website', 'site': 'Website', 'online': 'Website',
@@ -3337,6 +3337,7 @@ async def bulk_update_leads(bulk_data: dict, actor: dict = Depends(require_permi
     #   Manager / Team Leader -> own + reporting subtree
     #   Super Admin / Finance / Marketing -> no restriction
     _scope_names = lead_scope_names(actor)
+    _skipped_out_of_scope = 0
     if _scope_names is not None:
         _allow = {norm_name(n) for n in _scope_names}
         if "assigned_to" in updates and norm_name(updates.get("assigned_to")) not in _allow:
@@ -3348,9 +3349,17 @@ async def bulk_update_leads(bulk_data: dict, actor: dict = Depends(require_permi
         except Exception as e:
             logger.error("bulk_update ownership check failed: {}", e)
             raise HTTPException(status_code=500, detail="Could not verify lead ownership")
-        bad = [r.get("lead_id") for r in owned if norm_name(r.get("assigned_to")) not in _allow]
-        if bad or len(owned) != len(set(str(x) for x in lead_ids)):
-            raise HTTPException(status_code=403, detail="One or more leads are outside your team")
+        # Only touch the leads that are actually in the caller's scope; silently
+        # skip the rest instead of failing the whole batch (a stale selection or
+        # one stray row shouldn't block updating the other 50).
+        _in_scope = {r["lead_id"] for r in owned
+                     if norm_name(r.get("assigned_to")) in _allow}
+        _requested = [str(x) for x in lead_ids]
+        _skipped_out_of_scope = len(_requested) - len(_in_scope)
+        lead_ids = [lid for lid in _requested if lid in _in_scope]
+        if not lead_ids:
+            raise HTTPException(status_code=403,
+                                detail="None of the selected leads are in your team")
     
     # Validate enum fields before applying updates
     _valid_statuses = {s.value for s in LeadStatus}
@@ -3392,10 +3401,14 @@ async def bulk_update_leads(bulk_data: dict, actor: dict = Depends(require_permi
         
         # Invalidate cache after bulk update
         invalidate_cache(LEAD_CACHE)
-        
+
+        _msg = f"Successfully updated {updated_count} lead{'s' if updated_count != 1 else ''}"
+        if _skipped_out_of_scope:
+            _msg += f" ({_skipped_out_of_scope} skipped — outside your team)"
         return {
-            "message": f"Successfully updated {updated_count} leads",
-            "updated_count": updated_count
+            "message": _msg,
+            "updated_count": updated_count,
+            "skipped": _skipped_out_of_scope,
         }
     except Exception as e:
         logger.error(f"bulk_update_leads failed: {e}")

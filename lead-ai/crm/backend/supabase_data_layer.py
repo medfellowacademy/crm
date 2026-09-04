@@ -34,7 +34,7 @@ _SOURCE_ALIAS_MAP = {
     'youtube': 'Website', 'twitter': 'Website', 'x': 'Website',
     'email': 'Website', 'sms': 'WhatsApp', 'call': 'WhatsApp',
 }
-_CANONICAL_SOURCES = {'Website', 'Instagram', 'Facebook', 'Referral', 'WhatsApp'}
+_CANONICAL_SOURCES = {'Website', 'Instagram', 'Facebook', 'Referral', 'WhatsApp', 'PG-NEET'}
 
 
 def _normalise_source_str(raw: str) -> str:
