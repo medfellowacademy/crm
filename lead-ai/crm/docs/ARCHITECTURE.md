@@ -49,10 +49,32 @@ large change — not a config toggle.
 - Unknown source values **pass through unchanged** — they are never
   force‑mapped to "Website" (that bug is why "PG‑NEET" used to disappear).
 
+## Lead ingest
+
+Two paths write leads. Both funnel through `create_lead(..., _ingest_channel=)`
+so dedupe, AI scoring, repeat-submission history and cache invalidation always
+apply.
+
+1. **Meta Lead Ads webhook — `POST /api/meta/leads-webhook`** (primary, real
+   time). Meta calls it on every form submit; the handler verifies
+   `X-Hub-Signature-256` against `META_APP_SECRET`, fetches the answers from the
+   Graph API with `META_PAGE_ACCESS_TOKEN` (needs `leads_retrieval`), maps them
+   via `meta_leads.py`, and creates the lead with `channel="meta_ads"`. Always
+   returns 200 (a non-200 makes Meta retry-storm). Pure mapping is unit-tested
+   (`tests/test_meta_leads.py`); the route is public (in `_PUBLIC_PATHS`).
+   - **Meta-side setup:** App Dashboard → Webhooks → Page → subscribe
+     `leadgen`; callback `https://<api-host>/api/meta/leads-webhook`; verify
+     token = `META_LEADS_WEBHOOK_VERIFY_TOKEN`. The GET handshake is
+     `GET /api/meta/leads-webhook`.
+2. **Google Sheet sync** (below) — now a **backfill / safety net**, not the
+   primary path. Still useful for history and if the webhook is ever
+   misconfigured.
+3. Website forms — `POST /api/public/website-lead` (shared-secret header).
+
 ## Google Sheets sync
 
 - Entry points: `POST /api/sheets/sync` (manual, from the UI) and
-  **`python backend/sync_cron.py`** (scheduled — this is the intended path).
+  **`python backend/sync_cron.py`** (scheduled — Render cron, every 15 min).
 - **Must not run inside the web process.** A large backfill competes with the
   API for CPU/DB connections and can OOM it, and a web redeploy kills an
   in‑process `BackgroundTask` mid‑run so later tabs never sync.
@@ -65,9 +87,10 @@ large change — not a config toggle.
   above the header) and reports per‑tab `dropped` counts + a `sample_drop`.
 - Rows with a name + phone/email but no Meta id get a stable synthetic
   `meta_lead_id = "sheet:" + sha1(tab|phone|email)` so they still import.
-- **No Meta → CRM fallback exists.** If the sheet integration breaks, leads
-  are lost until it's fixed. A direct Meta Lead Ads webhook is the fix
-  (not built yet).
+- The direct **Meta Lead Ads webhook** (see *Lead ingest* above) is now the
+  primary path, so a sheet outage no longer means lost leads — but the sheet
+  is still the only source of *historical* rows and the fallback if the
+  webhook is misconfigured, so keep it running.
 
 ## Memory / deployment
 

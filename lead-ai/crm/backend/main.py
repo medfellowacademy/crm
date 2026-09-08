@@ -431,6 +431,7 @@ _PUBLIC_PATHS = {
     # handler (see verify_meta_signature / verify_interakt_signature).
     "/api/whatsapp/webhook",
     "/api/interakt/webhook",
+    "/api/meta/leads-webhook",
 }
 
 from fastapi import Request
@@ -9166,6 +9167,173 @@ async def meta_whatsapp_webhook(request: FARequest):
         logger.error(f"Meta WA webhook error: {e}")
 
     return {"status": "ok"}
+
+
+# ============================================================================
+# META LEAD ADS — direct `leadgen` webhook
+# ----------------------------------------------------------------------------
+# Real-time replacement for the Google-Sheet import: Meta calls this endpoint
+# the instant someone submits a lead form, we pull the answers from the Graph
+# API and create a CRM lead through the normal `create_lead` path (so dedupe,
+# AI scoring, repeat-submission history and cache invalidation all apply).
+# The Sheet sync stays as a backfill / safety net.
+# ============================================================================
+
+_META_LEADS_VERIFY_TOKEN = (
+    os.getenv("META_LEADS_WEBHOOK_VERIFY_TOKEN")
+    or os.getenv("META_WHATSAPP_WEBHOOK_VERIFY_TOKEN", "crm_verify_token")
+)
+# A Page (or system-user) access token holding `leads_retrieval`. The WhatsApp
+# token is only a last-resort fallback — it is usually not a Page token.
+_META_LEADS_PAGE_TOKEN = (
+    os.getenv("META_PAGE_ACCESS_TOKEN")
+    or os.getenv("META_LEADS_ACCESS_TOKEN")
+    or os.getenv("META_WHATSAPP_ACCESS_TOKEN", "")
+)
+_META_GRAPH_API = os.getenv("META_GRAPH_API_BASE", "https://graph.facebook.com/v21.0")
+
+# Pure parsing / mapping helpers live in their own module so they are unit
+# tested without importing this whole app.
+import meta_leads as _meta_leads
+
+
+async def _meta_graph_get(path: str, params: dict) -> dict:
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(f"{_META_GRAPH_API}/{path}", params=params)
+        if r.status_code != 200:
+            logger.warning("Meta Graph %s -> HTTP %s: %s", path, r.status_code, r.text[:300])
+            return {}
+        return r.json() or {}
+    except Exception as e:
+        logger.warning("Meta Graph %s failed: %s", path, e)
+        return {}
+
+
+async def _fetch_meta_lead(leadgen_id: str) -> dict:
+    """Pull a submitted lead's answers + ad/campaign context from the Graph API."""
+    if not _META_LEADS_PAGE_TOKEN:
+        logger.error(
+            "Meta leads webhook: no page access token (META_PAGE_ACCESS_TOKEN) — "
+            "cannot fetch lead %s", leadgen_id,
+        )
+        return {}
+    return await _meta_graph_get(leadgen_id, {
+        "access_token": _META_LEADS_PAGE_TOKEN,
+        "fields": "id,created_time,ad_id,ad_name,adset_id,adset_name,"
+                  "campaign_id,campaign_name,form_id,platform,field_data",
+    })
+
+
+async def _ingest_meta_leadgen(leadgen_id: str, change_value: dict,
+                               background_tasks: BackgroundTasks, request: Request) -> None:
+    detail = await _fetch_meta_lead(leadgen_id)
+    fields = _meta_leads.parse_leadgen_field_data(detail.get("field_data", []))
+
+    email = fields.get("email")
+    phone = fields.get("phone") or ""
+    if not phone and not email:
+        logger.warning("Meta lead %s has neither phone nor email — skipped", leadgen_id)
+        return
+
+    ad_name = detail.get("ad_name") or ""
+    adset_name = detail.get("adset_name") or ""
+    campaign_name = detail.get("campaign_name") or ""
+    source = _meta_leads.pick_source(detail.get("platform") or change_value.get("platform"))
+    country = fields.get("country") or "India"
+    course = _meta_leads.leadgen_course_guess(fields, ad_name) or "General Enquiry"
+
+    lead = LeadCreate(
+        full_name=fields.get("full_name") or "Unknown",
+        email=email,
+        phone=phone or "",
+        country=country,
+        source=source,
+        course_interested=course,
+        qualification=fields.get("qualification") or fields.get("qualification?"),
+        utm_source=campaign_name or "Meta Lead Ads",
+        utm_medium=adset_name or None,
+        utm_campaign=campaign_name or None,
+    )
+    created = await create_lead(lead=lead, background_tasks=background_tasks,
+                                request=request, _ingest_channel="meta_ads")
+
+    lead_pk = None
+    if isinstance(created, JSONResponse):
+        try:
+            lead_pk = (json.loads(created.body.decode() or "{}").get("lead") or {}).get("id")
+        except Exception:
+            pass
+        logger.info("Meta lead %s matched an existing CRM lead (repeat recorded)", leadgen_id)
+    else:
+        lead_pk = (created or {}).get("id")
+        logger.info("Meta lead %s -> new CRM lead %s", leadgen_id, (created or {}).get("lead_id"))
+
+    # Stamp meta_lead_id + ad context so a later Google-Sheet row for the same
+    # person dedupes against this record instead of creating a twin.
+    if lead_pk:
+        try:
+            supabase_data.client.table("leads").update({
+                "meta_lead_id": leadgen_id,
+                "ad_name": ad_name or None,
+                "adset_name": adset_name or None,
+                "campaign_name": campaign_name or None,
+            }).eq("id", lead_pk).execute()
+        except Exception as e:
+            logger.warning("Meta lead %s: could not stamp meta_lead_id: %s", leadgen_id, e)
+
+
+@app.get("/api/meta/leads-webhook")
+async def meta_leads_verify(
+    hub_mode: Optional[str] = Query(None, alias="hub.mode"),
+    hub_verify_token: Optional[str] = Query(None, alias="hub.verify_token"),
+    hub_challenge: Optional[str] = Query(None, alias="hub.challenge"),
+):
+    """Meta webhook verification handshake for the `leadgen` field.
+    Configure this URL + verify token in Meta App Dashboard → Webhooks → Page."""
+    ok = bool(hub_verify_token) and _hmac.compare_digest(
+        str(hub_verify_token), str(_META_LEADS_VERIFY_TOKEN)
+    )
+    if hub_mode == "subscribe" and ok:
+        logger.info("Meta Lead Ads webhook verified")
+        return int(hub_challenge) if str(hub_challenge or "").isdigit() else hub_challenge
+    raise HTTPException(status_code=403, detail="Webhook verification failed")
+
+
+@app.post("/api/meta/leads-webhook")
+async def meta_leads_webhook(request: Request, background_tasks: BackgroundTasks):
+    """Receive Meta Lead Ads submissions in real time and create CRM leads.
+
+    AUTH: public (Meta has no CRM JWT). The request is authenticated by
+    verifying Meta's X-Hub-Signature-256 HMAC over the raw body against
+    META_APP_SECRET. Always returns 200 so Meta does not retry-storm a payload
+    that will never succeed — per-lead failures are logged, not surfaced.
+    """
+    raw = await verify_meta_signature(request)
+    try:
+        body = json.loads(raw or b"{}")
+    except Exception as e:
+        logger.warning("Meta leads webhook: non-JSON body: %s", e)
+        return {"status": "ok"}
+
+    processed = 0
+    for entry in body.get("entry", []) or []:
+        for change in entry.get("changes", []) or []:
+            if change.get("field") != "leadgen":
+                continue
+            value = change.get("value", {}) or {}
+            leadgen_id = str(value.get("leadgen_id") or value.get("lead_id") or "").strip()
+            if not leadgen_id:
+                continue
+            try:
+                await _ingest_meta_leadgen(leadgen_id, value, background_tasks, request)
+                processed += 1
+            except Exception as e:
+                logger.error("Meta leads webhook: failed to ingest %s: %s",
+                             leadgen_id, e, exc_info=True)
+
+    return {"status": "ok", "processed": processed}
 
 
 class MetaWASendRequest(BaseModel):
