@@ -39,8 +39,7 @@ import {
 } from '@ant-design/icons';
 import { leadsAPI, coursesAPI, counselorsAPI, usersAPI } from '../api/api';
 import { COUNTRIES } from '../config/countries';
-
-const SOURCE_OPTIONS = ['Website', 'Instagram', 'Facebook', 'Referral', 'WhatsApp', 'PG-NEET'];
+import { STATUS_OPTIONS, SOURCE_OPTIONS, STATUS_COLOR_MAP } from '../config/leadEnums';
 
 // Plain-English labels for the AI model's internal feature names, shown in
 // the "Score Drivers" panel. Without this, counselors saw raw column names
@@ -681,39 +680,13 @@ const LeadDetails = () => {
                 </Descriptions.Item>
                 <Descriptions.Item label="Status">
                   {!isEditing ? (
-                    <Tag color={
-                      lead?.status === 'Enrolled' ? 'green' :
-                      lead?.status === 'Hot' ? 'red' :
-                      lead?.status === 'Warm' ? 'orange' :
-                      lead?.status === 'Will Enroll Later' ? 'gold' :
-                      lead?.status === 'Not Interested' ? 'red' :
-                      lead?.status === 'Dropped' ? 'volcano' :
-                      lead?.status === 'Junk' ? 'red' :
-                      lead?.status === 'TMT No Response' ? 'gold' :
-                      lead?.status === 'Re-assigned Lead' ? 'geekblue' :
-                      lead?.status === 'PG-NEET' ? 'lime' :
-                      lead?.status === 'Test Lead' ? 'default' : 'blue'
-                    }>
+                    <Tag color={STATUS_COLOR_MAP[lead?.status] || 'blue'}>
                       {lead?.status}
                     </Tag>
                   ) : (
                     <Form.Item name="status" noStyle>
-                      <Select style={{ width: '100%' }}>
-                        <Option value="Fresh">Fresh</Option>
-                        <Option value="Follow Up">Follow Up</Option>
-                        <Option value="Warm">Warm</Option>
-                        <Option value="Hot">Hot</Option>
-                        <Option value="Will Enroll Later">Will Enroll Later</Option>
-                        <Option value="Re-assigned Lead">Re-assigned Lead</Option>
-                        <Option value="TMT No Response">TMT No Response</Option>
-                        <Option value="Not Interested">Not Interested</Option>
-                        <Option value="Dropped">Dropped</Option>
-                        <Option value="Junk">Junk</Option>
-                        <Option value="Not Answering">Not Answering</Option>
-                        <Option value="Test Lead">Test Lead</Option>
-                        <Option value="PG-NEET">PG-NEET</Option>
-                        <Option value="Enrolled">Enrolled</Option>
-                      </Select>
+                      <Select style={{ width: '100%' }}
+                        options={STATUS_OPTIONS.map((s) => ({ value: s, label: s }))} />
                     </Form.Item>
                   )}
                 </Descriptions.Item>

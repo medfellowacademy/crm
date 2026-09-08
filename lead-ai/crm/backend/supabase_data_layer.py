@@ -9,50 +9,20 @@ import re
 import json
 from supabase_client import supabase_manager
 from logger_config import logger
+import constants as _const
 
-# ── Source normalisation ───────────────────────────────────────────────────────
-# Maps raw/legacy source aliases stored in the DB → canonical value.
-_SOURCE_ALIAS_MAP = {
-    # Website / Google
-    'website': 'Website', 'web': 'Website', 'site': 'Website', 'online': 'Website',
-    'google': 'Website', 'google ads': 'Website', 'google ad': 'Website',
-    'seo': 'Website', 'organic': 'Website', 'search': 'Website',
-    # Instagram
-    'instagram': 'Instagram', 'ig': 'Instagram', 'insta': 'Instagram',
-    # Facebook
-    'facebook': 'Facebook', 'fb': 'Facebook', 'fb ads': 'Facebook',
-    'facebook ads': 'Facebook', 'meta': 'Facebook', 'meta ads': 'Facebook',
-    # Referral
-    'referral': 'Referral', 'refer': 'Referral', 'reference': 'Referral',
-    'ref': 'Referral', 'word of mouth': 'Referral', 'wom': 'Referral',
-    'agent': 'Referral', 'friend': 'Referral', 'recommendation': 'Referral',
-    # WhatsApp
-    'whatsapp': 'WhatsApp', 'whats app': 'WhatsApp', 'wa': 'WhatsApp',
-    'wp': 'WhatsApp', 'wapp': 'WhatsApp',
-    # Import / unknown aliases → Website (closest generic)
-    'import': 'Website', 'direct': 'Website', 'linkedin': 'Website',
-    'youtube': 'Website', 'twitter': 'Website', 'x': 'Website',
-    'email': 'Website', 'sms': 'WhatsApp', 'call': 'WhatsApp',
-}
-_CANONICAL_SOURCES = {'Website', 'Instagram', 'Facebook', 'Referral', 'WhatsApp', 'PG-NEET'}
+# ── Source normalisation ──────────────────────────────────────────────────────
+# Aliases + canonical list live in constants.py (single source of truth,
+# shared with main.py and mirrored in the frontend). Unknown values are now
+# preserved as-is — the old code force-mapped anything unrecognised to
+# "Website", which is what silently rewrote the "PG-NEET" source.
+_SOURCE_ALIAS_MAP = _const.SOURCE_ALIASES
+_CANONICAL_SOURCES = set(_const.LEAD_SOURCES)
 
 
 def _normalise_source_str(raw: str) -> str:
-    """Return canonical source for a raw string; returns raw unchanged if already canonical."""
-    if not raw:
-        return raw
-    if raw in _CANONICAL_SOURCES:
-        return raw
-    lower = raw.lower().strip()
-    # Exact match
-    if lower in _SOURCE_ALIAS_MAP:
-        return _SOURCE_ALIAS_MAP[lower]
-    # Partial/contains match
-    for alias, canonical in _SOURCE_ALIAS_MAP.items():
-        if lower == alias or lower.startswith(alias) or alias.startswith(lower):
-            return canonical
-    # MA, unknown short codes → Website
-    return 'Website'
+    """Return canonical source for a raw string; unrecognised values pass through."""
+    return _const.normalise_source(raw)
 
 
 def _normalise_lead_source(lead: dict) -> dict:

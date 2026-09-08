@@ -24,6 +24,10 @@ import FieldMappingModal from '../components/leads/FieldMappingModal';
 import WhatsAppTemplateDrawer from '../components/whatsapp/WhatsAppTemplateDrawer';
 import EnrollmentModal from '../components/leads/EnrollmentModal';
 import SubmissionTimeline from '../components/leads/SubmissionTimeline';
+import {
+  STATUS_OPTIONS, SOURCE_OPTIONS, STATUS_COLOR_MAP,
+  isTerminalStatus, normalizeSource,
+} from '../config/leadEnums';
 import { leadsAPI, coursesAPI, counselorsAPI, usersAPI, duplicatesAPI, decayAPI, exportAPI } from '../api/api';
 import { useAuth } from '../context/AuthContext';
 import dayjs from 'dayjs';
@@ -51,13 +55,9 @@ const { Option } = Select;
 const { Text, Title } = Typography;
 const { Dragger } = Upload;
 
-// Statuses with no active follow-up cycle — a follow-up date is meaningless
-// on these and they must never count as overdue / due-today.
-// Keep in sync with backend main.py TERMINAL_STATUSES.
-const TERMINAL_STATUSES = new Set([
-  'Enrolled', 'Junk', 'Not Interested', 'Dropped', 'TMT No Response', 'Test Lead',
-]);
-const isTerminalStatus = (s) => TERMINAL_STATUSES.has(s);
+// TERMINAL_STATUSES / isTerminalStatus / STATUS_OPTIONS / SOURCE_OPTIONS /
+// STATUS_COLOR_MAP / normalizeSource now come from ../config/leadEnums
+// (single frontend copy, mirrors backend/constants.py).
 const isActiveOverdue = (lead) =>
   !!lead?.follow_up_date &&
   !isTerminalStatus(lead.status) &&
@@ -214,7 +214,6 @@ const parseSpreadsheet = (data, isBinary) => {
 };
 
 const REQUIRED_COLS = ['full_name', 'phone'];
-const STATUS_OPTIONS = ['Fresh', 'Follow Up', 'Warm', 'Hot', 'Not Interested', 'Not Answering', 'Enrolled', 'Junk', 'Will Enroll Later', 'Dropped', 'TMT No Response', 'Re-assigned Lead', 'Test Lead', 'PG-NEET'];
 
 // Auto-retry countdown shown when the server times out (cold-start)
 const AutoRetryCountdown = ({ onRetry, seconds = 15 }) => {
@@ -226,60 +225,11 @@ const AutoRetryCountdown = ({ onRetry, seconds = 15 }) => {
   }, [count, onRetry]);
   return <span style={{ fontSize: 12, color: '#d97706' }}>Auto-retry in {count}s</span>;
 };
-const SOURCE_OPTIONS = ['Website', 'Instagram', 'Facebook', 'Referral', 'WhatsApp', 'PG-NEET'];
-
-// Map any import alias → canonical source name.
-// Keys are lowercase patterns that appear in raw imported values.
-const SOURCE_ALIAS_MAP = {
-  // Website
-  'website': 'Website', 'web': 'Website', 'site': 'Website', 'online': 'Website',
-  'google': 'Website', 'google ads': 'Website', 'google ad': 'Website', 'seo': 'Website',
-  'organic': 'Website', 'search': 'Website',
-  // Instagram
-  'instagram': 'Instagram', 'ig': 'Instagram', 'insta': 'Instagram',
-  // Facebook
-  'facebook': 'Facebook', 'fb': 'Facebook', 'fb ads': 'Facebook', 'facebook ads': 'Facebook',
-  'meta': 'Facebook', 'meta ads': 'Facebook',
-  // Referral
-  'referral': 'Referral', 'refer': 'Referral', 'reference': 'Referral', 'ref': 'Referral',
-  'word of mouth': 'Referral', 'wom': 'Referral', 'agent': 'Referral',
-  'friend': 'Referral', 'recommendation': 'Referral',
-  // WhatsApp
-  'whatsapp': 'WhatsApp', 'whats app': 'WhatsApp', 'wa': 'WhatsApp',
-  'wp': 'WhatsApp', 'wapp': 'WhatsApp',
-};
-
-/**
- * Normalise a raw source string from an import file to one of the 5 canonical
- * SOURCE_OPTIONS values. Falls back to 'Website' when no alias matches.
- */
-const normalizeSource = (raw) => {
-  if (!raw) return null;
-  const lower = String(raw).toLowerCase().trim();
-  // Exact alias match
-  if (SOURCE_ALIAS_MAP[lower]) return SOURCE_ALIAS_MAP[lower];
-  // Partial / contains match (e.g. "IG Story" → Instagram)
-  for (const [alias, canonical] of Object.entries(SOURCE_ALIAS_MAP)) {
-    if (lower.includes(alias) || alias.includes(lower)) return canonical;
-  }
-  // Already a valid canonical value (case-insensitive)
-  const direct = SOURCE_OPTIONS.find(s => s.toLowerCase() === lower);
-  if (direct) return direct;
-  return null; // caller decides the fallback
-};
 const QUALIFICATION_OPTIONS = [
   'MBBS','FMGE','MD','MS','DNB','DM','Mch',
   'BAMS','BUMS','BHMS','BSMS','BNYS',
   'BDS','MDS','BPT','MPT','PHARM D','OTHERS',
 ];
-const STATUS_COLOR_MAP = {
-  Enrolled: 'green', Hot: 'red', Warm: 'orange',
-  Fresh: 'blue', 'Follow Up': 'purple',
-  'Not Interested': 'default', 'Not Answering': 'gray', Junk: 'volcano',
-  'Will Enroll Later': 'cyan', Dropped: 'magenta',
-  'TMT No Response': 'gold', 'Re-assigned Lead': 'geekblue', 'Test Lead': 'default',
-  'PG-NEET': 'lime',
-};
 const COMPANY_OPTIONS = ['MED', 'Others'];
 
 // ════════════════════════════════════════════════════════════════════════════

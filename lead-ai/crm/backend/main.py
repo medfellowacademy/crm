@@ -72,6 +72,7 @@ from auth import (
 # Centralized RBAC (role hierarchy + permission matrix + dependencies)
 import rbac
 import repeat_leads
+import constants as _const
 from rbac import (
     P,
     current_user as current_active_user,
@@ -730,11 +731,18 @@ class LeadSegment(str, enum.Enum):
     COLD = "Cold"
     JUNK = "Junk"
 
+# Fail fast at import if these enums ever drift from the single source of
+# truth (backend/constants.py). Add new values THERE, not here.
+assert {s.value for s in LeadStatus} == set(_const.LEAD_STATUSES), \
+    "LeadStatus enum is out of sync with constants.LEAD_STATUSES"
+assert {s.value for s in LeadSegment} == set(_const.LEAD_SEGMENTS), \
+    "LeadSegment enum is out of sync with constants.LEAD_SEGMENTS"
+
 # Statuses with no active follow-up cycle. A follow-up date on one of these
 # leads is meaningless and must never surface in overdue / due-today /
 # follow-up views or reminders. Setting a lead to one of these clears its
 # follow_up_date.
-TERMINAL_STATUSES = {"Enrolled", "Junk", "Not Interested", "Dropped", "TMT No Response", "Test Lead"}
+TERMINAL_STATUSES = set(_const.TERMINAL_STATUSES)
 
 def _is_terminal_status(status) -> bool:
     if status is None:
@@ -1027,59 +1035,10 @@ class NoteResponse(BaseModel):
 # Normalise status strings coming from the frontend or legacy data.
 # Old imports / DB rows may have ALL-CAPS values ("FRESH", "HOT", etc.).
 # This map converts any casing variant to the canonical enum value.
-_STATUS_NORMALISE_MAP: dict[str, str] = {
-    # Fresh
-    "fresh": "Fresh",
-    # Follow Up
-    "follow up": "Follow Up",
-    "followup": "Follow Up",
-    "follow_up": "Follow Up",
-    "follow-up": "Follow Up",
-    # Warm
-    "warm": "Warm",
-    # Hot
-    "hot": "Hot",
-    # Not Interested
-    "not interested": "Not Interested",
-    "not_interested": "Not Interested",
-    "notinterested": "Not Interested",
-    "ni": "Not Interested",
-    # Junk
-    "junk": "Junk",
-    "spam": "Junk",
-    "invalid": "Junk",
-    # Not Answering
-    "not answering": "Not Answering",
-    "not_answering": "Not Answering",
-    "notanswering": "Not Answering",
-    "na": "Not Answering",
-    "no answer": "Not Answering",
-    "not connected": "Not Answering",
-    "switched off": "Not Answering",
-    "busy": "Not Answering",
-    # Enrolled
-    "enrolled": "Enrolled",
-    "admission done": "Enrolled",
-    "converted": "Enrolled",
-    # TMT No Response
-    "tmt no response": "TMT No Response",
-    "tmt_no_response": "TMT No Response",
-    "tmt-no-response": "TMT No Response",
-    "tmt": "TMT No Response",
-    # Re-assigned Lead
-    "re-assigned lead": "Re-assigned Lead",
-    "reassigned lead": "Re-assigned Lead",
-    "re assigned lead": "Re-assigned Lead",
-    "reassigned": "Re-assigned Lead",
-    "re-assigned": "Re-assigned Lead",
-    # Test Lead
-    "test lead": "Test Lead",
-    "testlead": "Test Lead",
-    "test": "Test Lead",
-}
+_STATUS_NORMALISE_MAP: dict = _const.STATUS_ALIASES
 
 # Valid enum values set for fast lookup
-_VALID_STATUSES = {"Fresh", "Follow Up", "Warm", "Hot", "Not Interested", "Junk", "Not Answering", "Enrolled", "Will Enroll Later", "Dropped", "TMT No Response", "Re-assigned Lead", "Test Lead", "PG-NEET"}
+_VALID_STATUSES = set(_const.LEAD_STATUSES)
 
 def _normalise_status(v):
     if not v:
@@ -1093,43 +1052,15 @@ def _normalise_status(v):
     return _STATUS_NORMALISE_MAP.get(key, "Fresh")
 
 
-# Canonical source values and their import aliases
-_CANONICAL_SOURCES = ['Website', 'Instagram', 'Facebook', 'Referral', 'WhatsApp', 'PG-NEET']
-_SOURCE_ALIAS_MAP = {
-    # Website / Google
-    'website': 'Website', 'web': 'Website', 'site': 'Website', 'online': 'Website',
-    'google': 'Website', 'google ads': 'Website', 'google ad': 'Website',
-    'seo': 'Website', 'organic': 'Website', 'search': 'Website',
-    # Instagram
-    'instagram': 'Instagram', 'ig': 'Instagram', 'insta': 'Instagram',
-    # Facebook
-    'facebook': 'Facebook', 'fb': 'Facebook', 'fb ads': 'Facebook',
-    'facebook ads': 'Facebook', 'meta': 'Facebook', 'meta ads': 'Facebook',
-    # Referral
-    'referral': 'Referral', 'refer': 'Referral', 'reference': 'Referral',
-    'ref': 'Referral', 'word of mouth': 'Referral', 'wom': 'Referral',
-    'agent': 'Referral', 'friend': 'Referral', 'recommendation': 'Referral',
-    # WhatsApp
-    'whatsapp': 'WhatsApp', 'whats app': 'WhatsApp', 'wa': 'WhatsApp',
-    'wp': 'WhatsApp', 'wapp': 'WhatsApp',
-}
+# Canonical source values + aliases live in constants.py (single source of
+# truth, shared with the data layer and mirrored in the frontend).
+_CANONICAL_SOURCES = list(_const.LEAD_SOURCES)
+_SOURCE_ALIAS_MAP = _const.SOURCE_ALIASES
 
-def _normalise_source(v):
-    """Map any raw source string to one of the 5 canonical source values."""
-    if not v:
-        return v
-    key = str(v).lower().strip()
-    if key in _SOURCE_ALIAS_MAP:
-        return _SOURCE_ALIAS_MAP[key]
-    # Partial contains match
-    for alias, canonical in _SOURCE_ALIAS_MAP.items():
-        if key in alias or alias in key:
-            return canonical
-    # Already canonical (case-insensitive)
-    for src in _CANONICAL_SOURCES:
-        if src.lower() == key:
-            return src
-    return v  # preserve unknown values as-is
+# Exact-alias / exact-canonical match, else the value is preserved as-is.
+# (The old "partial contains" matching here was over-eager and a source of
+# surprises — e.g. it could rewrite unrelated values.)
+_normalise_source = _const.normalise_source
 
 
 class LeadCreate(BaseModel):
@@ -1606,36 +1537,8 @@ def normalize_phone(phone: str, country: str = None) -> str:
 def normalize_lead_values(lead_data: dict) -> dict:
     """Normalize imported lead values to match CRM standards (case-insensitive matching)"""
     
-    # Status normalization - map variations to standard LeadStatus values
-    status_map = {
-        'fresh': 'Fresh',
-        'follow up': 'Follow Up',
-        'follow-up': 'Follow Up',
-        'followup': 'Follow Up',
-        'warm': 'Warm',
-        'hot': 'Hot',
-        'not interested': 'Not Interested',
-        'not-interested': 'Not Interested',
-        'notinterested': 'Not Interested',
-        'junk': 'Junk',
-        'not answering': 'Not Answering',
-        'not-answering': 'Not Answering',
-        'notanswering': 'Not Answering',
-        'enrolled': 'Enrolled',
-        'will enroll later': 'Will Enroll Later',
-        'dropped': 'Dropped',
-        'tmt no response': 'TMT No Response',
-        'tmt': 'TMT No Response',
-        're-assigned lead': 'Re-assigned Lead',
-        'reassigned lead': 'Re-assigned Lead',
-        'reassigned': 'Re-assigned Lead',
-        'test lead': 'Test Lead',
-        'test': 'Test Lead',
-        'pg-neet': 'PG-NEET',
-        'pg neet': 'PG-NEET',
-        'pgneet': 'PG-NEET',
-        'pg_neet': 'PG-NEET',
-    }
+    # Status normalization — aliases live in constants.STATUS_ALIASES
+    status_map = _const.STATUS_ALIASES
     
     # Country normalization - common variations
     # Comprehensive ISO-2 code + common abbreviation → full country name mapping
