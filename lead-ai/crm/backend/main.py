@@ -27,9 +27,9 @@ from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 from sqlalchemy.sql import func
 from contextlib import asynccontextmanager
 from passlib.context import CryptContext
-import pandas as pd
-import numpy as np
-import joblib
+# NOTE: pandas / numpy / joblib were imported here but never used in this
+# module — they cost ~60-90 MB RSS *per worker* at import time on a memory
+# constrained instance. catboost is imported lazily inside get_cached_model().
 from pathlib import Path
 import csv
 import io
@@ -274,6 +274,47 @@ def get_cached_course_prices(force_refresh: bool = False) -> Dict[str, float]:
     logger.info(f"✅ Course prices cached: {len(prices)} courses")
     return prices
 
+
+# ── Memory / uptime observability ───────────────────────────────────────────
+import time as _time
+_START_TIME = _time.time()
+_mem_task: "_asyncio.Task | None" = None
+
+
+def _process_rss_mb() -> float:
+    """Resident set size of this process in MB (0.0 if unavailable)."""
+    # Prefer /proc (Linux, where this runs in prod) — it's current RSS, not peak.
+    try:
+        with open("/proc/self/status") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    return round(int(line.split()[1]) / 1024, 1)  # kB -> MB
+    except Exception:
+        pass
+    try:
+        import resource
+        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss  # kB on Linux, bytes on macOS
+        return round(rss / 1024 / 1024, 1) if rss > 20_000_000 else round(rss / 1024, 1)
+    except Exception:
+        return 0.0
+
+
+async def _log_memory_loop():
+    """Log RSS every 60s so an approaching OOM is visible in the logs
+    (Render/Heroku/Fly don't otherwise surface per-process memory)."""
+    while True:
+        try:
+            await _asyncio.sleep(60)
+            rss = _process_rss_mb()
+            if rss:
+                lvl = logger.warning if rss > 900 else logger.info
+                lvl(f"📈 memory RSS={rss} MB · uptime={int(_time.time() - _START_TIME)}s")
+        except _asyncio.CancelledError:
+            break
+        except Exception as e:  # never let the watchdog crash the app
+            logger.debug(f"memory watchdog: {e}")
+
+
 # Lifespan context manager for startup/shutdown
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -304,12 +345,16 @@ async def lifespan(app: FastAPI):
 
     logger.info(f"📊 Database: Supabase (cloud PostgreSQL)")
 
-    # Pre-load model and course prices at startup
-    try:
-        get_cached_model()  # Load model into memory
-        get_cached_course_prices()  # Pre-cache course prices
-    except Exception as e:
-        logger.error(f"⚠️ Failed to pre-load caches: {e}")
+    # The CatBoost model (~150-250 MB resident) and course-price cache are now
+    # loaded LAZILY on first use instead of at boot — this keeps the resident
+    # set small on startup and, with WEB_CONCURRENCY=1, avoids N copies of the
+    # model. First lead-scoring request per process pays a one-off ~1s cost.
+    logger.info("🧠 ML model + course prices will load lazily on first use")
+
+    # Lightweight memory watchdog so an OOM shows up in the logs before the
+    # process is killed (Render/most PaaS don't surface RSS otherwise).
+    global _mem_task
+    _mem_task = _asyncio.create_task(_log_memory_loop())
 
     # Auto-seed Supabase only in non-production environments (guard against wiping prod)
     _env = os.getenv("ENVIRONMENT", "development").lower()
@@ -335,12 +380,13 @@ async def lifespan(app: FastAPI):
 
     # ---- Shutdown ----
     logger.info("👋 Application shutdown initiated")
-    if _decay_task and not _decay_task.done():
-        _decay_task.cancel()
-        try:
-            await _decay_task
-        except _asyncio.CancelledError:
-            pass
+    for _t in (_decay_task, _mem_task):
+        if _t and not _t.done():
+            _t.cancel()
+            try:
+                await _t
+            except _asyncio.CancelledError:
+                pass
     logger.info("✅ Cleanup complete")
 
 # ============================================================================
@@ -2996,9 +3042,15 @@ async def get_leads(
     if _cache_key in LEAD_CACHE:
         return LEAD_CACHE[_cache_key]
 
-    # Use Supabase REST API (mandatory)
+    # Use Supabase REST API (mandatory).
+    # supabase-py is SYNCHRONOUS — calling it directly in this async handler
+    # blocks the event loop for the whole query, so a slow leads query stalls
+    # every other request on the worker. Offload it to a thread. functools.partial
+    # keeps the (long) keyword arg list intact.
     try:
-        leads_data = supabase_data.get_leads(
+        import functools as _functools
+        leads_data = await _asyncio.to_thread(_functools.partial(
+                supabase_data.get_leads,
                 skip=skip,
                 limit=limit,
                 status=status.value if status else None,
@@ -3040,7 +3092,7 @@ async def get_leads(
                 utm_source=utm_source,
                 utm_medium=utm_medium,
                 utm_campaign=utm_campaign,
-        )
+        ))
         # Cache and return raw data from Supabase (already in correct format)
         LEAD_CACHE[_cache_key] = leads_data
         return leads_data
@@ -6303,15 +6355,23 @@ async def health_check():
         "timestamp": datetime.utcnow().isoformat(),
         "database": "supabase",
         "supabase": "not_configured",
+        "uptime_seconds": int(_time.time() - _START_TIME),
+        "memory_mb": _process_rss_mb(),
         "components": {}
     }
-    
-    # Test Supabase client
+
+    # Test Supabase client — offloaded to a thread with a hard timeout so a
+    # slow/blocked DB can't make /health hang and trigger a Render restart loop.
     if supabase_manager.client:
         health_status["supabase"] = "configured"
         try:
-            # Simple connection test - count leads
-            supabase_manager.client.table('leads').select("count", count='exact').limit(0).execute()
+            await _asyncio.wait_for(
+                _asyncio.to_thread(
+                    lambda: supabase_manager.client.table('leads')
+                    .select("count", count='exact').limit(0).execute()
+                ),
+                timeout=3.0,
+            )
             health_status["supabase_connection"] = "connected"
         except Exception as e:
             health_status["supabase_connection"] = "disconnected"
@@ -6320,13 +6380,14 @@ async def health_check():
     else:
         health_status["status"] = "unhealthy"
         health_status["supabase"] = "not_configured"
-    
+
     # Test AI assistant
     health_status["ai_assistant"] = "available" if ai_assistant.is_available() else "not_configured"
-    
-    # Check ML model status
+
+    # ML model — report whether it's *already* resident; do NOT force a lazy
+    # load here (that would add ~1s + a memory spike to every first /health).
     health_status["components"]["ml_model"] = {
-        "status": "loaded" if get_cached_model() else "not_loaded"
+        "status": "loaded" if 'catboost' in MODEL_INSTANCE_CACHE else "lazy_not_loaded"
     }
     
     # Check cache statistics
