@@ -112,6 +112,18 @@ export const leadsAPI = {
   sendChatMessage: (leadId, data) => api.post(`/api/leads/${leadId}/chat`, data),
 };
 
+// Brochures API — shared PDF library, all roles
+export const brochuresAPI = {
+  getAll: (search) => api.get('/api/brochures', { params: search ? { search } : {} }),
+  upload: (name, file) => {
+    const form = new FormData();
+    form.append('name', name);
+    form.append('file', file);
+    return api.post('/api/brochures', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+  },
+  delete: (id) => api.delete(`/api/brochures/${id}`),
+};
+
 // Upload API
 export const uploadAPI = {
   uploadFile: (file) => {

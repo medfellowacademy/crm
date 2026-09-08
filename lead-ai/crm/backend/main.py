@@ -130,6 +130,7 @@ from attendance import router as attendance_router
 from sheets_router import router as sheets_router
 from mbg_router import router as mbg_router
 from departments_router import router as departments_router
+from brochures_router import router as brochures_router
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -709,6 +710,7 @@ app.include_router(attendance_router)
 app.include_router(sheets_router)
 app.include_router(mbg_router)
 app.include_router(departments_router)
+app.include_router(brochures_router)
 
 logger.info("🚀 FastAPI application initialized with logging and error handling")
 

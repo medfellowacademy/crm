@@ -20,7 +20,7 @@ import {
   GitBranch, UserPlus, Activity, Shield, CalendarClock, DollarSign,
   Settings, Timer, Users2, ClipboardList,
   Share2, Globe, Bot, Trophy, MapPin, Building2, Megaphone, Wallet,
-  Settings2,
+  Settings2, FileText,
 } from 'lucide-react';
 
 export const DEPARTMENTS = {
@@ -100,6 +100,7 @@ export const GENERAL_PAGES = [
   { key: '/dashboard',   icon: LayoutDashboard, label: 'Dashboard' },
   { key: '/departments', icon: Building2,       label: 'Departments' },
   { key: '/ai-chat',     icon: Bot,             label: 'MedFellow AI Chat' },
+  { key: '/brochures',   icon: FileText,        label: 'Brochures' },
   { key: '/settings',    icon: Settings,        label: 'Settings' },
 ];
 
