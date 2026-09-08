@@ -107,6 +107,39 @@ class TestTeamMemberNames:
         assert "A" in names and "B" in names
 
 
+class TestTeamMemberIds:
+    def test_manager_subtree_ids(self):
+        assert set(rbac.team_member_ids(MANAGER_M, all_users=ORG)) == {10, 20, 30}
+
+    def test_team_leader_ids_exclude_manager(self):
+        assert set(rbac.team_member_ids(TL_T, all_users=ORG)) == {20, 30}
+
+    def test_ids_are_ints_even_if_chart_has_strings(self):
+        a = {"id": "1", "full_name": "A", "reports_to": None}
+        b = {"id": "2", "full_name": "B", "reports_to": "1"}
+        assert set(rbac.team_member_ids(a, all_users=[a, b])) == {1, 2}
+
+
+class TestLeadScopeIds:
+    @pytest.mark.parametrize("user", [
+        SUPER_ADMIN,
+        {"id": 2, "full_name": "F", "role": ROLE_FINANCE},
+        {"id": 3, "full_name": "M", "role": ROLE_MARKETING},
+    ])
+    def test_unrestricted_roles_return_none(self, user):
+        assert rbac.lead_scope_ids(user, all_users=ORG) is None
+
+    def test_counselor_restricted_to_own_id(self):
+        assert rbac.lead_scope_ids(COUNSELOR_C, all_users=ORG) == [30]
+
+    def test_manager_restricted_to_subtree_ids(self):
+        assert set(rbac.lead_scope_ids(MANAGER_M, all_users=ORG)) == {10, 20, 30}
+
+    def test_no_access_uses_impossible_id(self):
+        orphan = {"id": None, "full_name": "", "role": ROLE_COUNSELOR}
+        assert rbac.lead_scope_ids(orphan, all_users=[]) == [rbac._NO_LEAD_ACCESS_ID]
+
+
 class TestLeadScopeNames:
     @pytest.mark.parametrize("user", [
         SUPER_ADMIN,
@@ -190,9 +223,32 @@ class TestCanViewLead:
     def test_super_admin_can_view_any_lead(self):
         assert rbac.can_view_lead(SUPER_ADMIN, {"assigned_to": "Anyone At All"})
 
-    def test_counselor_can_view_own_but_not_others(self):
+    def test_counselor_can_view_own_but_not_others_by_name(self, monkeypatch):
+        monkeypatch.setattr(rbac, "_all_users", lambda force=False: ORG)
         assert rbac.can_view_lead(COUNSELOR_C, {"assigned_to": "chetan counselor"})
         assert not rbac.can_view_lead(COUNSELOR_C, {"assigned_to": "Xena Counselor"})
+
+    def test_id_match_wins_over_a_stale_name(self, monkeypatch):
+        # Lead still carries the counsellor's OLD name but the stable id — the
+        # rename-orphan bug. id-based check must still grant access.
+        monkeypatch.setattr(rbac, "_all_users", lambda force=False: ORG)
+        stale = {"assigned_to": "Chetan Old Name", "assigned_to_id": 30}
+        assert rbac.can_view_lead(COUNSELOR_C, stale)
+
+    def test_id_match_denies_when_id_is_outside_scope(self, monkeypatch):
+        monkeypatch.setattr(rbac, "_all_users", lambda force=False: ORG)
+        other = {"assigned_to": "chetan counselor", "assigned_to_id": 40}  # Xena's id
+        assert not rbac.can_view_lead(COUNSELOR_C, other)
+
+    def test_falls_back_to_name_when_lead_has_no_id(self, monkeypatch):
+        monkeypatch.setattr(rbac, "_all_users", lambda force=False: ORG)
+        assert rbac.can_view_lead(COUNSELOR_C, {"assigned_to": "Chetan Counselor", "assigned_to_id": None})
+        assert not rbac.can_view_lead(COUNSELOR_C, {"assigned_to": "Xena Counselor", "assigned_to_id": ""})
+
+    def test_manager_sees_subtree_lead_by_id(self, monkeypatch):
+        monkeypatch.setattr(rbac, "_all_users", lambda force=False: ORG)
+        assert rbac.can_view_lead(MANAGER_M, {"assigned_to_id": 30})   # Chetan, in subtree
+        assert not rbac.can_view_lead(MANAGER_M, {"assigned_to_id": 40})  # Xena, not
 
 
 class TestUserAdministrationGuards:

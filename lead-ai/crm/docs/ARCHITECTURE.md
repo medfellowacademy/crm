@@ -31,6 +31,22 @@ auth, the Sheets sync, the lead enums, or the deploy config.
   `rbac.current_user`), never trust the claim.
 - Startup logs which key role is in play (`🔐 Supabase key role=...`).
 
+### Lead ownership — id + name (migration `20260908_leads_assigned_to_id.sql`)
+
+- `leads.assigned_to` holds the counsellor's **display name** and is still
+  written everywhere. `leads.assigned_to_id` (FK → `users.id`) is the **stable**
+  key for auth.
+- Two DB triggers keep them consistent with **no application write changes**:
+  - writing `leads.assigned_to` resolves `assigned_to_id` from `users.full_name`
+  - renaming a user (`users.full_name`) propagates the new name to that user's
+    `leads.assigned_to` rows (matched on the id) — this is what fixes
+    "renaming a user orphans their leads from the visibility checks".
+- `rbac.can_view_lead` / `scope_supabase_leads` prefer `assigned_to_id`
+  (`rbac.lead_scope_ids`), falling back to the name for any not-yet-resolved
+  row. `get_leads` / `_fetch_all_leads` / the inline analytics `.in_()` filters
+  still use names — safe, because the rename trigger keeps names fresh; migrate
+  them to `lead_scope_ids` opportunistically.
+
 **If you want RLS to be real:** the backend must use per‑request user JWTs
 (not the service key) and every policy must be written and tested. That's a
 large change — not a config toggle.

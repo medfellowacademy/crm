@@ -342,19 +342,22 @@ def invalidate_org_cache() -> None:
     _ORG_CACHE["at"] = 0.0
 
 
-def team_member_names(user: dict, all_users: Optional[list[dict]] = None) -> list[str]:
-    """Full names of `user` plus every user in their reporting subtree."""
+def _reporting_subtree(user: dict, all_users: Optional[list[dict]] = None) -> list[dict]:
+    """`user` (if present in the chart) plus every user whose `reports_to`
+    chain leads back to them, at any depth. Cycle-safe."""
     users = all_users if all_users is not None else _all_users()
     children: dict = {}
+    by_id: dict = {}
     for u in users:
+        by_id[u.get("id")] = u
         rt = u.get("reports_to")
         if rt is not None:
             children.setdefault(rt, []).append(u)
 
-    names: set[str] = set()
-    self_name = user_identity(user)
-    if self_name:
-        names.add(self_name)
+    out: list[dict] = []
+    self_row = by_id.get(user.get("id"))
+    if self_row is not None:
+        out.append(self_row)
 
     stack = [user.get("id")]
     seen: set = set()
@@ -364,11 +367,40 @@ def team_member_names(user: dict, all_users: Optional[list[dict]] = None) -> lis
             continue
         seen.add(mid)
         for child in children.get(mid, []):
-            cn = (child.get("full_name") or "").strip()
-            if cn:
-                names.add(cn)
+            out.append(child)
             stack.append(child.get("id"))
+    return out
+
+
+def team_member_names(user: dict, all_users: Optional[list[dict]] = None) -> list[str]:
+    """Full names of `user` plus every user in their reporting subtree."""
+    names: set[str] = set()
+    self_name = user_identity(user)
+    if self_name:
+        names.add(self_name)
+    for row in _reporting_subtree(user, all_users):
+        cn = (row.get("full_name") or "").strip()
+        if cn:
+            names.add(cn)
     return sorted(names)
+
+
+def team_member_ids(user: dict, all_users: Optional[list[dict]] = None) -> list[int]:
+    """User ids of `user` plus every user in their reporting subtree."""
+    ids: set[int] = set()
+    if user.get("id") is not None:
+        try:
+            ids.add(int(user["id"]))
+        except (TypeError, ValueError):
+            pass
+    for row in _reporting_subtree(user, all_users):
+        rid = row.get("id")
+        if rid is not None:
+            try:
+                ids.add(int(rid))
+            except (TypeError, ValueError):
+                pass
+    return sorted(ids)
 
 
 def lead_scope_names(user: dict, all_users: Optional[list[dict]] = None) -> Optional[list[str]]:
@@ -386,6 +418,31 @@ def lead_scope_names(user: dict, all_users: Optional[list[dict]] = None) -> Opti
         return [n] if n else [_NO_LEAD_ACCESS]
     names = team_member_names(user, all_users)
     return names or [_NO_LEAD_ACCESS]
+
+
+# Impossible id (real user ids are positive) so an id-filtered query for a
+# no-access caller returns nothing.
+_NO_LEAD_ACCESS_ID = -1
+
+
+def lead_scope_ids(user: dict, all_users: Optional[list[dict]] = None) -> Optional[list[int]]:
+    """`leads.assigned_to_id` values this caller may see — the id-based twin of
+    `lead_scope_names`, robust to a user being renamed.
+
+    Returns None  => no restriction (Super Admin / Finance / Marketing).
+    Returns list  => restrict `assigned_to_id` to these ids (never empty).
+    """
+    scope = lead_scope_for(get_role(user))
+    if scope == LEAD_SCOPE_ALL:
+        return None
+    if scope == LEAD_SCOPE_OWN:
+        uid = user.get("id")
+        try:
+            return [int(uid)] if uid is not None else [_NO_LEAD_ACCESS_ID]
+        except (TypeError, ValueError):
+            return [_NO_LEAD_ACCESS_ID]
+    ids = team_member_ids(user, all_users)
+    return ids or [_NO_LEAD_ACCESS_ID]
 
 
 def own_scope_name(user: dict) -> Optional[str]:
@@ -415,7 +472,17 @@ def _norm_name_set(names) -> set:
 
 
 def scope_supabase_leads(query, user: dict, column: str = "assigned_to"):
-    """Apply lead-visibility filtering to a supabase-py query builder."""
+    """Apply lead-visibility filtering to a supabase-py query builder.
+
+    Filters on the stable `assigned_to_id` (unaffected by a user rename) when
+    scoping by the default column; a caller passing an explicit `column` still
+    gets name-based filtering.
+    """
+    if column == "assigned_to":
+        ids = lead_scope_ids(user)
+        if ids is None:
+            return query
+        return query.in_("assigned_to_id", ids)
     names = lead_scope_names(user)
     if names is None:
         return query
@@ -452,10 +519,21 @@ def filter_by_assignee(rows: list, user: dict, key: str = "assigned_to") -> list
 
 
 def can_view_lead(user: dict, lead: dict) -> bool:
+    ids = lead_scope_ids(user)
+    if ids is None:
+        return True
+    # Prefer the stable id (survives a rename); fall back to the name for any
+    # row whose assigned_to_id has not been resolved yet.
+    lid = (lead or {}).get("assigned_to_id")
+    if lid is not None and str(lid) != "":
+        try:
+            return int(lid) in set(ids)
+        except (TypeError, ValueError):
+            pass
     names = lead_scope_names(user)
     if names is None:
         return True
-    return norm_name(lead.get("assigned_to")) in _norm_name_set(names)
+    return norm_name((lead or {}).get("assigned_to")) in _norm_name_set(names)
 
 
 def assert_can_view_lead(user: dict, lead: dict) -> None:
@@ -544,13 +622,19 @@ def sanitize_users(users):
 
 
 # ---------------------------------------------------------------------------
-# MIGRATION note
+# MIGRATION note — id-based ownership (in progress)
 # ---------------------------------------------------------------------------
-# `leads.assigned_to` currently stores a counselor's display name. Name-based
-# ownership is fragile (two people can share a name; renames orphan leads).
-# Recommended follow-up:
-#   1. add `leads.assigned_to_id  bigint references users(id)`
-#   2. backfill from users.full_name
-#   3. switch counselor_scope_name / can_view_lead to compare on user id
-#   4. keep writing assigned_to (name) for display, assigned_to_id for auth
-# The functions above are the only places that need to change.
+# `leads.assigned_to` stores a counselor's display name. Name-based ownership
+# is fragile (renames orphan leads from these checks).
+#
+# Done (migration 20260908_leads_assigned_to_id.sql):
+#   * `leads.assigned_to_id integer references users(id)` added + backfilled
+#   * trigger keeps assigned_to_id resolved from assigned_to on every write
+#   * trigger propagates a `users.full_name` rename to `leads.assigned_to`
+#     (so the name-based filters below stay correct with no app change)
+#   * `can_view_lead` / `scope_supabase_leads` now prefer `assigned_to_id`,
+#     falling back to the name for any not-yet-resolved row
+#
+# Still on names (safe — the rename trigger keeps them fresh; move to
+# `lead_scope_ids` opportunistically): `get_leads`, `_fetch_all_leads`, and
+# the inline `.in_('assigned_to', ...)` analytics filters in main.py.
