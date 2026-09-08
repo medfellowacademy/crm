@@ -241,15 +241,44 @@ class LeadResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+class HospitalLocation(BaseModel):
+    """One branch of a collaborated hospital."""
+    label: Optional[str] = None        # "Main", "Chennai — OMR", ...
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    departments: List[str] = []        # medical departments active at this branch
+    is_primary: bool = False
+
+    @field_validator('label', 'address', 'city', 'state', mode='before')
+    @classmethod
+    def _sanitize(cls, v):
+        return sanitize_text(v, max_length=300) if v else None
+
+    @field_validator('departments', mode='before')
+    @classmethod
+    def _clean_departments(cls, v):
+        if not v:
+            return []
+        return [sanitize_text(str(d), max_length=120) for d in v if str(d).strip()]
+
+
 class HospitalCreate(BaseModel):
     name: str
+    website: Optional[str] = None
     country: str
-    city: str
+    city: Optional[str] = None         # denormalised from the primary location
     contact_person: Optional[str] = None
     contact_email: Optional[EmailStr] = None
     contact_phone: Optional[str] = None
     collaboration_status: Optional[str] = "Active"
     courses_offered: List[int] = []
+    locations: List[HospitalLocation] = []
+
+    @field_validator('name', 'website', 'contact_person', 'contact_phone', mode='before')
+    @classmethod
+    def _sanitize(cls, v):
+        return sanitize_text(v, max_length=500) if v else None
 
 class WhatsAppRequest(BaseModel):
     message: str
@@ -290,15 +319,17 @@ class ReassignmentRequest(BaseModel):
 class HospitalResponse(BaseModel):
     id: Any
     name: str
-    country: str
-    city: str
+    website: Optional[str] = None
+    country: Optional[str] = None
+    city: Optional[str] = None
     contact_person: Optional[str] = None
     contact_email: Optional[str] = None
     contact_phone: Optional[str] = None
     collaboration_status: Optional[str] = "Active"
     courses_offered: List[Any] = []
+    locations: List[HospitalLocation] = []
     created_at: Optional[datetime] = None
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 class CourseCreate(BaseModel):

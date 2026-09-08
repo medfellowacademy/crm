@@ -3312,6 +3312,18 @@ async def get_lead_ai_summary(lead_id: str):
 # API ENDPOINTS - HOSPITALS
 # ============================================================================
 
+def _sync_hospital_primary_city(payload: dict) -> None:
+    """Keep the flat `city` column in step with the primary location so the
+    country/city filters on GET /api/hospitals still work after the move to
+    per-location addresses."""
+    locs = payload.get('locations') or []
+    if not locs:
+        return
+    primary = next((loc for loc in locs if loc.get('is_primary')), locs[0])
+    if primary and primary.get('city'):
+        payload['city'] = primary['city']
+
+
 @app.post("/api/hospitals", response_model=HospitalResponse,
           dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
 async def create_hospital(hospital: HospitalCreate):
@@ -3320,6 +3332,7 @@ async def create_hospital(hospital: HospitalCreate):
     try:
         payload = hospital.dict()
         payload['created_at'] = datetime.utcnow().isoformat()
+        _sync_hospital_primary_city(payload)
         created = supabase_data.create_hospital(payload)
         if not created:
             raise HTTPException(status_code=500, detail="Failed to create hospital")
@@ -6608,6 +6621,7 @@ async def update_hospital(hospital_id: int, data: HospitalCreate):
         
         # Update hospital
         payload = data.dict(exclude_unset=True)
+        _sync_hospital_primary_city(payload)
         updated = supabase_data.update_hospital(hospital_id, payload)
         if not updated:
             raise HTTPException(status_code=500, detail="Failed to update hospital")

@@ -49,6 +49,35 @@ class TestLeadCreateValidators:
         assert "<script>" not in (m.full_name or "")
 
 
+class TestHospitalModels:
+    def test_multi_location_round_trips(self):
+        h = s.HospitalCreate(
+            name="Apollo", country="India", website="https://apollo.com",
+            locations=[
+                {"label": "Main", "city": "Chennai", "state": "TN",
+                 "departments": ["Cardiology", "Nephrology & Urology"], "is_primary": True},
+                {"label": "OMR", "city": "Chennai", "departments": ["Neurology"]},
+            ],
+        )
+        d = h.dict()
+        assert len(d["locations"]) == 2
+        assert d["locations"][0]["departments"] == ["Cardiology", "Nephrology & Urology"]
+        assert d["locations"][1]["is_primary"] is False   # default
+
+    def test_blank_department_entries_are_dropped(self):
+        loc = s.HospitalLocation(city="Delhi", departments=["Neurology", "", "  "])
+        assert loc.departments == ["Neurology"]
+
+    def test_location_text_is_sanitised(self):
+        loc = s.HospitalLocation(label="Main <script>", address="  12 Road  ")
+        assert "<script>" not in (loc.label or "")
+        assert loc.address == "12 Road"
+
+    def test_response_tolerates_missing_optional_fields(self):
+        r = s.HospitalResponse(id=1, name="X")
+        assert r.locations == [] and r.website is None and r.city is None
+
+
 class TestUserCreateValidators:
     def _mk(self, **over):
         base = dict(full_name="U", email="u@x.com", password="pw12345", role="Counselor")
