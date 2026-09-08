@@ -6870,13 +6870,18 @@ async def get_funnel_analysis():
     widget visualizes the latter."""
 
     try:
-        # Get all leads
-        leads = _fetch_all_leads('status')
-
+        # Per-status counts: one in-DB aggregate (jsonb), falling back to a scan.
         stages = {}
-        for lead in leads:
-            status = lead.get('status', 'Unknown')
-            stages[status] = stages.get(status, 0) + 1
+        try:
+            _sc = supabase_data.client.rpc("lead_status_counts").execute().data
+            if isinstance(_sc, dict) and _sc:
+                stages = {k: int(v) for k, v in _sc.items()}
+        except Exception as e:
+            logger.warning(f"lead_status_counts RPC unavailable, scanning: {e}")
+        if not stages:
+            for lead in _fetch_all_leads('status'):
+                status = lead.get('status', 'Unknown')
+                stages[status] = stages.get(status, 0) + 1
 
         funnel = []
         prev_count = None

@@ -946,6 +946,25 @@ class SupabaseDataLayer:
         assigned_to_names (list) scopes to several owners (Manager / Team Leader
         seeing their whole reporting subtree); assigned_to (str) scopes to one.
         """
+        # Fast path: one in-DB rollup instead of streaming every lead into Python.
+        _names = assigned_to_names if assigned_to_names is not None else (
+            [assigned_to] if assigned_to else None)
+        try:
+            _d = self.client.rpc("dashboard_rollup", {"p_assigned_to": _names}).execute().data
+            if isinstance(_d, dict) and "total" in _d:
+                _total = _d.get("total") or 0
+                _conv = _d.get("conversions") or 0
+                return {
+                    "total": _total,
+                    "hot": _d.get("hot") or 0, "warm": _d.get("warm") or 0,
+                    "cold": _d.get("cold") or 0, "junk": _d.get("junk") or 0,
+                    "conversions": _conv,
+                    "revenue": round(float(_d.get("revenue") or 0), 2),
+                    "conversion_rate": round((_conv / _total * 100) if _total else 0, 1),
+                }
+        except Exception as e:
+            logger.warning(f"dashboard_rollup RPC unavailable, scanning: {e}")
+
         try:
             def _q():
                 q = self.client.table('leads').select('status,ai_segment,actual_revenue', count='exact')
