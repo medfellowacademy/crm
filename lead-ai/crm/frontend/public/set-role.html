@@ -50,6 +50,12 @@
       transition: all 0.3s ease;
     }
     
+    .role-card:focus-visible {
+      outline: 2px solid #667eea;
+      outline-offset: 2px;
+      border-color: #667eea;
+    }
+
     .role-card:hover {
       border-color: #667eea;
       background: #f8f9ff;
@@ -135,7 +141,7 @@
       Current Role: <span id="current-role-name"></span>
     </div>
     
-    <div class="role-card" data-role="admin">
+    <div class="role-card" data-role="admin" role="button" tabindex="0" aria-pressed="false">
       <div class="role-title">
         <span class="role-emoji">👑</span>
         Admin (Superuser)
@@ -144,7 +150,7 @@
       <div class="role-pages">✅ Can see 11 pages including Audit Logs</div>
     </div>
     
-    <div class="role-card" data-role="manager">
+    <div class="role-card" data-role="manager" role="button" tabindex="0" aria-pressed="false">
       <div class="role-title">
         <span class="role-emoji">📊</span>
         Manager (Team Lead)
@@ -153,7 +159,7 @@
       <div class="role-pages">✅ Can see 10 pages (no Audit Logs)</div>
     </div>
     
-    <div class="role-card" data-role="counsellor">
+    <div class="role-card" data-role="counsellor" role="button" tabindex="0" aria-pressed="false">
       <div class="role-title">
         <span class="role-emoji">💼</span>
         Counsellor (Sales Rep)
@@ -162,7 +168,7 @@
       <div class="role-pages">✅ Can see 8 pages (own data only)</div>
     </div>
     
-    <div class="role-card" data-role="finance">
+    <div class="role-card" data-role="finance" role="button" tabindex="0" aria-pressed="false">
       <div class="role-title">
         <span class="role-emoji">💰</span>
         Finance (Accounts)
@@ -190,24 +196,27 @@
       }
     }
     
-    // Handle role card clicks
+    // Handle role card selection (mouse + keyboard)
+    function selectCard(card) {
+      document.querySelectorAll('.role-card').forEach(c => {
+        c.classList.remove('selected');
+        c.setAttribute('aria-pressed', 'false');
+      });
+      card.classList.add('selected');
+      card.setAttribute('aria-pressed', 'true');
+      selectedRole = card.dataset.role;
+      const btn = document.getElementById('set-role-btn');
+      btn.disabled = false;
+      btn.textContent = `Set Role as ${selectedRole.charAt(0).toUpperCase() + selectedRole.slice(1)}`;
+    }
+
     document.querySelectorAll('.role-card').forEach(card => {
-      card.addEventListener('click', () => {
-        // Remove selected class from all cards
-        document.querySelectorAll('.role-card').forEach(c => 
-          c.classList.remove('selected')
-        );
-        
-        // Add selected class to clicked card
-        card.classList.add('selected');
-        
-        // Store selected role
-        selectedRole = card.dataset.role;
-        
-        // Enable button
-        document.getElementById('set-role-btn').disabled = false;
-        document.getElementById('set-role-btn').textContent = 
-          `Set Role as ${selectedRole.charAt(0).toUpperCase() + selectedRole.slice(1)}`;
+      card.addEventListener('click', () => selectCard(card));
+      card.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+          e.preventDefault();
+          selectCard(card);
+        }
       });
     });
     

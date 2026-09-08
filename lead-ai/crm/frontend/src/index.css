@@ -29,7 +29,8 @@
   --bg-tertiary: #f1f5f9;
   --text-primary: #0f172a;
   --text-secondary: #475569;
-  --text-tertiary: #94a3b8;
+  /* #94a3b8 was only ~2.5:1 on white (fails WCAG AA); #64748b is ~4.8:1 */
+  --text-tertiary: #64748b;
   --border: #e2e8f0;
   --accent: #3b82f6;
   --accent-hover: #2563eb;
@@ -65,6 +66,37 @@ h4 { font-size: var(--text-base); font-weight: 500; line-height: 1.4; }
 /* Smooth transitions */
 * {
   transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+/* WCAG 2.4.7 — a visible focus indicator on every interactive control.
+   Custom inline-styled buttons/links across the app otherwise rely only on
+   whatever the browser default happens to be (often nothing once styled). */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role="button"]:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* WCAG 2.3.3 — respect users who ask for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* Custom scrollbar */

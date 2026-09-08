@@ -1584,17 +1584,20 @@ const LeadsPageEnhanced = () => {
       width: 120,
       render: (_, r) => (
         <Space>
-          <Button type="primary" size="small" icon={<EyeOutlined />} onClick={() => navigate(`/leads/${r.lead_id}`)} />
+          <Button type="primary" size="small" icon={<EyeOutlined />}
+            aria-label={`View ${r.full_name || 'lead'}`}
+            onClick={() => navigate(`/leads/${r.lead_id}`)} />
           <Tooltip title="WhatsApp Chat">
             <Button
               size="small"
               icon={<MessageOutlined />}
+              aria-label={`WhatsApp chat with ${r.full_name || 'lead'}`}
               style={{ background: '#25d366', borderColor: '#25d366', color: '#fff' }}
               onClick={() => setChatLead(r)}
             />
           </Tooltip>
           <Dropdown menu={getActionMenu(r)} trigger={['click']}>
-            <Button size="small" icon={<MoreOutlined />} />
+            <Button size="small" icon={<MoreOutlined />} aria-label={`More actions for ${r.full_name || 'lead'}`} />
           </Dropdown>
         </Space>
       ),
@@ -1698,7 +1701,7 @@ const LeadsPageEnhanced = () => {
             >
               <Button icon={<ExportOutlined />} loading={isExporting || isMbgExporting}>Export</Button>
             </Dropdown>
-            <Button icon={<ReloadOutlined />} onClick={() => refetch()} />
+            <Button icon={<ReloadOutlined />} aria-label="Refresh leads" onClick={() => refetch()} />
             <Badge
               count={repeatedData?.total || repeatedLeadIds.size || 0}
               size="small" color="volcano"

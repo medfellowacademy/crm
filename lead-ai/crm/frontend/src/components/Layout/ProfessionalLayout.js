@@ -68,9 +68,10 @@ const SearchBar = () => {
         borderRadius: 8,
         width: 320,
       }}>
-        <Search size={16} style={{ color: 'var(--text-tertiary)' }} />
+        <Search size={16} style={{ color: 'var(--text-tertiary)' }} aria-hidden="true" />
         <input
-          type="text"
+          type="search"
+          aria-label="Search leads"
           placeholder="Search leads..."
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -82,7 +83,6 @@ const SearchBar = () => {
           style={{
             border: 'none',
             background: 'transparent',
-            outline: 'none',
             fontSize: 'var(--text-sm)',
             color: 'var(--text-primary)',
             width: '100%',
@@ -108,8 +108,9 @@ const SearchBar = () => {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             {results.map((result) => (
-              <motion.div
+              <motion.button
                 key={result.lead_id}
+                type="button"
                 whileHover={{ x: 4 }}
                 onClick={() => handleResultClick(result.lead_id)}
                 style={{
@@ -118,6 +119,10 @@ const SearchBar = () => {
                   borderRadius: '8px',
                   cursor: 'pointer',
                   border: '1px solid var(--border-color)',
+                  textAlign: 'left',
+                  width: '100%',
+                  font: 'inherit',
+                  color: 'inherit',
                 }}
               >
                 <div style={{ fontWeight: '600', marginBottom: '4px' }}>
@@ -131,7 +136,7 @@ const SearchBar = () => {
                     Match score: {(result.score * 100).toFixed(0)}%
                   </div>
                 )}
-              </motion.div>
+              </motion.button>
             ))}
           </div>
         )}
@@ -282,9 +287,12 @@ const ProfessionalLayout = ({ children }) => {
         onMouseEnter={() => prefetchRoute(item.key)}
         whileHover={{ x: 2 }}
         whileTap={{ scale: 0.98 }}
+        aria-label={item.label}
+        aria-current={isActive ? 'page' : undefined}
+        title={collapsed ? item.label : undefined}
         style={{ ...navButtonStyle(isActive), paddingLeft: !collapsed && indent ? 28 : undefined }}
       >
-        <Icon size={indent ? 17 : 20} />
+        <Icon size={indent ? 17 : 20} aria-hidden="true" />
         {!collapsed && <span>{item.label}</span>}
       </motion.button>
     );
@@ -342,7 +350,7 @@ const ProfessionalLayout = ({ children }) => {
         </div>
 
         {/* Navigation */}
-        <nav style={{ flex: 1, padding: '16px 8px', overflowY: 'auto' }}>
+        <nav aria-label="Primary" style={{ flex: 1, padding: "16px 8px", overflowY: "auto" }}>
           {collapsed ? (
             // Icon-only mode: group headers make no sense, show everything flat
             allVisibleItems.map(item => <NavItem key={item.key} item={item} />)
@@ -358,6 +366,7 @@ const ProfessionalLayout = ({ children }) => {
                   <div key={group.key} style={{ marginTop: 6 }}>
                     <button
                       onClick={() => toggleDept(group.key)}
+                      aria-expanded={isOpen}
                       style={{
                         width: '100%', display: 'flex', alignItems: 'center', gap: 10,
                         padding: '9px 16px', borderRadius: 8, border: 'none',
@@ -367,10 +376,10 @@ const ProfessionalLayout = ({ children }) => {
                         textTransform: 'uppercase',
                       }}
                     >
-                      <GroupIcon size={15} color={group.color} />
+                      <GroupIcon size={15} color={group.color} aria-hidden="true" />
                       <span style={{ flex: 1, textAlign: 'left' }}>{group.name}</span>
                       <motion.span animate={{ rotate: isOpen ? 0 : -90 }} transition={{ duration: 0.15 }}
-                        style={{ display: 'flex' }}>
+                        style={{ display: 'flex' }} aria-hidden="true">
                         <ChevronDown size={14} />
                       </motion.span>
                     </button>
@@ -388,6 +397,8 @@ const ProfessionalLayout = ({ children }) => {
         <div style={{ padding: 8, borderTop: '1px solid var(--border)' }}>
           <button
             onClick={() => setCollapsed(!collapsed)}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-expanded={!collapsed}
             style={{
               width: '100%',
               padding: 12,
@@ -404,6 +415,7 @@ const ProfessionalLayout = ({ children }) => {
             <motion.div
               animate={{ rotate: collapsed ? 180 : 0 }}
               transition={{ duration: 0.2 }}
+              aria-hidden="true"
             >
               <ChevronLeft size={20} />
             </motion.div>
@@ -467,6 +479,7 @@ const ProfessionalLayout = ({ children }) => {
               <button
                 onClick={handleLogout}
                 title="Logout"
+                aria-label="Log out"
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -479,7 +492,7 @@ const ProfessionalLayout = ({ children }) => {
                   color: 'var(--text-secondary)',
                 }}
               >
-                <LogOut size={18} />
+                <LogOut size={18} aria-hidden="true" />
               </button>
             </div>
           </div>

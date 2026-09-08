@@ -628,7 +628,9 @@ function SalarySlips() {
               okButtonProps={{ danger: true }}
               onConfirm={() => deleteMutation.mutate(slip.id)}
             >
-              <Button size="small" danger icon={<DeleteOutlined />} loading={deletingId === slip.id} />
+              <Button size="small" danger icon={<DeleteOutlined />}
+                aria-label={`Delete salary slip for ${slip.user_name}`}
+                loading={deletingId === slip.id} />
             </Popconfirm>
           )}
         </Space>

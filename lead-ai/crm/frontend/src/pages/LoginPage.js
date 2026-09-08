@@ -35,39 +35,43 @@ const LoginPage = () => {
       <div style={styles.card}>
         {/* Logo */}
         <div style={styles.logoRow}>
-          <div style={styles.logoIcon}>🏥</div>
+          <div style={styles.logoIcon} aria-hidden="true">🏥</div>
           <div>
-            <div style={styles.logoTitle}>MED CRM</div>
+            <h1 style={styles.logoTitle}>MED CRM</h1>
             <div style={styles.logoSub}>Medical Education Portal</div>
           </div>
         </div>
 
         <h2 style={styles.heading}>Sign in to your account</h2>
 
-        {error && <div style={styles.errorBox}>{error}</div>}
+        {error && <div style={styles.errorBox} role="alert">{error}</div>}
 
         <form onSubmit={handleLogin} style={styles.form}>
           <div style={styles.field}>
-            <label style={styles.label}>Username (Email)</label>
+            <label htmlFor="login-username" style={styles.label}>Username (Email)</label>
             <input
+              id="login-username"
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               placeholder="Enter your email"
               required
               autoFocus
+              autoComplete="username"
               style={styles.input}
             />
           </div>
 
           <div style={styles.field}>
-            <label style={styles.label}>Password</label>
+            <label htmlFor="login-password" style={styles.label}>Password</label>
             <input
+              id="login-password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Enter your password"
               required
+              autoComplete="current-password"
               style={styles.input}
             />
           </div>
@@ -125,6 +129,8 @@ const styles = {
     fontSize: 20,
     fontWeight: 700,
     color: '#1e293b',
+    margin: 0,
+    lineHeight: 1.2,
   },
   logoSub: {
     fontSize: 12,
@@ -165,14 +171,16 @@ const styles = {
     border: '1px solid #d1d5db',
     borderRadius: 8,
     fontSize: 14,
-    outline: 'none',
     transition: 'border-color 0.2s',
     fontFamily: 'inherit',
+    // no `outline: none` — a focused field must show a visible ring
+    // (the global :focus-visible rule in index.css supplies it).
   },
   button: {
     marginTop: 8,
     padding: '12px',
-    background: 'linear-gradient(135deg, #3b82f6, #6366f1)',
+    // Deeper than #3b82f6/#6366f1 so white label text clears WCAG AA 4.5:1.
+    background: 'linear-gradient(135deg, #2563eb, #4f46e5)',
     color: '#fff',
     border: 'none',
     borderRadius: 8,
