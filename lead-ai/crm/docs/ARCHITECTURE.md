@@ -8,7 +8,7 @@ auth, the Sheets sync, the lead enums, or the deploy config.
 | Layer | What |
 |---|---|
 | Frontend | React 18 (Create React App) + Ant Design, deployed on **Vercel** |
-| Backend | FastAPI (`backend/main.py`, one large module) on **Render** |
+| Backend | FastAPI on **Render**. `backend/main.py` is still the bulk of it; routers are being split out one cohesive group at a time — `ai_chat.py`, `attendance.py`, `sheets_router.py` (`/api/sheets/*`) so far, each `app.include_router()`'d in `main.py`. |
 | DB | **Supabase** (Postgres) via the `supabase-py` REST client |
 | ML | CatBoost lead‑conversion model, loaded lazily, bundled at `lead-ai/models/` |
 | Ingest | Google Sheets (Meta Lead Ads export) → `google_sheets_sync.py`; website webhook `POST /api/public/website-lead` |
