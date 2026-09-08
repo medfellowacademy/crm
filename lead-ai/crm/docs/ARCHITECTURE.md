@@ -99,8 +99,11 @@ apply.
 - The sync is **idempotent** (dedupe on `meta_lead_id` / phone+email) and
   **capped** at `SHEET_SYNC_MAX_WRITES_PER_RUN` writes per run (default 400) —
   a big backfill spreads over several runs and resumes automatically.
-- It auto‑detects the real header row (some sheet tabs have a stray data row
-  above the header) and reports per‑tab `dropped` counts + a `sample_drop`.
+- Header handling (`_rows_with_headers`): finds the real header when a tab has
+  a stray data row above it, AND synthesises Meta's fixed column names for a
+  tab that has **no header row at all** (row 0 is data — this was silently
+  dropping ~1.5k leads across 2 tabs). Per‑tab `dropped` counts + a
+  `sample_drop` are reported either way.
 - Rows with a name + phone/email but no Meta id get a stable synthetic
   `meta_lead_id = "sheet:" + sha1(tab|phone|email)` so they still import.
 - The direct **Meta Lead Ads webhook** (see *Lead ingest* above) is now the

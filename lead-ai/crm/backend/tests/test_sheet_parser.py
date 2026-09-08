@@ -34,6 +34,68 @@ class TestFindHeaderRow:
         assert gss._find_header_row(rows, scan=6) == 0
 
 
+class TestHeaderlessMetaTab:
+    # A real dropped row from the "Fellowship in Endocrinology" tab — the tab
+    # has NO header row, so row 0 is data. Columns are Meta's fixed prefix
+    # (id..platform) followed by the form's custom questions.
+    ROW = [
+        "l:798063193355972", "2026-08-03t08:48:13-05:00", "ag:120252354788300672",
+        "endocrinology -ads-asian", "as:120252354788080672", "endocrinology -adset-asian",
+        "c:120246516984170672", "medfellow lead ads", "f:1714013179644084",
+        "fellowship in endocrinology", "false", "ig", "mbbs", "ashok behra", "p:+918962259841",
+    ]
+    ROWS = [ROW, [
+        "l:798063193355999", "2026-08-04t09:00:00-05:00", "ag:1", "endocrinology -ads-asian",
+        "as:1", "endocrinology -adset-asian", "c:1", "medfellow lead ads", "f:1",
+        "fellowship in endocrinology", "false", "ig", "md", "priya nair", "p:+919000000001",
+    ]]
+
+    def test_detected_as_headerless_meta(self):
+        assert gss._looks_like_headerless_meta(self.ROWS) is True
+
+    def test_synthesised_headers(self):
+        h = gss._synth_headerless_meta_headers(self.ROWS)
+        assert h[:12] == gss._META_FIXED_PREFIX
+        assert h[12] == "qualification"
+        assert h[13] == "full_name"
+        assert h[14] == "phone"
+
+    def test_rows_with_headers_recovers_every_row(self):
+        out = gss._rows_with_headers(self.ROWS, "Fellowship in Endocrinology")
+        assert len(out) == 2                       # both rows are data, none skipped as header
+        assert out[0]["full_name"] == "ashok behra"
+        assert out[0]["phone"] == "p:+918962259841"
+        assert out[0]["id"] == "l:798063193355972"
+
+    def test_row_to_lead_no_longer_drops_it(self):
+        row = gss._rows_with_headers(self.ROWS, "Fellowship in Endocrinology")[0]
+        lead, reason = gss.row_to_lead(row, "Fellowship in Endocrinology")
+        assert reason is None
+        assert lead["meta_lead_id"] == "798063193355972"
+        assert lead["full_name"] == "ashok behra"
+        assert lead["phone"] == "+918962259841"
+        assert lead["source"] == "Instagram"
+
+    def test_a_real_header_tab_is_untouched(self):
+        raw = [
+            ["id", "created_time", "full_name", "email", "phone", "platform"],
+            ["l:1", "2026-01-01", "Asha", "a@x.com", "9876543210", "ig"],
+        ]
+        assert gss._looks_like_headerless_meta(raw) is False
+        out = gss._rows_with_headers(raw, "t")
+        assert out == [{"id": "l:1", "created_time": "2026-01-01", "full_name": "Asha",
+                        "email": "a@x.com", "phone": "9876543210", "platform": "ig"}]
+
+    def test_stray_row_above_header_still_handled(self):
+        raw = [
+            ["Some export title", "", ""],
+            ["id", "created_time", "full_name", "email", "phone", "platform"],
+            ["l:1", "2026-01-01", "Asha", "a@x.com", "9876543210", "ig"],
+        ]
+        out = gss._rows_with_headers(raw, "t")
+        assert len(out) == 1 and out[0]["full_name"] == "Asha"
+
+
 class TestSmallHelpers:
     def test_clean_meta_id_strips_l_prefix(self):
         assert gss._clean_meta_id("l:123456") == "123456"

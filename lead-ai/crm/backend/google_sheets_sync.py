@@ -320,19 +320,10 @@ def fetch_tab_rows(tab_name: str) -> List[Dict]:
                 logger.warning(f"Tab '{tab_name}': API returned 0 rows (attempt {attempt+1})")
                 return []
 
-            # Some tabs have stray data row(s) above the real header — find it
-            # instead of blindly using row 0 (that dropped the whole tab).
-            hidx = _find_header_row(raw_rows)
-            if hidx > 0:
-                logger.warning(f"Tab '{tab_name}': real header row is at index {hidx} "
-                               f"({hidx} stray row(s) above it) — using it")
-            headers = [str(h).strip().lower() for h in raw_rows[hidx]]
-            rows = []
-            for row_vals in raw_rows[hidx + 1:]:
-                # Pad short rows with empty strings
-                padded = list(row_vals) + [""] * (len(headers) - len(row_vals))
-                rows.append(dict(zip(headers, padded)))
-            logger.info(f"Tab '{tab_name}': fetched {len(rows)} data rows, headers={headers[:6]}")
+            # Handles: a stray data row above the real header, AND a tab with
+            # no header row at all (row 0 is data -> synthesise Meta headers).
+            rows = _rows_with_headers(raw_rows, tab_name)
+            logger.info(f"Tab '{tab_name}': fetched {len(rows)} data rows")
             return rows
         except requests.exceptions.Timeout:
             logger.warning(f"Tab '{tab_name}': timeout on attempt {attempt+1}")
@@ -367,6 +358,100 @@ def _find_header_row(raw_rows: List[list], scan: int = 6) -> int:
     return 0
 
 
+# Meta Lead Ads CSV exports always lead with these columns, in this order.
+# A few tabs in the sheet were pasted WITHOUT the header row at all, so row 0
+# is real data -> _find_header_row falls back to 0 -> every row is mis-keyed
+# and dropped as "no_contact" (this silently lost ~1.5k leads across 2 tabs).
+_META_FIXED_PREFIX = [
+    "id", "created_time", "ad_id", "ad_name", "adset_id", "adset_name",
+    "campaign_id", "campaign_name", "form_id", "form_name", "is_organic", "platform",
+]
+_META_ID_CELL = _re.compile(r"^\s*(l|ag|as|c|f):\d", _re.IGNORECASE)
+_QUAL_TOKENS = {
+    "mbbs", "md", "ms", "bds", "mds", "dnb", "bhms", "bams", "bums", "mbchb",
+    "do", "dgo", "dch", "dm", "mch", "mrcp", "mrcs", "frcs", "pg", "pgt",
+    "intern", "internship", "student", "house surgeon", "resident",
+}
+
+
+def _looks_like_headerless_meta(raw_rows: List[list]) -> bool:
+    """True when row 0 is a Meta lead DATA row rather than a header
+    (first cell is `l:<digits>`, or several cells carry Meta id prefixes)."""
+    if not raw_rows or not raw_rows[0]:
+        return False
+    first = raw_rows[0]
+    if _META_ID_CELL.match(str(first[0] or "")):
+        return True
+    return sum(1 for c in first if _META_ID_CELL.match(str(c or ""))) >= 3
+
+
+def _classify_meta_extra_col(vals: List[str], already: set) -> str:
+    """Guess the role of a trailing (post-`platform`) column from its values."""
+    sample = [v for v in vals if v][:8]
+    if not sample:
+        return ""
+    if "email" not in already and all("@" in v and "." in v.rsplit("@", 1)[-1] for v in sample):
+        return "email"
+    if "phone" not in already:
+        digitish = sum(1 for v in sample
+                       if v.lower().startswith("p:") or len(_re.sub(r"\D", "", v)) >= 8)
+        if digitish >= max(1, len(sample) // 2):
+            return "phone"
+    if "qualification" not in already:
+        if sum(1 for v in sample if v.strip().lower() in _QUAL_TOKENS) >= max(1, len(sample) // 2):
+            return "qualification"
+    if "full_name" not in already and all(_re.fullmatch(r"[A-Za-z.\-'’ ]{2,60}", v) for v in sample):
+        return "full_name"
+    return ""
+
+
+def _synth_headerless_meta_headers(raw_rows: List[list]) -> Optional[List[str]]:
+    """Synthesise column names for a header-less Meta tab, or None if the tab
+    does not look like one. First 12 columns are Meta's fixed prefix; trailing
+    columns (the form's custom questions) are classified by value pattern so we
+    can still recover full_name / email / phone."""
+    if not _looks_like_headerless_meta(raw_rows):
+        return None
+    ncols = max((len(r) for r in raw_rows[:20] if r), default=0)
+    if ncols < 12:
+        return None
+    headers: List[str] = list(_META_FIXED_PREFIX[:ncols])
+    for col in range(len(_META_FIXED_PREFIX), ncols):
+        col_vals = [str(r[col]).strip() for r in raw_rows[:15] if len(r) > col]
+        role = _classify_meta_extra_col(col_vals, set(headers))
+        headers.append(role or f"question_{col + 1}")
+    return headers
+
+
+def _rows_with_headers(raw_rows: List[list], tab_name: str) -> List[Dict]:
+    """Turn a raw value matrix into row dicts: locate (or synthesise) the header
+    row, then zip each data row against it. Shared by the API and CSV paths."""
+    if not raw_rows:
+        return []
+    hidx = _find_header_row(raw_rows)
+    header_row_is_data = hidx == 0 and sum(
+        1 for c in raw_rows[0] if str(c).strip().lower() in _HEADER_TOKENS
+    ) < 3
+    if header_row_is_data:
+        synth = _synth_headerless_meta_headers(raw_rows)
+        if synth:
+            logger.warning("Tab '%s': no header row — synthesised Meta headers %s", tab_name, synth)
+            headers, body = synth, raw_rows
+        else:
+            headers, body = [str(h).strip().lower() for h in raw_rows[0]], raw_rows[1:]
+    else:
+        if hidx > 0:
+            logger.warning("Tab '%s': real header row is at index %d (%d stray row(s) above it)",
+                           tab_name, hidx, hidx)
+        headers, body = [str(h).strip().lower() for h in raw_rows[hidx]], raw_rows[hidx + 1:]
+
+    out: List[Dict] = []
+    for row_vals in body:
+        padded = list(row_vals) + [""] * (len(headers) - len(row_vals))
+        out.append(dict(zip(headers, padded)))
+    return out
+
+
 def _fetch_rows_for_tab(tab: Dict) -> List[Dict]:
     """Pick the best fetch method based on what credentials are available."""
     if SHEETS_API_KEY:
@@ -389,15 +474,7 @@ def _fetch_rows_for_tab(tab: Dict) -> List[Dict]:
         if not raw:
             logger.warning(f"Tab gid={tab['gid']}: CSV returned 0 rows")
             return []
-        hidx = _find_header_row(raw)
-        headers = [str(h).strip().lower() for h in raw[hidx]]
-        rows = []
-        for vals in raw[hidx + 1:]:
-            padded = list(vals) + [""] * (len(headers) - len(vals))
-            rows.append(dict(zip(headers, padded)))
-        if hidx > 0:
-            logger.warning(f"Tab gid={tab['gid']}: header row was at index {hidx} (stray rows above it)")
-        return rows
+        return _rows_with_headers(raw, tab.get("name") or f"gid={tab['gid']}")
     except Exception as e:
         logger.error(f"CSV fallback failed (gid={tab['gid']}): {e}")
         return []
