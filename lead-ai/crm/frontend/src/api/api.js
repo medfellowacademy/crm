@@ -158,6 +158,17 @@ export const hospitalsAPI = {
   create: (data) => api.post('/api/hospitals', data),
   update: (id, data) => api.put('/api/hospitals/' + id, data),
   delete: (id) => api.delete('/api/hospitals/' + id),
+
+  // Clinical-practice students
+  getStudents: (id) => api.get(`/api/hospitals/${id}/students`),
+  addStudent: (id, data) => api.post(`/api/hospitals/${id}/students`, data),
+  updateStudent: (id, sid, data) => api.put(`/api/hospitals/${id}/students/${sid}`, data),
+  deleteStudent: (id, sid) => api.delete(`/api/hospitals/${id}/students/${sid}`),
+
+  // Linked leads
+  getLeads: (id) => api.get(`/api/hospitals/${id}/leads`),
+  linkLead: (id, data) => api.post(`/api/hospitals/${id}/leads`, data),
+  unlinkLead: (id, leadId) => api.delete(`/api/hospitals/${id}/leads/${leadId}`),
 };
 
 // Courses API

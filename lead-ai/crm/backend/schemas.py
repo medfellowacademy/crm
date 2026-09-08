@@ -272,12 +272,62 @@ class HospitalCreate(BaseModel):
     contact_email: Optional[EmailStr] = None
     contact_phone: Optional[str] = None
     collaboration_status: Optional[str] = "Active"
-    courses_offered: List[int] = []
     locations: List[HospitalLocation] = []
 
     @field_validator('name', 'website', 'contact_person', 'contact_phone', mode='before')
     @classmethod
     def _sanitize(cls, v):
+        return sanitize_text(v, max_length=500) if v else None
+
+
+class HospitalStudentSession(BaseModel):
+    """One logged clinical-practice session."""
+    date: Optional[str] = None
+    hours: float = 0
+    note: Optional[str] = None
+
+    @field_validator('note', mode='before')
+    @classmethod
+    def _s(cls, v):
+        return sanitize_text(v, max_length=500) if v else None
+
+
+class HospitalStudentCreate(BaseModel):
+    """A doctor / student doing clinical practice at a hospital, with the full
+    training-time record."""
+    full_name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    department: Optional[str] = None
+    supervisor: Optional[str] = None
+    branch_label: Optional[str] = None
+    lead_id: Optional[str] = None            # optional link back to a CRM lead
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    required_hours: float = 0
+    completed_hours: float = 0
+    sessions: List[HospitalStudentSession] = []
+    status: str = "Ongoing"                  # Ongoing | Completed | On Hold | Dropped
+    notes: Optional[str] = None
+
+    @field_validator('full_name', 'department', 'supervisor', 'branch_label', 'notes', mode='before')
+    @classmethod
+    def _sanitize(cls, v):
+        return sanitize_text(v, max_length=1000) if v else None
+
+
+class HospitalStudentUpdate(HospitalStudentCreate):
+    full_name: Optional[str] = None          # everything optional on PATCH
+
+
+class HospitalLeadLinkCreate(BaseModel):
+    lead_id: str
+    branch_label: Optional[str] = None
+    note: Optional[str] = None
+
+    @field_validator('note', 'branch_label', mode='before')
+    @classmethod
+    def _s(cls, v):
         return sanitize_text(v, max_length=500) if v else None
 
 class WhatsAppRequest(BaseModel):
@@ -326,8 +376,9 @@ class HospitalResponse(BaseModel):
     contact_email: Optional[str] = None
     contact_phone: Optional[str] = None
     collaboration_status: Optional[str] = "Active"
-    courses_offered: List[Any] = []
     locations: List[HospitalLocation] = []
+    student_count: int = 0
+    lead_count: int = 0
     created_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)

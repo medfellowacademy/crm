@@ -76,6 +76,37 @@ class TestHospitalModels:
     def test_response_tolerates_missing_optional_fields(self):
         r = s.HospitalResponse(id=1, name="X")
         assert r.locations == [] and r.website is None and r.city is None
+        assert r.student_count == 0 and r.lead_count == 0
+
+    def test_courses_offered_is_gone_from_create(self):
+        assert "courses_offered" not in s.HospitalCreate.model_fields
+
+
+class TestHospitalStudentModels:
+    def test_student_with_session_log(self):
+        st = s.HospitalStudentCreate(
+            full_name="Dr Asha", department="Cardiology", status="Ongoing",
+            required_hours=100,
+            sessions=[
+                {"date": "2026-09-01", "hours": 6, "note": "CCU rounds"},
+                {"date": "2026-09-02", "hours": 4.5, "note": ""},
+                {"hours": 0},
+            ],
+        )
+        d = st.dict()
+        assert len(d["sessions"]) == 3
+        assert d["sessions"][0]["note"] == "CCU rounds"
+        # completed_hours is totalled server-side, not by the model
+        assert sum(x["hours"] for x in d["sessions"]) == 10.5
+
+    def test_update_model_makes_name_optional(self):
+        u = s.HospitalStudentUpdate(status="Completed")
+        assert u.full_name is None and u.status == "Completed"
+
+    def test_lead_link_requires_lead_id(self):
+        s.HospitalLeadLinkCreate(lead_id="LEAD123", note="rotation")
+        with pytest.raises(ValidationError):
+            s.HospitalLeadLinkCreate(note="missing lead_id")
 
 
 class TestUserCreateValidators:

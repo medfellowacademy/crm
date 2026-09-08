@@ -741,6 +741,7 @@ from schemas import (  # noqa: E402  (kept here so LeadStatus is defined before 
     NoteCreate, NoteResponse,
     LeadCreate, LeadUpdate, LeadResponse,
     HospitalCreate, HospitalResponse,
+    HospitalStudentCreate, HospitalStudentUpdate, HospitalLeadLinkCreate,
     CourseCreate, CourseResponse,
     CounselorResponse, DashboardStats,
     WhatsAppRequest, EmailRequest, CommunicationsSendRequest,
@@ -3355,14 +3356,30 @@ async def get_hospitals(
     
     try:
         query = supabase_data.client.table('hospitals').select('*')
-        
+
         if country:
             query = query.eq('country', country)
         if status:
             query = query.eq('collaboration_status', status)
-        
+
         response = query.range(skip, skip + limit - 1).execute()
-        return response.data if response.data else []
+        rows = response.data or []
+
+        # Attach clinical-practice student + linked-lead counts (one query each,
+        # not per-hospital).
+        try:
+            sc = supabase_data.client.table('hospital_students').select('hospital_id').execute().data or []
+            lc = supabase_data.client.table('hospital_leads').select('hospital_id').execute().data or []
+            from collections import Counter as _Counter
+            _students = _Counter(r['hospital_id'] for r in sc if r.get('hospital_id') is not None)
+            _leads = _Counter(r['hospital_id'] for r in lc if r.get('hospital_id') is not None)
+            for h in rows:
+                h['student_count'] = _students.get(h.get('id'), 0)
+                h['lead_count'] = _leads.get(h.get('id'), 0)
+        except Exception as _ce:
+            logger.warning(f"hospital counts unavailable: {_ce}")
+
+        return rows
     except Exception as e:
         logger.error(f"Error getting hospitals: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch hospitals")
@@ -6657,6 +6674,153 @@ async def delete_hospital(hospital_id: int):
     except Exception as e:
         logger.error(f"delete_hospital error: {e}")
         raise HTTPException(status_code=409, detail="Cannot delete hospital — it may be referenced by existing leads.")
+
+
+# ============================================================================
+# HOSPITAL — CLINICAL-PRACTICE STUDENTS + LINKED LEADS
+# ============================================================================
+
+def _hospital_or_404(hospital_id: int) -> None:
+    r = supabase_data.client.table('hospitals').select('id').eq('id', hospital_id).limit(1).execute()
+    if not r.data:
+        raise HTTPException(status_code=404, detail="Hospital not found")
+
+
+def _student_payload(model, *, creator: Optional[str] = None) -> dict:
+    p = model.dict(exclude_unset=True)
+    sessions = p.get('sessions')
+    if sessions is not None:
+        # keep completed_hours in step with the logged sessions
+        p['completed_hours'] = round(sum(float(s.get('hours') or 0) for s in sessions), 2)
+    p['updated_at'] = datetime.utcnow().isoformat()
+    if creator is not None:
+        p['created_by'] = creator
+    return p
+
+
+@app.get("/api/hospitals/{hospital_id}/students",
+         dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
+async def list_hospital_students(hospital_id: int):
+    """Clinical-practice roster for a hospital (full training-time record)."""
+    try:
+        res = (supabase_data.client.table('hospital_students')
+               .select('*').eq('hospital_id', hospital_id)
+               .order('created_at', desc=True).execute())
+        return res.data or []
+    except Exception as e:
+        logger.error(f"list_hospital_students error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch students")
+
+
+@app.post("/api/hospitals/{hospital_id}/students",
+          dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
+async def add_hospital_student(hospital_id: int, student: HospitalStudentCreate,
+                              current_user: dict = Depends(get_current_user)):
+    _hospital_or_404(hospital_id)
+    try:
+        payload = _student_payload(student, creator=current_user.get('full_name'))
+        payload['hospital_id'] = hospital_id
+        payload.setdefault('created_at', datetime.utcnow().isoformat())
+        res = supabase_data.client.table('hospital_students').insert(payload).execute()
+        return res.data[0] if res.data else {}
+    except Exception as e:
+        logger.error(f"add_hospital_student error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to add student")
+
+
+@app.put("/api/hospitals/{hospital_id}/students/{student_id}",
+         dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
+async def update_hospital_student(hospital_id: int, student_id: int, student: HospitalStudentUpdate):
+    try:
+        existing = (supabase_data.client.table('hospital_students')
+                    .select('id').eq('id', student_id).eq('hospital_id', hospital_id)
+                    .limit(1).execute())
+        if not existing.data:
+            raise HTTPException(status_code=404, detail="Student record not found")
+        payload = _student_payload(student)
+        res = (supabase_data.client.table('hospital_students')
+               .update(payload).eq('id', student_id).execute())
+        return res.data[0] if res.data else {}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"update_hospital_student error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update student")
+
+
+@app.delete("/api/hospitals/{hospital_id}/students/{student_id}",
+            dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
+async def delete_hospital_student(hospital_id: int, student_id: int):
+    try:
+        (supabase_data.client.table('hospital_students')
+         .delete().eq('id', student_id).eq('hospital_id', hospital_id).execute())
+        return {"message": "Student record removed"}
+    except Exception as e:
+        logger.error(f"delete_hospital_student error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to remove student")
+
+
+@app.get("/api/hospitals/{hospital_id}/leads",
+         dependencies=[Depends(require_permission(P.VIEW_ALL_LEADS, P.VIEW_OWN_LEADS))])
+async def list_hospital_leads(hospital_id: int):
+    """Leads associated with a hospital, joined to current lead fields."""
+    try:
+        links = (supabase_data.client.table('hospital_leads')
+                 .select('*').eq('hospital_id', hospital_id)
+                 .order('created_at', desc=True).execute()).data or []
+        ids = [x['lead_id'] for x in links if x.get('lead_id')]
+        leads_by_id = {}
+        if ids:
+            lr = (supabase_data.client.table('leads')
+                  .select('lead_id,full_name,phone,email,status,assigned_to,course_interested')
+                  .in_('lead_id', ids).execute()).data or []
+            leads_by_id = {r['lead_id']: r for r in lr}
+        for x in links:
+            x['lead'] = leads_by_id.get(x.get('lead_id'))
+        return links
+    except Exception as e:
+        logger.error(f"list_hospital_leads error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch linked leads")
+
+
+@app.post("/api/hospitals/{hospital_id}/leads",
+          dependencies=[Depends(require_permission(P.EDIT_LEAD))])
+async def link_hospital_lead(hospital_id: int, body: HospitalLeadLinkCreate,
+                             current_user: dict = Depends(get_current_user)):
+    _hospital_or_404(hospital_id)
+    try:
+        lead = (supabase_data.client.table('leads').select('id,lead_id')
+                .eq('lead_id', body.lead_id).limit(1).execute())
+        if not lead.data:
+            raise HTTPException(status_code=404, detail="Lead not found")
+        payload = {
+            "hospital_id": hospital_id,
+            "lead_id": body.lead_id,
+            "branch_label": body.branch_label,
+            "note": body.note,
+            "created_by": current_user.get('full_name'),
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        res = (supabase_data.client.table('hospital_leads')
+               .upsert(payload, on_conflict="hospital_id,lead_id").execute())
+        return res.data[0] if res.data else payload
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"link_hospital_lead error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to link lead")
+
+
+@app.delete("/api/hospitals/{hospital_id}/leads/{lead_id}",
+            dependencies=[Depends(require_permission(P.EDIT_LEAD))])
+async def unlink_hospital_lead(hospital_id: int, lead_id: str):
+    try:
+        (supabase_data.client.table('hospital_leads')
+         .delete().eq('hospital_id', hospital_id).eq('lead_id', lead_id).execute())
+        return {"message": "Lead unlinked"}
+    except Exception as e:
+        logger.error(f"unlink_hospital_lead error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to unlink lead")
 
 
 # ============================================================
