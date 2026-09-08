@@ -128,6 +128,8 @@ from communication_service_v2 import whatsapp_service, email_service, comm_servi
 from ai_chat import router as ai_chat_router
 from attendance import router as attendance_router
 from sheets_router import router as sheets_router
+from mbg_router import router as mbg_router
+from departments_router import router as departments_router
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -705,6 +707,8 @@ app.add_middleware(
 app.include_router(ai_chat_router)
 app.include_router(attendance_router)
 app.include_router(sheets_router)
+app.include_router(mbg_router)
+app.include_router(departments_router)
 
 logger.info("🚀 FastAPI application initialized with logging and error handling")
 
@@ -4646,90 +4650,6 @@ async def get_dashboard_stats(request: Request, created_from: Optional[str] = No
             total_conversions=0, conversion_rate=0, total_revenue=0, expected_revenue=0,
             leads_today=0, leads_this_week=0, leads_this_month=0, avg_ai_score=0
         )
-
-@app.get("/api/departments/kpis")
-async def get_department_kpis(current_user: dict = Depends(get_current_user)):
-    """Real-time KPI scoreboard for each department card on the hub page."""
-    now = datetime.now(_IST)
-    today_str = now.date().isoformat()
-    week_start = (now - timedelta(days=now.weekday())).date().isoformat()
-    month_start = now.date().replace(day=1).isoformat()
-
-    try:
-        # ── Sales ───────────────────────────────────────────────────────────────
-        today_q   = supabase_data.client.table('leads').select('id', count='exact').gte('created_at', today_str).execute()
-        week_q    = supabase_data.client.table('leads').select('id', count='exact').gte('created_at', week_start).execute()
-        total_q   = supabase_data.client.table('leads').select('id', count='exact').execute()
-        enrolled_q= supabase_data.client.table('leads').select('id', count='exact').eq('status', 'Enrolled').execute()
-
-        total_leads    = total_q.count   or 0
-        enrolled_count = enrolled_q.count or 0
-        conv_rate      = round(enrolled_count / max(total_leads, 1) * 100, 1)
-
-        # ── Marketing ───────────────────────────────────────────────────────────
-        meta_q    = supabase_data.client.table('leads').select('id', count='exact').ilike('source', '%meta%').gte('created_at', week_start).execute()
-        website_q = supabase_data.client.table('leads').select('id', count='exact').ilike('source', '%website%').gte('created_at', week_start).execute()
-
-        # ── Finance ─────────────────────────────────────────────────────────────
-        # Sum actual_revenue across all enrolled leads (paginated)
-        collected = 0.0
-        _off = 0
-        while True:
-            _batch = supabase_data.client.table('leads').select('actual_revenue') \
-                .eq('status', 'Enrolled').range(_off, _off + 999).execute()
-            if not _batch.data:
-                break
-            collected += sum(r.get('actual_revenue') or 0 for r in _batch.data)
-            if len(_batch.data) < 1000:
-                break
-            _off += 1000
-
-        # enrolled_at is the exact sale date (set via the enrollment modal); using it
-        # instead of updated_at avoids miscounting leads whose row was merely edited
-        # this month (e.g. LMS status change) but that actually enrolled earlier.
-        month_rev_q = supabase_data.client.table('leads').select('actual_revenue') \
-            .eq('status', 'Enrolled').gte('enrolled_at', month_start).execute()
-        month_collected = sum(r.get('actual_revenue') or 0 for r in (month_rev_q.data or []))
-
-        # ── Operations ──────────────────────────────────────────────────────────
-        att_q = supabase_data.client.table('attendance').select('status').eq('date', today_str).execute()
-        present_today = sum(1 for r in (att_q.data or []) if r.get('status') in ('present', 'late'))
-
-        # ── Administration ──────────────────────────────────────────────────────
-        users_q     = supabase_data.client.table('users').select('is_active').execute()
-        total_users = len(users_q.data or [])
-        active_users= sum(1 for u in (users_q.data or []) if u.get('is_active'))
-
-        return {
-            "sales": {
-                "leads_today":      today_q.count  or 0,
-                "leads_this_week":  week_q.count   or 0,
-                "total_enrolled":   enrolled_count,
-                "conversion_rate":  conv_rate,
-            },
-            "marketing": {
-                "meta_leads_this_week":    meta_q.count    or 0,
-                "website_leads_this_week": website_q.count or 0,
-                "new_leads_this_week":     week_q.count    or 0,
-            },
-            "finance": {
-                "total_collected":     round(collected, 2),
-                "collected_this_month": round(month_collected, 2),
-                "enrolled_count":      enrolled_count,
-            },
-            "operations": {
-                "present_today": present_today,
-                "total_staff":   total_users,
-            },
-            "administration": {
-                "total_users":  total_users,
-                "active_users": active_users,
-            },
-        }
-    except Exception as e:
-        logger.error(f"Department KPIs error: {e}")
-        return {}
-
 
 @app.get("/api/counselors", response_model=List[CounselorResponse])
 async def get_counselors(actor: dict = Depends(current_active_user)):
@@ -9512,43 +9432,6 @@ async def cleanup_duplicate_leads_endpoint(current_user: dict = Depends(require_
     except Exception as e:
         logger.error(f"cleanup_duplicate_leads error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/mbg/phonebooks",
-         dependencies=[Depends(require_permission(P.EXPORT_REPORTS))])
-async def mbg_phonebooks(current_user: dict = Depends(get_current_user)):
-    """Return all MBG phonebooks (tags) so the UI can show their IDs."""
-    if not _MBG_API_KEY:
-        raise HTTPException(status_code=503, detail="MBG_API_KEY not configured")
-    try:
-        import httpx as _httpx
-        async with _httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                f"{_MBG_BASE_URL}/phonebook/get_list",
-                headers={"x-api-key": _MBG_API_KEY},
-            )
-            resp.raise_for_status()
-            return resp.json()
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"MBG API error: {exc}")
-
-
-@app.get("/api/mbg/status",
-         dependencies=[Depends(require_permission(P.EXPORT_REPORTS))])
-async def mbg_status(current_user: dict = Depends(get_current_user)):
-    """Check whether the MBG integration is configured and reachable."""
-    if not _MBG_API_KEY:
-        return {"connected": False, "reason": "MBG_API_KEY not set"}
-    try:
-        import httpx as _httpx
-        async with _httpx.AsyncClient(timeout=8) as client:
-            resp = await client.get(
-                f"{_MBG_BASE_URL}/phonebook/get_list",
-                headers={"x-api-key": _MBG_API_KEY},
-            )
-            return {"connected": resp.status_code == 200, "http_status": resp.status_code}
-    except Exception as exc:
-        return {"connected": False, "reason": str(exc)}
 
 
 def _fmt_phone_mbg(phone: str) -> str:
