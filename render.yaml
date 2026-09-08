@@ -1,0 +1,73 @@
+# Render Blueprint — pins the instance size, worker count, and moves the
+# Google Sheets sync off the web process.
+#
+# Apply: Render Dashboard -> Blueprints -> New Blueprint Instance -> point at
+# this repo. If the existing service was created manually, either recreate it
+# from this blueprint or copy the `plan` / env-var / cron settings into it by
+# hand — the important bits are:
+#   * plan: standard        (2 GB RAM — the CatBoost model + FastAPI need headroom)
+#   * WEB_CONCURRENCY: 1     (one process => one copy of the ~200 MB model)
+#   * a separate cron job for the sheet sync (not a BackgroundTask on the web dyno)
+
+services:
+  - type: web
+    name: medfellow-crm-api
+    runtime: python
+    plan: standard                     # 2 GB RAM. `starter` (512 MB) OOMs.
+    rootDir: lead-ai/crm/backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: ENVIRONMENT
+        value: production
+      - key: PYTHON_VERSION
+        value: "3.11"
+      # Secrets — set these in the Render dashboard (sync: false = not in git):
+      - key: JWT_SECRET_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GOOGLE_SHEET_ID
+        sync: false
+      - key: GOOGLE_SHEETS_API_KEY
+        sync: false
+      - key: WEBSITE_LEAD_SECRET
+        sync: false
+      - key: META_WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: META_WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: META_WHATSAPP_WEBHOOK_VERIFY_TOKEN
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
+
+  # Google Sheets -> CRM sync, on its own schedule and its own process.
+  - type: cron
+    name: medfellow-sheets-sync
+    runtime: python
+    plan: starter
+    rootDir: lead-ai/crm/backend
+    schedule: "*/15 * * * *"           # every 15 minutes
+    buildCommand: pip install -r requirements.txt
+    startCommand: python sync_cron.py
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: GOOGLE_SHEET_ID
+        sync: false
+      - key: GOOGLE_SHEETS_API_KEY
+        sync: false
+      # Optional: raise/lower the per-run write cap (default 400)
+      - key: SHEET_SYNC_MAX_WRITES_PER_RUN
+        value: "500"

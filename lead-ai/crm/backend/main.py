@@ -337,6 +337,23 @@ async def lifespan(app: FastAPI):
     # --- Warn on missing optional-but-important env vars ---
     if os.getenv("SUPABASE_URL") and not os.getenv("SUPABASE_KEY"):
         logger.warning("⚠️ SUPABASE_URL is set but SUPABASE_KEY is missing — Supabase will not connect.")
+
+    # --- Make the security posture explicit in the logs ---
+    # The backend connects with SUPABASE_KEY. If that is the service_role key
+    # (the norm here), it BYPASSES Postgres RLS entirely — so `rbac.py` is the
+    # only real authorization gate. The RLS policies in migrations/ are
+    # defense-in-depth for a hypothetical future direct-client path. See
+    # docs/ARCHITECTURE.md. This just logs which key type is in play so the
+    # posture is intentional and visible.
+    _sk = os.getenv("SUPABASE_KEY", "")
+    try:
+        import base64 as _b64, json as _json
+        _payload = _json.loads(_b64.urlsafe_b64decode(_sk.split(".")[1] + "==="))
+        _role = _payload.get("role", "unknown")
+        logger.info(f"🔐 Supabase key role='{_role}' — "
+                    f"{'RLS bypassed; rbac.py is the auth gate' if _role == 'service_role' else 'RLS enforced'}")
+    except Exception:
+        logger.info("🔐 Supabase key role could not be determined")
     if not os.getenv("ANTHROPIC_API_KEY"):
         logger.warning("⚠️ ANTHROPIC_API_KEY is not set — AI assistant features will be disabled.")
     if not os.getenv("META_WHATSAPP_ACCESS_TOKEN") or not os.getenv("META_WHATSAPP_PHONE_NUMBER_ID"):
