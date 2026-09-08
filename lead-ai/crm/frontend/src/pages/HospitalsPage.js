@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Row, Col, Card, Button, Tag, Space, Form, Input, Select, Drawer, Modal, message,
+  Row, Col, Card, Button, Tag, Space, Form, Input, Select, AutoComplete, Drawer, Modal, message,
   Popconfirm, Divider, Typography, Empty, Badge, Tabs, Table, Progress, DatePicker,
   InputNumber, Statistic, Spin,
 } from 'antd';
@@ -109,8 +109,12 @@ function StudentModal({ open, onClose, hospital, student, onSaved }) {
         </Space>
         <Space size="middle" style={{ display: 'flex' }} align="start">
           <Form.Item name="department" label="Department" style={{ flex: 1 }}>
-            <Select allowClear showSearch placeholder="Cardiology…"
-              options={DEPARTMENT_SUGGESTIONS.map((d) => ({ value: d, label: d }))} />
+            <AutoComplete
+              allowClear
+              placeholder="Pick or type a department"
+              options={DEPARTMENT_SUGGESTIONS.map((d) => ({ value: d }))}
+              filterOption={(input, opt) => opt.value.toLowerCase().includes(input.toLowerCase())}
+            />
           </Form.Item>
           <Form.Item name="branch_label" label="Branch" style={{ flex: 1 }}>
             <Select allowClear placeholder="Which location">
