@@ -3744,37 +3744,6 @@ async def get_lead_ai_summary(lead_id: str):
             "urgency": "High" if ai_score > 70 else "Medium" if ai_score > 40 else "Low",
             "sentiment": "positive" if ai_score > 60 else "neutral"
         }
-
-        # Generate basic summary from lead data
-        summary = {
-            "lead_id": lead.lead_id,
-            "summary": f"{lead.full_name} is interested in {lead.course_interested}. Currently in {lead.status} status.",
-            "key_insights": [
-                f"AI Score: {lead.ai_score}/100 - {lead.ai_segment} segment",
-                f"Conversion Probability: {int(lead.conversion_probability * 100)}%",
-                f"Expected Revenue: ₹{int(lead.expected_revenue):,}"
-            ],
-            "recommendations": [],
-            "next_best_action": lead.next_action or "Schedule follow-up call",
-            "urgency": lead.priority_level or "Medium",
-            "sentiment": "positive" if lead.ai_score > 70 else "neutral" if lead.ai_score > 40 else "negative"
-        }
-
-        # Add recommendations based on status and score
-        if lead.ai_segment == "HOT":
-            summary["recommendations"].append("🔥 High priority - Contact immediately")
-            summary["recommendations"].append("💰 High conversion probability - Focus on closing")
-        elif lead.ai_segment == "WARM":
-            summary["recommendations"].append("📞 Schedule follow-up within 24 hours")
-            summary["recommendations"].append("📧 Send course details and testimonials")
-        else:
-            summary["recommendations"].append("📅 Schedule follow-up for next week")
-            summary["recommendations"].append("🎯 Work on building interest")
-
-        if lead.follow_up_date and lead.follow_up_date < datetime.utcnow():
-            summary["recommendations"].insert(0, "⚠️ Follow-up overdue - Contact ASAP")
-
-        return summary
     except HTTPException:
         raise
     except Exception as e:
@@ -8190,9 +8159,14 @@ _decay_task: "_asyncio.Task | None" = None
 
 
 async def _decay_scheduler_loop():
-    """Runs the decay cycle every `check_interval_hours` in the background."""
+    """Runs the decay cycle every `check_interval_hours` in the background.
+
+    DEAD CODE: never scheduled (see the commented-out create_task in lifespan)
+    and still references the removed SQLAlchemy ``SessionLocal``. Kept for the
+    decay-config REST endpoints' shape until the feature is re-done on Supabase.
+    """
     while True:
-        db = SessionLocal()
+        db = SessionLocal()  # noqa: F821 - dead code, see docstring
         try:
             cfg = _get_decay_config(db)
             interval_seconds = max(cfg.check_interval_hours * 3600, 300)  # min 5 min
@@ -8203,7 +8177,7 @@ async def _decay_scheduler_loop():
 
         await _asyncio.sleep(interval_seconds)
 
-        db = SessionLocal()
+        db = SessionLocal()  # noqa: F821 - dead code, see docstring
         try:
             run_decay_cycle(db)
         except Exception as e:

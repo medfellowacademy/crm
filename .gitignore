@@ -55,3 +55,6 @@ lead-ai/crm/backend/.env.render
 
 # Agent/local workspace metadata
 .agents/
+
+# CatBoost training artifacts
+catboost_info/

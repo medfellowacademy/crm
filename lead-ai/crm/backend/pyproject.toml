@@ -1,0 +1,20 @@
+# Backend tooling config (pytest + ruff). Kept intentionally small — this is a
+# large legacy codebase, so the lint gate is scoped to real correctness rules
+# (undefined names, syntax errors, unused imports) rather than full style.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "--tb=short -q"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = ["migrations", "tests"]
+
+[tool.ruff.lint]
+# The flake8 "critical" subset — real correctness problems only, no style:
+#   E9  = syntax errors           F63 = invalid comparisons / assertions
+#   F7  = statement-level mistakes F82 = undefined name / unbound local
+# TODO: add F401 (unused imports) once the ~48 existing hits are cleared.
+select = ["E9", "F63", "F7", "F82"]

@@ -92,6 +92,16 @@ large change — not a config toggle.
 
 ## Tests / CI
 
-- There is currently **no test suite** and CI does nothing meaningful.
-  Highest‑value first targets: `rbac.py` scoping, `repeat_leads` dedup, the
-  sheet‑row parser, and the money paths (payments, payroll).
+- `backend/tests/` — pytest unit suite over the pure logic that matters:
+  `rbac.py` (permission matrix, hierarchy ranks, lead‑visibility scoping),
+  `constants.py` (enum SSOT + normalisers), `repeat_leads` contact cleaning,
+  the Google‑Sheet row parser (`_find_header_row`, `row_to_lead` skip
+  reasons), and a backend↔frontend enum‑drift guard. No DB/network — a
+  `conftest.py` sets placeholder env so import‑time config checks pass.
+  Run: `cd backend && pytest`.
+- `.github/workflows/ci.yml` — on every push/PR to `main`: `ruff check`
+  (scoped to the flake8 "critical" rules, see `pyproject.toml`), the pytest
+  suite, `npm run build`, and a Docker image build on `main`.
+- **Still untested (highest‑value next):** the money paths (payments,
+  payroll/salary slips), bulk lead ops, and the sheet sync's write/dedupe
+  loop (`sync_sheet_to_crm`). These need DB fixtures, not just pure‑fn tests.
