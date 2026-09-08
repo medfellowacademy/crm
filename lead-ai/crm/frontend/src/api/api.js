@@ -119,7 +119,11 @@ export const brochuresAPI = {
     const form = new FormData();
     form.append('name', name);
     form.append('file', file);
-    return api.post('/api/brochures', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+    // Brochures can be up to 200 MB — override the default 60 s timeout.
+    return api.post('/api/brochures', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 15 * 60 * 1000,
+    });
   },
   delete: (id) => api.delete(`/api/brochures/${id}`),
 };

@@ -161,7 +161,7 @@ const BrochuresPage = () => {
               beforeUpload={(file) => {
                 const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
                 if (!isPdf) { message.error('Only PDF files are accepted'); return Upload.LIST_IGNORE; }
-                if (file.size > 25 * 1024 * 1024) { message.error('File is larger than 25 MB'); return Upload.LIST_IGNORE; }
+                if (file.size > 200 * 1024 * 1024) { message.error('File is larger than 200 MB'); return Upload.LIST_IGNORE; }
                 setPendingFile(file);
                 return false; // keep it local; we upload on submit
               }}
@@ -169,7 +169,7 @@ const BrochuresPage = () => {
             >
               <p className="ant-upload-drag-icon"><InboxOutlined /></p>
               <p className="ant-upload-text">Click or drag a PDF here</p>
-              <p className="ant-upload-hint">Single PDF, up to 25 MB.</p>
+              <p className="ant-upload-hint">Single PDF, up to 200 MB. Large files can take a while to upload.</p>
             </Upload.Dragger>
           </Form.Item>
         </Form>

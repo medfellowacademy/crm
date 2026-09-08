@@ -18,7 +18,7 @@ from logger_config import logger
 router = APIRouter(prefix="/api/brochures", tags=["brochures"])
 
 _BUCKET = "crm-documents"
-_MAX_BYTES = 25 * 1024 * 1024  # 25 MB
+_MAX_BYTES = 200 * 1024 * 1024  # 200 MB
 
 
 @router.get("")
@@ -57,7 +57,7 @@ async def upload_brochure(
     if not contents:
         raise HTTPException(status_code=400, detail="The uploaded file is empty")
     if len(contents) > _MAX_BYTES:
-        raise HTTPException(status_code=413, detail="File is larger than 25 MB")
+        raise HTTPException(status_code=413, detail="File is larger than 200 MB")
 
     safe = re.sub(r"[^a-zA-Z0-9._-]", "_", file.filename or "brochure.pdf")
     path = f"brochures/{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{safe}"
