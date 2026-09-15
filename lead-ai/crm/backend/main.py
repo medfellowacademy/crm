@@ -3328,7 +3328,7 @@ def _sync_hospital_primary_city(payload: dict) -> None:
 
 
 @app.post("/api/hospitals", response_model=HospitalResponse,
-          dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
+          dependencies=[Depends(require_team_leader_up)])
 async def create_hospital(hospital: HospitalCreate):
     """Create hospital - SUPABASE ONLY"""
     
@@ -6628,7 +6628,7 @@ async def mark_all_notifications_read(current_user: dict = Depends(get_current_u
 # ============================================================
 
 @app.put("/api/hospitals/{hospital_id}", response_model=HospitalResponse,
-         dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
+         dependencies=[Depends(require_team_leader_up)])
 async def update_hospital(hospital_id: int, data: HospitalCreate):
     """Update an existing hospital record - SUPABASE ONLY"""
     
@@ -6656,7 +6656,7 @@ async def update_hospital(hospital_id: int, data: HospitalCreate):
 
 
 @app.delete("/api/hospitals/{hospital_id}",
-            dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
+            dependencies=[Depends(require_team_leader_up)])
 async def delete_hospital(hospital_id: int):
     """Delete a hospital record - SUPABASE ONLY"""
     
@@ -6701,7 +6701,7 @@ def _student_payload(model, *, creator: Optional[str] = None) -> dict:
 
 
 @app.get("/api/hospitals/{hospital_id}/students",
-         dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
+         dependencies=[Depends(require_team_leader_up)])
 async def list_hospital_students(hospital_id: int):
     """Clinical-practice roster for a hospital (full training-time record)."""
     try:
@@ -6715,7 +6715,7 @@ async def list_hospital_students(hospital_id: int):
 
 
 @app.post("/api/hospitals/{hospital_id}/students",
-          dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
+          dependencies=[Depends(require_team_leader_up)])
 async def add_hospital_student(hospital_id: int, student: HospitalStudentCreate,
                               current_user: dict = Depends(get_current_user)):
     _hospital_or_404(hospital_id)
@@ -6731,7 +6731,7 @@ async def add_hospital_student(hospital_id: int, student: HospitalStudentCreate,
 
 
 @app.put("/api/hospitals/{hospital_id}/students/{student_id}",
-         dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
+         dependencies=[Depends(require_team_leader_up)])
 async def update_hospital_student(hospital_id: int, student_id: int, student: HospitalStudentUpdate):
     try:
         existing = (supabase_data.client.table('hospital_students')
@@ -6751,7 +6751,7 @@ async def update_hospital_student(hospital_id: int, student_id: int, student: Ho
 
 
 @app.delete("/api/hospitals/{hospital_id}/students/{student_id}",
-            dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
+            dependencies=[Depends(require_team_leader_up)])
 async def delete_hospital_student(hospital_id: int, student_id: int):
     try:
         (supabase_data.client.table('hospital_students')
