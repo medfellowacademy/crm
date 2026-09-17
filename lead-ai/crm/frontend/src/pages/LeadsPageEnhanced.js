@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Table, Button, Tag, Progress, Space, Input, Select, DatePicker,
   Drawer, Form, message, Row, Col, Card, Statistic, Avatar, Tooltip,
-  Dropdown, Segmented, Empty, Typography, Divider, Checkbox,
+  Dropdown, Segmented, Empty, Typography, Divider, Checkbox, Popover,
   Radio, InputNumber, Alert, Modal, Upload, Steps, Badge, AutoComplete, Collapse,
 } from 'antd';
 import { COUNTRIES, COUNTRY_DIAL_CODES } from '../config/countries';
@@ -16,7 +16,7 @@ import {
   StarOutlined, FireOutlined, ThunderboltOutlined, TeamOutlined,
   ClockCircleOutlined, SyncOutlined, ExportOutlined, ImportOutlined,
   CheckCircleOutlined, CloseCircleOutlined, UploadOutlined,
-  WarningOutlined, FunnelPlotOutlined, MessageOutlined,
+  WarningOutlined, FunnelPlotOutlined, MessageOutlined, SettingOutlined,
 } from '@ant-design/icons';
 import ChatDrawer from '../components/ChatDrawer';
 import DuplicateDetectionModal from '../components/leads/DuplicateDetectionModal';
@@ -28,7 +28,7 @@ import {
   STATUS_OPTIONS, SOURCE_OPTIONS, STATUS_COLOR_MAP,
   isTerminalStatus, normalizeSource,
 } from '../config/leadEnums';
-import { leadsAPI, coursesAPI, counselorsAPI, usersAPI, duplicatesAPI, decayAPI, exportAPI } from '../api/api';
+import { leadsAPI, coursesAPI, counselorsAPI, usersAPI, duplicatesAPI, decayAPI, exportAPI, preferencesAPI } from '../api/api';
 import { useAuth } from '../context/AuthContext';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -231,6 +231,28 @@ const QUALIFICATION_OPTIONS = [
   'BDS','MDS','BPT','MPT','PHARM D','OTHERS',
 ];
 const COMPANY_OPTIONS = ['MED', 'Others'];
+
+// Leads table column visibility — user-configurable, saved to their account
+// (users.ui_preferences.leads_columns) so it follows them across devices.
+// 'lead_info' and 'actions' are structural and always shown.
+const LEAD_COLUMN_OPTIONS = [
+  { key: 'country', label: 'Country', group: 'Contact' },
+  { key: 'course', label: 'Course', group: 'Interest' },
+  { key: 'source', label: 'Source', group: 'Interest' },
+  { key: 'ad_name', label: 'Ad Name', group: 'Interest' },
+  { key: 'assigned_to', label: 'Assigned To', group: 'Ownership' },
+  { key: 'status', label: 'Status', group: 'Ownership' },
+  { key: 'company', label: 'Company', group: 'Ownership' },
+  { key: 'ai_score', label: 'AI Score', group: 'Scoring' },
+  { key: 'revenue', label: 'Revenue', group: 'Scoring' },
+  { key: 'follow_up_date', label: 'Follow Up', group: 'Dates' },
+  { key: 'created_at', label: 'Created', group: 'Dates' },
+  { key: 'updated_at', label: 'Last Updated', group: 'Dates' },
+];
+const LEAD_COLUMN_GROUPS = ['Contact', 'Interest', 'Ownership', 'Scoring', 'Dates'];
+const MANDATORY_LEAD_COLUMNS = ['lead_info', 'actions'];
+const DEFAULT_VISIBLE_LEAD_COLUMNS = LEAD_COLUMN_OPTIONS.map((c) => c.key); // everything — today's behaviour
+const LEAD_COLUMNS_PREF_KEY = 'leads_columns';
 
 // ════════════════════════════════════════════════════════════════════════════
 const LeadsPageEnhanced = () => {
@@ -514,6 +536,28 @@ const LeadsPageEnhanced = () => {
   });
 
   const users = Array.isArray(usersData) ? usersData : (usersData?.users || []);
+
+  // Which Leads table columns this user wants visible — saved to their
+  // account (users.ui_preferences), not localStorage, so it follows them
+  // across devices. Falls back to "everything" (today's behaviour) until
+  // they customise it.
+  const { data: uiPreferences } = useQuery({
+    queryKey: ['ui-preferences'],
+    queryFn: () => preferencesAPI.get().then((r) => r.data),
+    staleTime: 5 * 60 * 1000,
+  });
+  const visibleColumnKeys = uiPreferences?.[LEAD_COLUMNS_PREF_KEY] ?? DEFAULT_VISIBLE_LEAD_COLUMNS;
+  const [columnPickerOpen, setColumnPickerOpen] = useState(false);
+  const [draftColumns, setDraftColumns] = useState(visibleColumnKeys);
+  const saveColumnsMutation = useMutation({
+    mutationFn: (cols) => preferencesAPI.set(LEAD_COLUMNS_PREF_KEY, cols),
+    onSuccess: (res) => {
+      queryClient.setQueryData(['ui-preferences'], res.data);
+      message.success('Column preferences saved');
+      setColumnPickerOpen(false);
+    },
+    onError: () => message.error('Failed to save column preferences'),
+  });
 
   // Decay config — only drives cosmetic "at risk" row badges, so fetch it a
   // beat after the table renders instead of in the page-load burst.
@@ -1554,6 +1598,12 @@ const LeadsPageEnhanced = () => {
     },
   ], [uniqueCountries, uniqueCourses, uniqueSources, uniqueStatuses, uniqueAssigned, uniqueAdNames, isCounselor, authUser, users, navigate, decayConfig, updateMutation, inlineUpdate, handleTableChange, getActionMenu, editingCell, setEditingCell, commitEdit, setEditingValue, tableFilterState, repeatedLeadIds, inlineCourseSearch]);
 
+  // Only the columns the user has chosen (+ the always-on Lead/Actions columns).
+  const visibleColumns = useMemo(
+    () => columns.filter((c) => MANDATORY_LEAD_COLUMNS.includes(c.key) || visibleColumnKeys.includes(c.key)),
+    [columns, visibleColumnKeys]
+  );
+
   const activeAdvFilters = Object.values(advFilters).filter(v => v && (Array.isArray(v) ? v.length > 0 : true)).length;
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -1651,6 +1701,45 @@ const LeadsPageEnhanced = () => {
             >
               <Button icon={<ExportOutlined />} loading={isExporting || isMbgExporting}>Export</Button>
             </Dropdown>
+            <Popover
+              trigger="click"
+              placement="bottomRight"
+              open={columnPickerOpen}
+              onOpenChange={(open) => { setColumnPickerOpen(open); if (open) setDraftColumns(visibleColumnKeys); }}
+              title="Columns to show"
+              content={
+                <div style={{ width: 260 }}>
+                  {LEAD_COLUMN_GROUPS.map((group) => (
+                    <div key={group} style={{ marginBottom: 8 }}>
+                      <Text type="secondary" style={{ fontSize: 11, textTransform: 'uppercase' }}>{group}</Text>
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        {LEAD_COLUMN_OPTIONS.filter((c) => c.group === group).map((c) => (
+                          <Checkbox
+                            key={c.key}
+                            checked={draftColumns.includes(c.key)}
+                            onChange={(e) => setDraftColumns((prev) => (
+                              e.target.checked ? [...prev, c.key] : prev.filter((k) => k !== c.key)
+                            ))}
+                          >
+                            {c.label}
+                          </Checkbox>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                  <Divider style={{ margin: '8px 0' }} />
+                  <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                    <Button size="small" onClick={() => setDraftColumns(DEFAULT_VISIBLE_LEAD_COLUMNS)}>Reset to default</Button>
+                    <Button size="small" type="primary" loading={saveColumnsMutation.isPending}
+                      onClick={() => saveColumnsMutation.mutate(draftColumns)}>
+                      Save
+                    </Button>
+                  </Space>
+                </div>
+              }
+            >
+              <Button icon={<SettingOutlined />}>Columns</Button>
+            </Popover>
             <Button icon={<ReloadOutlined />} aria-label="Refresh leads" onClick={() => refetch()} />
             <Badge
               count={repeatedData?.total || repeatedLeadIds.size || 0}
@@ -1733,7 +1822,7 @@ const LeadsPageEnhanced = () => {
         )}
 
         <Table
-          columns={columns}
+          columns={visibleColumns}
           dataSource={filteredLeads}
           loading={{
             spinning: isLoading || isFetching,

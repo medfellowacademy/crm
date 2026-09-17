@@ -137,3 +137,22 @@ class TestUserCreateValidators:
         self._mk(page_grants=["/leads", "/payments"])  # ok
         with pytest.raises(ValidationError):
             self._mk(page_grants=["/leads", "/nonsense"])
+
+
+class TestUIPreferenceUpdate:
+    def test_accepts_a_list_value(self):
+        p = s.UIPreferenceUpdate(key="leads_columns", value=["status", "assigned_to"])
+        assert p.key == "leads_columns"
+        assert p.value == ["status", "assigned_to"]
+
+    def test_accepts_any_json_type_as_value(self):
+        assert s.UIPreferenceUpdate(key="page_size", value=50).value == 50
+        assert s.UIPreferenceUpdate(key="dark_mode", value=True).value is True
+
+    def test_rejects_a_key_with_bad_characters(self):
+        with pytest.raises(ValidationError):
+            s.UIPreferenceUpdate(key="leads columns!", value=[])
+
+    def test_rejects_an_overlong_key(self):
+        with pytest.raises(ValidationError):
+            s.UIPreferenceUpdate(key="x" * 65, value=[])

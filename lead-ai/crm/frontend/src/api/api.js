@@ -213,6 +213,12 @@ export const usersAPI = {
   resetPassword: (userId, newPassword) => api.put(`/api/users/${userId}/admin-reset-password`, { new_password: newPassword }),
 };
 
+// Per-user UI preferences — saved to the account, e.g. which Leads columns to show
+export const preferencesAPI = {
+  get: () => api.get('/api/users/me/preferences'),
+  set: (key, value) => api.put('/api/users/me/preferences', { key, value }),
+};
+
 
 // Admin API
 export const adminAPI = {

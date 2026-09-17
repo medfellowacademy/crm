@@ -558,3 +558,19 @@ class DashboardStats(BaseModel):
     leads_this_month: int
     avg_ai_score: float
     trends: Optional[dict] = None
+
+
+class UIPreferenceUpdate(BaseModel):
+    """One key in a user's `ui_preferences` jsonb bag (e.g. which Leads table
+    columns they want visible). Generic on purpose — any page can add a key
+    without a schema/migration change."""
+    key: str
+    value: Any
+
+    @field_validator('key')
+    @classmethod
+    def _valid_key(cls, v):
+        import re
+        if not re.match(r'^[a-zA-Z0-9_-]{1,64}$', v or ''):
+            raise ValueError('key must be 1-64 chars of letters, digits, _ or -')
+        return v
