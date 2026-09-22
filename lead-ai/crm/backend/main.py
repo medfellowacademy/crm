@@ -132,6 +132,7 @@ from mbg_router import router as mbg_router
 from departments_router import router as departments_router
 from brochures_router import router as brochures_router
 from preferences_router import router as preferences_router
+from reengagement_router import router as reengagement_router
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -713,6 +714,7 @@ app.include_router(mbg_router)
 app.include_router(departments_router)
 app.include_router(brochures_router)
 app.include_router(preferences_router)
+app.include_router(reengagement_router)
 
 logger.info("🚀 FastAPI application initialized with logging and error handling")
 
@@ -8050,7 +8052,7 @@ def _seed_wa_templates():
     
     # Check if templates exist
     try:
-        response = supabase_data.client.table('whatsapp_templates').select('id').limit(1).execute()
+        response = supabase_data.client.table('wa_templates').select('id').limit(1).execute()
         if response.data and len(response.data) > 0:
             return
     except:
@@ -8071,7 +8073,7 @@ def _seed_wa_templates():
             'is_active': True
         }
         try:
-            supabase_data.client.table('whatsapp_templates').insert(template_data).execute()
+            supabase_data.client.table('wa_templates').insert(template_data).execute()
         except:
             pass  # Template may already exist
 
@@ -8103,7 +8105,7 @@ async def list_wa_templates(
     
     try:
         import json
-        query = supabase_data.client.table('whatsapp_templates').select('*').eq('is_active', True)
+        query = supabase_data.client.table('wa_templates').select('*').eq('is_active', True)
         if category:
             query = query.eq('category', category)
         response = query.order('category').order('id').execute()
@@ -8156,7 +8158,7 @@ async def create_wa_template(
     }
     
     # Insert into Supabase
-    response = supabase_data.client.table('whatsapp_templates').insert(template_data).execute()
+    response = supabase_data.client.table('wa_templates').insert(template_data).execute()
     if not response.data:
         raise HTTPException(status_code=500, detail="Failed to create template")
     

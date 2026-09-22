@@ -111,6 +111,43 @@ apply.
   is still the only source of *historical* rows and the fallback if the
   webhook is misconfigured, so keep it running.
 
+## Stale-lead recovery automation
+
+- `backend/reengagement.py` — a lead with no logged contact (a note, a status
+  change — `leads.last_contact_date`) for `REENGAGEMENT_COLD_DAYS` (default 3)
+  gets an automatic WhatsApp re-engagement sequence, up to
+  `REENGAGEMENT_MAX_STEPS` messages (default 3) spaced
+  `REENGAGEMENT_STEP_GAP_DAYS` apart (default 2). One row per lead in
+  `lead_reengagement` (`unique(lead_id)` — **v1 policy is one recovery attempt
+  per lead, ever**, to avoid nagging; a lead that goes cold again after being
+  exhausted is not re-entered).
+- Entry points: `POST /api/leads/reengagement/run` (manual, Manager+) and
+  **`python backend/reengagement_cron.py`** (scheduled — Render cron
+  `medfellow-lead-recovery`, every 30 min), same off-web-process reasoning as
+  the sheet sync.
+- **Outcome tracking, not just sending:** a sequence resolves to `converted`
+  (status became Enrolled after it started — this is what the automation is
+  judged on, `GET /api/leads/reengagement/stats` sums the recovered revenue),
+  `responded` (contact was logged again — stop messaging, a human is on it),
+  `stopped` (hit a non-Enrolled terminal status), or `exhausted` (all steps
+  sent, nothing happened).
+- **WhatsApp template requirement — read this before relying on it.** A
+  message to someone who hasn't messaged your business number in the last 24
+  hours can **only** be sent as a pre-approved Meta "Message Template"
+  (`type: "template"`), never free text — `_meta_wa_send_text` (used
+  elsewhere for active conversations) would simply be rejected by Meta for a
+  3-day-cold lead. `REENGAGEMENT_TEMPLATE_NAME` must name a template already
+  **approved** in Meta Business Manager → WhatsApp Manager → Message
+  Templates, with exactly one body variable (the lead's first name). Until
+  that env var is set, cold leads are still detected and tracked — nothing
+  is lost — but no message sends (logged per-row in `messages`, not silent).
+- Reuses `META_WHATSAPP_ACCESS_TOKEN` / `META_WHATSAPP_PHONE_NUMBER_ID` — no
+  separate WhatsApp credentials.
+- Unrelated bug fixed in passing: the CRM's own (free-text, in-conversation)
+  WhatsApp template CRUD (`/api/wa-templates`) was reading/writing table
+  `whatsapp_templates`, which doesn't exist — the real table is `wa_templates`.
+  Listing/creating always silently failed; fixed to use the right name.
+
 ## Memory / deployment
 
 - Render instance must be **≥ 2 GB RAM** (`plan: standard`). CatBoost (~150–250

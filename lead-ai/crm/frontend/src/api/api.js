@@ -219,6 +219,13 @@ export const preferencesAPI = {
   set: (key, value) => api.put('/api/users/me/preferences', { key, value }),
 };
 
+// Stale/abandoned lead recovery automation
+export const reengagementAPI = {
+  getStats: () => api.get('/api/leads/reengagement/stats'),
+  getAll: (status) => api.get('/api/leads/reengagement', { params: status ? { status } : {} }),
+  runNow: () => api.post('/api/leads/reengagement/run'),
+};
+
 
 // Admin API
 export const adminAPI = {
