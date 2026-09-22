@@ -1,8 +1,7 @@
 """Stale/abandoned lead recovery automation (`reengagement.py`).
 
 Covers the two pure decision functions — which leads count as "cold" and
-what an active sequence should do next — without touching Supabase or the
-WhatsApp API.
+what an active reminder should do next — without touching Supabase.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -81,27 +80,14 @@ class TestNextActionForSequence:
         assert r.next_action_for_sequence(row, lead) == "converted"
 
 
-class TestFirstName:
-    def test_takes_the_first_word(self):
-        assert r._first_name("Asha Rao") == "Asha"
+class TestLogReminder:
+    def test_appends_a_step_entry_with_a_timestamp(self):
+        row = {"messages": [{"step": 1, "reminded_at": "2026-01-01T00:00:00+00:00"}]}
+        out = r._log_reminder(row, step=2)
+        assert len(out) == 2
+        assert out[1]["step"] == 2
+        assert out[1]["reminded_at"]
 
-    def test_blank_falls_back_to_there(self):
-        assert r._first_name("") == "there"
-        assert r._first_name(None) == "there"
-        assert r._first_name("   ") == "there"
-
-
-class TestSendTemplateGuardrails:
-    def test_missing_credentials_fails_closed_without_raising(self, monkeypatch):
-        monkeypatch.setattr(r, "_META_WA_TOKEN", "")
-        out = r.send_template("+919876543210", "Asha")
-        assert out["success"] is False
-        assert "META_WHATSAPP" in out["error"]
-
-    def test_missing_template_name_fails_closed_without_raising(self, monkeypatch):
-        monkeypatch.setattr(r, "_META_WA_TOKEN", "token")
-        monkeypatch.setattr(r, "_META_WA_PHONE_ID", "phone-id")
-        monkeypatch.setattr(r, "_TEMPLATE_NAME", "")
-        out = r.send_template("+919876543210", "Asha")
-        assert out["success"] is False
-        assert "REENGAGEMENT_TEMPLATE_NAME" in out["error"]
+    def test_starts_fresh_when_no_prior_messages(self):
+        out = r._log_reminder({}, step=1)
+        assert out == [{"step": 1, "reminded_at": out[0]["reminded_at"]}]

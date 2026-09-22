@@ -54,10 +54,6 @@ services:
         sync: false
       - key: META_LEADS_WEBHOOK_VERIFY_TOKEN
         sync: false
-      # Stale-lead recovery — WhatsApp re-engagement template (must already be
-      # approved in Meta Business Manager; see docs/ARCHITECTURE.md)
-      - key: REENGAGEMENT_TEMPLATE_NAME
-        sync: false
       - key: SENTRY_DSN
         sync: false
 
@@ -83,9 +79,9 @@ services:
       - key: SHEET_SYNC_MAX_WRITES_PER_RUN
         value: "500"
 
-  # Stale/abandoned lead recovery — detects cold leads and sends the WhatsApp
-  # re-engagement sequence. Cheap to run often; every 30 min keeps follow-up
-  # timing tight without hammering the WhatsApp API.
+  # Stale/abandoned lead recovery — detects cold leads and raises an in-CRM
+  # reminder (notification bell + the Lead Recovery page). No outbound
+  # messaging, so this only ever needs the DB credentials.
   - type: cron
     name: medfellow-lead-recovery
     runtime: python
@@ -98,12 +94,6 @@ services:
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_KEY
-        sync: false
-      - key: META_WHATSAPP_ACCESS_TOKEN
-        sync: false
-      - key: META_WHATSAPP_PHONE_NUMBER_ID
-        sync: false
-      - key: REENGAGEMENT_TEMPLATE_NAME
         sync: false
       # Optional tuning (defaults: 3 / 3 / 2 / 50):
       # - key: REENGAGEMENT_COLD_DAYS

@@ -1,9 +1,10 @@
 """
 Stale/abandoned lead recovery — read + manual-trigger endpoints
 (`/api/leads/reengagement*`). The actual cycle runs on a schedule via
-`reengagement_cron.py`; these let the UI show progress and let a
-Manager/Super Admin kick off a run on demand (e.g. right after configuring
-the WhatsApp template, to see it work without waiting for the next cron).
+`reengagement_cron.py`; these let the UI show progress and let a Team
+Leader+ kick off a run on demand. Everything here only reads/writes our own
+DB (in-CRM reminders, no outbound messaging), so there's no cost or external
+risk to gate behind a tighter permission.
 """
 
 from typing import Optional
@@ -11,7 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from auth import get_current_user
-from rbac import require_manager_up, require_team_leader_up
+from rbac import require_team_leader_up
 from supabase_data_layer import supabase_data
 from logger_config import logger
 
@@ -56,10 +57,11 @@ async def list_reengagements(
         raise HTTPException(status_code=500, detail="Failed to fetch recovery sequences")
 
 
-@router.post("/run", dependencies=[Depends(require_manager_up)])
+@router.post("/run", dependencies=[Depends(require_team_leader_up)])
 async def run_now(current_user: dict = Depends(get_current_user)):
-    """Manually run one recovery cycle now (Manager/Super Admin — this sends
-    real WhatsApp messages to real leads)."""
+    """Manually run one recovery cycle now — scans for newly-cold leads and
+    raises/escalates in-CRM reminders. No outbound messages, nothing to
+    approve first."""
     from reengagement import run_reengagement_cycle
     try:
         return run_reengagement_cycle()

@@ -101,6 +101,7 @@ const SmartNotifications = () => {
       // Types actually returned by GET /api/notifications
       overdue_followup: Clock,
       stale_hot_lead: AlertCircle,
+      stale_lead_reminder: Bell,
       followup_today: Phone,
       new_lead: UserPlus,
       // Legacy/aspirational types kept for forward-compat

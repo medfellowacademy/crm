@@ -3500,6 +3500,43 @@ def _compute_raw_notifications(scope_names: Optional[list] = None) -> list:
             "event_time": lead.get('last_contact_date'),
         })
 
+    # Stale-lead recovery reminders — leads the reengagement cron flagged as
+    # cold (see reengagement.py). Scoped the same way as everything else here.
+    try:
+        _reeng_rows = (
+            supabase_data.client.table('lead_reengagement')
+            .select('lead_id,step,cold_days_at_entry,started_at')
+            .eq('status', 'active')
+            .limit(50).execute()
+        ).data or []
+        if _reeng_rows:
+            _reeng_lead_ids = [x['lead_id'] for x in _reeng_rows if x.get('lead_id')]
+            _reeng_leads = (
+                supabase_data.client.table('leads')
+                .select('id,lead_id,full_name,course_interested,assigned_to')
+                .in_('lead_id', _reeng_lead_ids).execute()
+            ).data or []
+            _reeng_by_id = {x['lead_id']: x for x in _reeng_leads}
+            for row in _reeng_rows:
+                lead = _reeng_by_id.get(row.get('lead_id'))
+                if not lead:
+                    continue
+                if scope_names is not None and norm_name(lead.get('assigned_to')) not in {norm_name(n) for n in scope_names}:
+                    continue
+                notifications.append({
+                    "type": "stale_lead_reminder",
+                    "severity": "warning",
+                    "title": f"Stale lead — {lead['full_name']}",
+                    "message": f"No contact in {row.get('cold_days_at_entry', 0)}+ days · reminder {row.get('step', 1)} · "
+                               f"{lead.get('course_interested') or 'No course'} · {lead.get('assigned_to') or 'Unassigned'}",
+                    "lead_id": lead.get('id'),
+                    "lead_string_id": lead.get('lead_id'),
+                    "lead_name": lead['full_name'],
+                    "event_time": row.get('started_at'),
+                })
+    except Exception as e:
+        logger.warning(f"stale-lead reminder notifications unavailable: {e}")
+
     # Follow-ups due today (IST calendar day, converted to UTC instants for
     # the query since follow_up_date is stored in UTC)
     today_start_ist = datetime.combine(today, datetime.min.time(), tzinfo=_IST)

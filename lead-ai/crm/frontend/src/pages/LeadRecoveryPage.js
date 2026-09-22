@@ -5,7 +5,7 @@ import {
   Alert, Popconfirm, message, Empty, Tooltip,
 } from 'antd';
 import {
-  ReloadOutlined, WhatsAppOutlined, RiseOutlined, FireOutlined,
+  ReloadOutlined, BellOutlined, RiseOutlined, FireOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -23,12 +23,11 @@ const STATUS_META = {
   converted: { color: 'green',   label: 'Converted' },
   exhausted: { color: 'default', label: 'Exhausted' },
   stopped:   { color: 'orange',  label: 'Stopped' },
-  failed:    { color: 'red',     label: 'Failed' },
 };
 
 const LeadRecoveryPage = () => {
   const { user } = useAuth();
-  const canRun = user?.role === 'Super Admin' || user?.role === 'Manager';
+  const canRun = ['Super Admin', 'Manager', 'Team Leader'].includes(user?.role);
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState(undefined);
 
@@ -49,8 +48,9 @@ const LeadRecoveryPage = () => {
     onSuccess: (res) => {
       const d = res.data || {};
       message.success(
-        `Run complete — ${d.newly_started || 0} new, ${d.advanced?.sent || 0} follow-ups sent, `
-        + `${d.advanced?.converted || 0} converted, ${d.advanced?.checked || 0} checked`
+        `Run complete — ${d.newly_started || 0} new reminder${d.newly_started === 1 ? '' : 's'}, `
+        + `${d.advanced?.reminded || 0} re-surfaced, ${d.advanced?.converted || 0} converted, `
+        + `${d.advanced?.checked || 0} checked`
       );
       queryClient.invalidateQueries({ queryKey: ['reengagement-stats'] });
       queryClient.invalidateQueries({ queryKey: ['reengagement-list'] });
@@ -80,7 +80,7 @@ const LeadRecoveryPage = () => {
       },
     },
     {
-      title: 'Step',
+      title: 'Reminder #',
       dataIndex: 'step',
       align: 'center',
       render: (step) => `${step || 0} of ${maxSteps}`,
@@ -92,7 +92,7 @@ const LeadRecoveryPage = () => {
       render: (v) => (v ? <Tooltip title={dayjs(v).format('DD MMM YYYY, HH:mm')}>{dayjs(v).fromNow()}</Tooltip> : '—'),
     },
     {
-      title: 'Last sent',
+      title: 'Last reminded',
       dataIndex: 'last_sent_at',
       render: (v) => (v ? dayjs(v).fromNow() : '—'),
     },
@@ -108,12 +108,12 @@ const LeadRecoveryPage = () => {
     <div>
       <div style={{ marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <h1 style={{ fontSize: 28, fontWeight: 600, margin: 0 }}>
-          <WhatsAppOutlined style={{ color: '#25D366' }} /> Lead Recovery
+          <BellOutlined /> Lead Recovery
         </h1>
         {canRun && (
           <Popconfirm
-            title="Run the recovery cycle now?"
-            description="This sends real WhatsApp messages to newly-cold leads and advances active sequences. Normally runs automatically on a schedule."
+            title="Recompute reminders now?"
+            description="Scans for newly-cold leads and raises/escalates in-CRM reminders. Nothing is sent externally. Normally runs automatically on a schedule."
             okText="Run now"
             onConfirm={() => runMutation.mutate()}
           >
@@ -125,9 +125,10 @@ const LeadRecoveryPage = () => {
       </div>
 
       <Paragraph type="secondary" style={{ maxWidth: 760, marginBottom: 20 }}>
-        Leads with no logged contact for a few days are automatically sent a WhatsApp
-        re-engagement sequence. This page tracks how many of those "would've been zero
-        anyway" leads convert because of it — pure found money.
+        Leads with no logged contact for a few days automatically get a reminder — here and in
+        the notification bell — so nobody has to remember to check. This page tracks how many of
+        those "would've been zero anyway" leads convert because someone acted on the reminder —
+        pure found money.
       </Paragraph>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
@@ -159,22 +160,13 @@ const LeadRecoveryPage = () => {
         </Col>
       </Row>
 
-      {!statsLoading && stats && !stats.template_configured && (
-        <Alert
-          type="warning"
-          showIcon
-          style={{ marginBottom: 16 }}
-          message="WhatsApp template not configured"
-          description="Cold leads are still being detected and tracked, but no messages can send until REENGAGEMENT_TEMPLATE_NAME (a Meta-approved WhatsApp template) is set on the server. Ask an admin to configure it."
-        />
-      )}
-      {!statsLoading && stats?.template_configured && !stats?.total_entered && (
+      {!statsLoading && stats && !stats.total_entered && (
         <Alert
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
           message="No cold leads have entered recovery yet"
-          description={`A lead qualifies once it's gone ${stats?.cold_days || 3}+ days with no logged contact.`}
+          description={`A lead qualifies once it's gone ${stats?.cold_days || 3}+ days with no logged contact — it'll show up here and in the notification bell automatically.`}
         />
       )}
 
