@@ -133,6 +133,7 @@ from departments_router import router as departments_router
 from brochures_router import router as brochures_router
 from preferences_router import router as preferences_router
 from reengagement_router import router as reengagement_router
+from employee_performance_router import router as employee_performance_router
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -715,6 +716,7 @@ app.include_router(departments_router)
 app.include_router(brochures_router)
 app.include_router(preferences_router)
 app.include_router(reengagement_router)
+app.include_router(employee_performance_router)
 
 logger.info("🚀 FastAPI application initialized with logging and error handling")
 
@@ -4607,6 +4609,7 @@ async def create_user(user: UserCreate, actor: dict = Depends(require_permission
         "is_active": user.is_active,
         "departments": user.departments,
         "page_grants": user.page_grants,
+        "date_of_joining": user.date_of_joining,
         "created_at": datetime.utcnow().isoformat(),
         "updated_at": datetime.utcnow().isoformat(),
     }

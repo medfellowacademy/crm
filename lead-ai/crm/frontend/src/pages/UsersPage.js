@@ -10,6 +10,7 @@ import {
   Form,
   Input,
   Select,
+  DatePicker,
   message,
   Popconfirm,
   Avatar,
@@ -26,6 +27,7 @@ import {
   Alert,
   Checkbox,
 } from 'antd';
+import dayjs from 'dayjs';
 import {
   UserOutlined,
   PlusOutlined,
@@ -288,17 +290,24 @@ const UsersPage = () => {
 
   // Handle form submit
   const handleSubmit = (values) => {
+    const payload = {
+      ...values,
+      date_of_joining: values.date_of_joining ? values.date_of_joining.format('YYYY-MM-DD') : null,
+    };
     if (editingUser) {
-      updateUserMutation.mutate({ id: editingUser.id, data: values });
+      updateUserMutation.mutate({ id: editingUser.id, data: payload });
     } else {
-      createUserMutation.mutate(values);
+      createUserMutation.mutate(payload);
     }
   };
 
   // Handle edit
   const handleEdit = (user) => {
     setEditingUser(user);
-    form.setFieldsValue(user);
+    form.setFieldsValue({
+      ...user,
+      date_of_joining: user.date_of_joining ? dayjs(user.date_of_joining) : null,
+    });
     setDrawerVisible(true);
   };
 
@@ -723,6 +732,14 @@ const UsersPage = () => {
             label="Phone (Optional)"
           >
             <Input size="large" prefix={<PhoneOutlined />} placeholder="+1 234 567 8900" />
+          </Form.Item>
+
+          <Form.Item
+            name="date_of_joining"
+            label="Date of Joining (Optional)"
+          >
+            <DatePicker size="large" style={{ width: '100%' }} format="DD MMM YYYY"
+              placeholder="When did they join?" />
           </Form.Item>
 
           {!editingUser && (

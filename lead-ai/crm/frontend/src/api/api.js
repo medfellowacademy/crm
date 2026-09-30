@@ -203,6 +203,11 @@ export const counselorsAPI = {
   getWorkload: () => api.get('/api/counselors/workload'),
 };
 
+// Employee sales performance — month/week/overall revenue, conversions, country/course strengths
+export const employeePerformanceAPI = {
+  get: (params) => api.get('/api/employees/performance', { params }),
+};
+
 // Users API
 export const usersAPI = {
   getAll: () => api.get('/api/users'),

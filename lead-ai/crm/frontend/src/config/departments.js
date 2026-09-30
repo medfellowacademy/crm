@@ -20,7 +20,7 @@ import {
   GitBranch, UserPlus, Activity, Shield, CalendarClock, DollarSign,
   Settings, Timer, Users2, ClipboardList,
   Share2, Globe, Bot, Trophy, MapPin, Building2, Megaphone, Wallet,
-  Settings2, FileText, MessageCircleHeart,
+  Settings2, FileText, MessageCircleHeart, Award,
 } from 'lucide-react';
 
 export const DEPARTMENTS = {
@@ -36,6 +36,7 @@ export const DEPARTMENTS = {
       { key: '/followups',        icon: CalendarClock, label: "Today's Follow-ups" },
       { key: '/lead-analysis',    icon: TrendingUp,    label: 'Lead Analysis' },
       { key: '/team-performance', icon: Trophy,        label: 'Team Performance' },
+      { key: '/employee-performance', icon: Award,     label: 'Employee Performance' },
       { key: '/conversion-time',  icon: Timer,         label: 'Conversion Time' },
       { key: '/cohort-analysis',  icon: Users2,        label: 'Cohort Analysis' },
       { key: '/lead-recovery',    icon: MessageCircleHeart, label: 'Lead Recovery' },

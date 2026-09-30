@@ -430,6 +430,7 @@ VALID_DEPARTMENTS = {"sales", "marketing", "finance", "operations", "administrat
 # All page routes that can be individually granted to a user.
 VALID_PAGE_KEYS = {
     '/leads', '/pipeline', '/followups', '/lead-analysis', '/team-performance',
+    '/employee-performance',
     '/conversion-time', '/cohort-analysis',
     '/meta-leads', '/website-leads', '/analytics',
     '/payments',
@@ -475,8 +476,9 @@ class UserCreate(BaseModel):
     is_active: Optional[bool] = True
     departments: Optional[list] = None  # e.g. ["sales","finance"]
     page_grants: Optional[list] = None  # e.g. ["/leads","/payments"] — restricts pages within departments
+    date_of_joining: Optional[str] = None  # 'YYYY-MM-DD' — actual employment start, not the CRM account's created_at
 
-    @field_validator('phone', mode='before')
+    @field_validator('phone', 'date_of_joining', mode='before')
     @classmethod
     def _empty_str_to_none(cls, v):
         if isinstance(v, str) and v.strip() == '':
@@ -510,8 +512,9 @@ class UserUpdate(BaseModel):
     is_active: Optional[bool] = None
     departments: Optional[list] = None
     page_grants: Optional[list] = None
+    date_of_joining: Optional[str] = None
 
-    @field_validator('phone', mode='before')
+    @field_validator('phone', 'date_of_joining', mode='before')
     @classmethod
     def _empty_str_to_none(cls, v):
         if isinstance(v, str) and v.strip() == '':
@@ -538,6 +541,7 @@ class UserResponse(BaseModel):
     is_active: bool
     departments: Optional[list] = None
     page_grants: Optional[list] = None
+    date_of_joining: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
