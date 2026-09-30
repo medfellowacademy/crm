@@ -31,6 +31,7 @@ const DepartmentsPage           = lazy(() => import('./pages/DepartmentsPage'));
 const BrochuresPage             = lazy(() => import('./pages/BrochuresPage'));
 const LeadRecoveryPage          = lazy(() => import('./pages/LeadRecoveryPage'));
 const EmployeePerformancePage   = lazy(() => import('./pages/EmployeePerformancePage'));
+const ConsolidatedReportsPage   = lazy(() => import('./pages/ConsolidatedReportsPage'));
 import { isFeatureEnabled } from './config/featureFlags';
 import ErrorBoundary from './components/ErrorBoundary';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -94,6 +95,7 @@ function AppRoutes() {
                     <Route path="/brochures" element={<BrochuresPage />} />
                     <Route path="/lead-recovery" element={<LeadRecoveryPage />} />
                     <Route path="/employee-performance" element={<EmployeePerformancePage />} />
+                    <Route path="/reports" element={<ConsolidatedReportsPage />} />
                     <Route path="/attendance" element={<AttendancePage />} />
                     <Route path="/followups" element={<FollowupTodayPage />} />
                     <Route path="/leads" element={<LeadsPageEnhanced />} />

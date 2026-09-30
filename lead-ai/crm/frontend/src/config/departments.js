@@ -102,6 +102,7 @@ export const GENERAL_PAGES = [
   { key: '/dashboard',   icon: LayoutDashboard, label: 'Dashboard' },
   { key: '/departments', icon: Building2,       label: 'Departments' },
   { key: '/ai-chat',     icon: Bot,             label: 'MedFellow AI Chat' },
+  { key: '/reports',     icon: BarChart3,       label: 'Consolidated Reports' },
   { key: '/brochures',   icon: FileText,        label: 'Brochures' },
   { key: '/settings',    icon: Settings,        label: 'Settings' },
 ];

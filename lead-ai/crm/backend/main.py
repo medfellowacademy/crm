@@ -134,6 +134,7 @@ from brochures_router import router as brochures_router
 from preferences_router import router as preferences_router
 from reengagement_router import router as reengagement_router
 from employee_performance_router import router as employee_performance_router
+from consolidated_reports_router import router as consolidated_reports_router
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -717,6 +718,7 @@ app.include_router(brochures_router)
 app.include_router(preferences_router)
 app.include_router(reengagement_router)
 app.include_router(employee_performance_router)
+app.include_router(consolidated_reports_router)
 
 logger.info("🚀 FastAPI application initialized with logging and error handling")
 
