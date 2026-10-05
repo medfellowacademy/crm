@@ -8,7 +8,7 @@ import {
 import {
   ArrowUpOutlined, ArrowDownOutlined, DownloadOutlined, FileTextOutlined,
   TeamOutlined, GlobalOutlined, BookOutlined, ShareAltOutlined, FilterOutlined,
-  UnorderedListOutlined, DollarOutlined,
+  UnorderedListOutlined, DollarOutlined, PrinterOutlined,
 } from '@ant-design/icons';
 import {
   ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
@@ -266,6 +266,11 @@ const ConsolidatedReportsPage = () => {
 
   return (
     <div>
+      <style>{`@media print {
+        .ant-layout-sider, .ant-layout-header, .ant-drawer, .ant-segmented, .ant-picker, .ant-btn { display: none !important; }
+        .ant-layout-content, .ant-layout { margin: 0 !important; padding: 0 !important; }
+        .ant-card { break-inside: avoid; }
+      }`}</style>
       <div style={{ marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h1 style={{ fontSize: 28, fontWeight: 600, margin: 0 }}><FileTextOutlined /> Consolidated Reports</h1>
@@ -280,6 +285,9 @@ const ConsolidatedReportsPage = () => {
           <DatePicker picker="month" value={month} onChange={(v) => v && setMonth(v)} allowClear={false} />
           <Button icon={<DownloadOutlined />} disabled={!trend.length} onClick={() => downloadTrendCsv(trend, monthStr)}>
             Export CSV
+          </Button>
+          <Button icon={<PrinterOutlined />} disabled={!trend.length} onClick={() => window.print()}>
+            Print / Save PDF
           </Button>
         </Space>
       </div>
