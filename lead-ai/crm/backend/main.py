@@ -3600,6 +3600,34 @@ def _compute_raw_notifications(scope_names: Optional[list] = None) -> list:
             "event_time": lead.get('created_at'),
         })
 
+    # Monthly digest — in the first 3 days of a month, surface last month's
+    # headline numbers (same scope as everything else here) with a pointer to
+    # Consolidated Reports. In-CRM only, no email/WhatsApp.
+    if today.day <= 3:
+        try:
+            _last_month = (today.replace(day=1) - timedelta(days=1)).strftime('%Y-%m')
+            _enrolled_rows = _scoped(
+                supabase_data.client.table('leads')
+                .select('actual_revenue,enrolled_at,updated_at')
+                .eq('status', 'Enrolled')
+            ).limit(5000).execute().data or []
+            _closed = [r for r in _enrolled_rows
+                       if str(r.get('enrolled_at') or r.get('updated_at') or '')[:7] == _last_month]
+            if _closed:
+                _rev = sum(float(r.get('actual_revenue') or 0) for r in _closed)
+                notifications.append({
+                    "type": "monthly_digest",
+                    "severity": "success",
+                    "title": f"{_last_month} results are in",
+                    "message": f"{len(_closed)} enrolled · ₹{_rev:,.0f} revenue. Open Consolidated Reports (/reports) for growth and breakdowns.",
+                    "lead_id": None,
+                    "lead_string_id": None,
+                    "lead_name": None,
+                    "event_time": now_iso,
+                })
+        except Exception as e:
+            logger.warning(f"monthly digest notification unavailable: {e}")
+
     for n in notifications:
         n["id"] = f"{n['type']}:{n['lead_id']}"
     return notifications
@@ -3641,6 +3669,9 @@ async def get_notifications(current_user: dict = Depends(get_current_user)):
             if n.get("lead_string_id"):
                 n["actionUrl"] = f"/leads/{n['lead_string_id']}"
                 n["actionLabel"] = "View Lead"
+            elif n["type"] == "monthly_digest":
+                n["actionUrl"] = "/reports"
+                n["actionLabel"] = "Open Reports"
             result.append(n)
 
         return result

@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   Card, Table, Tag, Space, Typography, Segmented, DatePicker, Drawer, Row, Col,
@@ -98,8 +99,17 @@ function EmployeeTrendDrawer({ employee, onClose }) {
 }
 
 const EmployeePerformancePage = () => {
-  const [period, setPeriod] = useState('This Month');
-  const [customRange, setCustomRange] = useState([null, null]);
+  // Deep link from Consolidated Reports: ?employee=Name&month=YYYY-MM opens
+  // that employee's drawer with the period pre-set to that month.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const linkedEmployee = searchParams.get('employee');
+  const linkedMonth = searchParams.get('month');
+  const linkedStart = linkedMonth && dayjs(linkedMonth + '-01').isValid() ? dayjs(linkedMonth + '-01') : null;
+
+  const [period, setPeriod] = useState(linkedStart ? 'Custom' : 'This Month');
+  const [customRange, setCustomRange] = useState(
+    linkedStart ? [linkedStart.startOf('month'), linkedStart.endOf('month')] : [null, null]
+  );
   const [selected, setSelected] = useState(null);
 
   const [dateFrom, dateTo] = useMemo(() => periodToRange(period, customRange), [period, customRange]);
@@ -113,6 +123,14 @@ const EmployeePerformancePage = () => {
   });
 
   const employees = data?.employees || [];
+
+  useEffect(() => {
+    if (!linkedEmployee || !employees.length) return;
+    const match = employees.find((e) => e.name === linkedEmployee);
+    if (match) setSelected(match);
+    setSearchParams({}, { replace: true });
+  }, [linkedEmployee, employees, setSearchParams]);
+
   const totals = useMemo(() => ({
     revenue: employees.reduce((s, e) => s + (e.revenue || 0), 0),
     enrolled: employees.reduce((s, e) => s + (e.enrolled || 0), 0),

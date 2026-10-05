@@ -102,6 +102,7 @@ const SmartNotifications = () => {
       overdue_followup: Clock,
       stale_hot_lead: AlertCircle,
       stale_lead_reminder: Bell,
+      monthly_digest: Sparkles,
       followup_today: Phone,
       new_lead: UserPlus,
       // Legacy/aspirational types kept for forward-compat

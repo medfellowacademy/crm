@@ -211,6 +211,8 @@ export const employeePerformanceAPI = {
 // Consolidated Reports — monthly growth, sales, revenue, breakdowns
 export const consolidatedReportsAPI = {
   get: (params) => api.get('/api/reports/consolidated', { params }),
+  leads: (params) => api.get('/api/reports/consolidated/leads', { params }),
+  setAdSpend: (data) => api.post('/api/reports/consolidated/ad-spend', data),
 };
 
 // Users API
