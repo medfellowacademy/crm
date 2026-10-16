@@ -3774,7 +3774,7 @@ async def get_audit_logs(
 
 @app.get("/api/admin/lead-update-activity",
          dependencies=[Depends(require_permission(P.VIEW_AUDIT_LOGS, P.VIEW_TEAM_ANALYTICS))])
-async def get_lead_update_activity(
+def get_lead_update_activity(
     date: Optional[str] = None,        # YYYY-MM-DD — single day (legacy)
     date_from: Optional[str] = None,   # YYYY-MM-DD — range start (inclusive)
     date_to: Optional[str] = None,     # YYYY-MM-DD — range end   (inclusive)
@@ -3817,44 +3817,54 @@ async def get_lead_update_activity(
         date_from = _from
         date_to   = _to
 
-        # ── Pull activities in the window (paginated — no row cap) ───────────
-        activities = []
-        _offset = 0
-        _PAGE   = 1000
-        while True:
-            q = (
-                supabase_data.client.table("activities")
-                .select("id,lead_id,activity_type,description,created_by,created_at")
-                .gte("created_at", date_from)
-                .lte("created_at", date_to)
-                .order("created_at", desc=True)
-            )
-            if user:
-                q = q.ilike("created_by", user.strip())
-            batch = q.range(_offset, _offset + _PAGE - 1).execute().data or []
-            activities.extend(batch)
-            if len(batch) < _PAGE:
-                break
-            _offset += _PAGE
+        # ── Pull activities + notes in the window ────────────────────────────
+        # Pages are fetched in parallel (this used to be ~45 sequential round
+        # trips for a week of data) and the handler is a plain `def`, so it runs
+        # in a worker thread instead of freezing the event loop for everyone.
+        from concurrent.futures import ThreadPoolExecutor
+        _PAGE = 1000
 
-        # ── Pull notes in the window (paginated — no row cap) ─────────────────
-        notes   = []
-        _offset = 0
-        while True:
-            nq = (
-                supabase_data.client.table("notes")
-                .select("id,lead_id,content,created_by,created_at,channel")
-                .gte("created_at", date_from)
-                .lte("created_at", date_to)
-                .order("created_at", desc=True)
-            )
-            if user:
-                nq = nq.ilike("created_by", user.strip())
-            batch = nq.range(_offset, _offset + _PAGE - 1).execute().data or []
-            notes.extend(batch)
-            if len(batch) < _PAGE:
-                break
-            _offset += _PAGE
+        def _window_rows(table: str, cols: str) -> list:
+            def page(offset):
+                q = (
+                    supabase_data.client.table(table).select(cols)
+                    .gte("created_at", date_from).lte("created_at", date_to)
+                    .order("created_at", desc=True)
+                )
+                if user:
+                    q = q.ilike("created_by", user.strip())
+                return q.range(offset, offset + _PAGE - 1).execute().data or []
+
+            rows = list(page(0))
+            if len(rows) < _PAGE:
+                return rows
+            try:
+                cq = (
+                    supabase_data.client.table(table).select("id", count="exact")
+                    .gte("created_at", date_from).lte("created_at", date_to)
+                )
+                if user:
+                    cq = cq.ilike("created_by", user.strip())
+                total = cq.limit(1).execute().count
+            except Exception:
+                total = None
+            if not total:
+                offset = _PAGE
+                while True:
+                    batch = page(offset)
+                    rows.extend(batch)
+                    if len(batch) < _PAGE:
+                        return rows
+                    offset += _PAGE
+            with ThreadPoolExecutor(max_workers=6) as pool:
+                for batch in pool.map(page, range(_PAGE, total, _PAGE)):
+                    rows.extend(batch)
+            return rows
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_act = pool.submit(_window_rows, "activities", "id,lead_id,activity_type,description,created_by,created_at")
+            f_notes = pool.submit(_window_rows, "notes", "id,lead_id,content,created_by,created_at,channel")
+            activities, notes = f_act.result(), f_notes.result()
 
         # ── Collect all unique INTEGER lead db-ids so we can resolve names ──────
         # activities.lead_id and notes.lead_id both store the INTEGER `id`
@@ -3867,20 +3877,23 @@ async def get_lead_update_activity(
 
         # lead_info keyed by INTEGER id → lead dict (includes string lead_id)
         lead_info: dict = {}
-        BATCH = 100
-        for i in range(0, len(all_db_ids), BATCH):
-            batch = all_db_ids[i:i + BATCH]
+
+        def _lead_batch(batch):
             try:
-                lr = (
+                return (
                     supabase_data.client.table("leads")
                     .select("id,lead_id,full_name,status,phone,country,course_interested,assigned_to")
-                    .in_("id", batch)
-                    .execute()
+                    .in_("id", batch).execute().data or []
                 )
-                for lead in (lr.data or []):
-                    lead_info[int(lead["id"])] = lead
             except Exception as ex:
                 logger.warning(f"Lead info batch fetch failed: {ex}")
+                return []
+
+        _batches = [all_db_ids[i:i + 100] for i in range(0, len(all_db_ids), 100)]
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            for leads_chunk in pool.map(_lead_batch, _batches):
+                for lead in leads_chunk:
+                    lead_info[int(lead["id"])] = lead
 
         def day_key(ts: str) -> str:
             """Return YYYY-MM-DD from an ISO timestamp."""

@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import {
   Table, Card, DatePicker, Select, Button, Tag, Badge, Drawer,
   Typography, Space, Statistic, Row, Col, Timeline, Empty, Tooltip,
-  Input,
+  Input, Result,
 } from 'antd';
 import {
   CalendarOutlined, UserOutlined, EditOutlined, FileTextOutlined,
@@ -85,7 +85,7 @@ export default function LeadUpdateActivityPage() {
   const fromStr = dateRange?.[0]?.format('YYYY-MM-DD');
   const toStr   = dateRange?.[1]?.format('YYYY-MM-DD');
   const queryKey = ['lead-update-activity', fromStr, toStr];
-  const { data, isLoading, isFetching, refetch } = useQuery({
+  const { data, isLoading, isFetching, isError, refetch } = useQuery({
     queryKey,
     queryFn: () => fetchActivity({ date_from: fromStr, date_to: toStr }),
     staleTime: 30_000,
@@ -414,7 +414,16 @@ export default function LeadUpdateActivityPage() {
           loading={isLoading}
           pagination={{ pageSize: 20, showSizeChanger: true, showTotal: t => `${t} rows` }}
           scroll={{ x: 800 }}
-          locale={{ emptyText: <Empty description="No activity found for this period" /> }}
+          locale={{
+            emptyText: isError ? (
+              <Result
+                status="warning"
+                title="Couldn't load activity"
+                subTitle="The server was slow or didn't respond. Your data is fine — try again."
+                extra={<Button type="primary" onClick={() => refetch()}>Retry</Button>}
+              />
+            ) : <Empty description="No activity found for this period" />,
+          }}
           rowClassName={() => 'activity-row'}
         />
       </Card>
