@@ -1925,13 +1925,13 @@ async def login(request: Request, body: LoginRequest):
     }
 
 @app.post("/api/auth/logout")
-async def logout():
+def logout():
     """Logout - client should clear stored user data"""
     return {"success": True, "message": "Logged out successfully"}
 
 
 @app.get("/api/auth/me")
-async def get_me(current_user: dict = Depends(current_active_user)):
+def get_me(current_user: dict = Depends(current_active_user)):
     """Return the CURRENT, LIVE identity + effective permissions for the
     caller. The frontend should call this on load and after any navigation
     that matters, and drive its UI from `permissions` here rather than from
@@ -1955,7 +1955,7 @@ async def get_me(current_user: dict = Depends(current_active_user)):
 # ============================================================================
 
 @app.get("/")
-async def root():
+def root():
     """Root endpoint - API information"""
     return {
         "name": "Medical Education CRM API",
@@ -2230,7 +2230,7 @@ async def create_website_lead(
 
 @app.post("/api/leads/bulk-create",
           dependencies=[Depends(require_permission(P.CREATE_LEAD))])
-async def bulk_create_leads(leads: list[LeadCreate], background_tasks: BackgroundTasks, request: Request):
+def bulk_create_leads(leads: list[LeadCreate], background_tasks: BackgroundTasks, request: Request):
     """Bulk create multiple leads at once for import functionality - SUPABASE ONLY"""
     
     
@@ -2640,7 +2640,7 @@ async def get_leads_filter_options():
 
 
 @app.get("/api/leads/{lead_id}")
-async def get_lead(lead_id: str, request: Request):
+def get_lead(lead_id: str, request: Request):
     """Get single lead by ID - Supabase only"""
 
     _scope_names = _request_lead_scope(request)   # None => unrestricted
@@ -2858,7 +2858,7 @@ async def delete_lead(lead_id: str, actor: dict = Depends(require_permission(P.D
     return {"message": "Lead deleted successfully"}
 
 @app.post("/api/leads/bulk-update")
-async def bulk_update_leads(bulk_data: dict, actor: dict = Depends(require_permission(P.EDIT_LEAD))):
+def bulk_update_leads(bulk_data: dict, actor: dict = Depends(require_permission(P.EDIT_LEAD))):
     """Bulk update multiple leads - SUPABASE ONLY.
     Requires edit_lead. Counselors may only bulk-update leads assigned to
     them, and may not reassign leads away from themselves."""
@@ -2960,7 +2960,7 @@ async def bulk_update_leads(bulk_data: dict, actor: dict = Depends(require_permi
 # ============================================================================
 
 @app.post("/api/leads/{lead_id}/notes", response_model=NoteResponse)
-async def add_note(lead_id: str, note: NoteCreate, request: Request, background_tasks: BackgroundTasks):
+def add_note(lead_id: str, note: NoteCreate, request: Request, background_tasks: BackgroundTasks):
     """Add note to lead - Supabase only"""
     
     
@@ -3105,7 +3105,7 @@ async def rescore_lead_supabase(lead_id: str) -> None:
         logger.warning(f"Background re-score failed for {lead_id}: {e}")
 
 @app.get("/api/leads/{lead_id}/notes", response_model=List[NoteResponse])
-async def get_notes(lead_id: str, request: Request):
+def get_notes(lead_id: str, request: Request):
     """Get all notes for a lead - Supabase only"""
 
     lead = supabase_data.get_lead_by_id(lead_id)
@@ -3121,7 +3121,7 @@ async def get_notes(lead_id: str, request: Request):
 
 
 @app.get("/api/leads/{lead_id}/activities")
-async def get_lead_activities(lead_id: str, type: Optional[str] = None, request: Request = None):
+def get_lead_activities(lead_id: str, type: Optional[str] = None, request: Request = None):
     """Get enriched activity timeline for a lead — notes, WhatsApp, calls, emails, status changes. Supabase only."""
     try:
         lead_data = supabase_data.get_lead_by_id(lead_id)
@@ -3256,7 +3256,7 @@ async def get_lead_activities(lead_id: str, type: Optional[str] = None, request:
 
 
 @app.get("/api/leads/{lead_id}/submissions")
-async def get_lead_submissions(lead_id: str, request: Request):
+def get_lead_submissions(lead_id: str, request: Request):
     """Full submission timeline for a lead — first (original) submission plus
     every repeat, newest field first. Managers+ also get the raw payload.
 
@@ -3288,7 +3288,7 @@ async def get_lead_submissions(lead_id: str, request: Request):
 
 
 @app.get("/api/leads/{lead_id}/ai-summary")
-async def get_lead_ai_summary(lead_id: str):
+def get_lead_ai_summary(lead_id: str):
     """Get AI-generated summary and insights for a lead - SUPABASE ONLY"""
     
     try:
@@ -3694,7 +3694,7 @@ _AUDIT_TYPE_TO_ACTION = {
 
 @app.get("/api/audit-logs",
          dependencies=[Depends(require_permission(P.VIEW_AUDIT_LOGS))])
-async def get_audit_logs(
+def get_audit_logs(
     page: int = 1,
     limit: int = 50,
     user: Optional[str] = None,
@@ -4006,7 +4006,7 @@ def get_lead_update_activity(
 
 
 @app.get("/api/leads/followups/today")
-async def get_followups_today(request: Request, assigned_to: Optional[str] = None):
+def get_followups_today(request: Request, assigned_to: Optional[str] = None):
     """All leads with follow_up_date = today + overdue, for the daily work view"""
     
     try:
@@ -4326,7 +4326,7 @@ async def get_dashboard_stats(request: Request, created_from: Optional[str] = No
         )
 
 @app.get("/api/counselors", response_model=List[CounselorResponse])
-async def get_counselors(actor: dict = Depends(current_active_user)):
+def get_counselors(actor: dict = Depends(current_active_user)):
     """Get all counselors from users table.
 
     Hierarchy-scoped: a Manager / Team Leader (and a Counselor) only sees
@@ -4371,7 +4371,7 @@ async def get_counselors(actor: dict = Depends(current_active_user)):
 
 @app.get("/api/counselors/performance",
          dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
-async def get_counselor_performance(current_user: dict = Depends(current_active_user)):
+def get_counselor_performance(current_user: dict = Depends(current_active_user)):
     """Live counselor performance computed from leads table - SUPABASE ONLY.
 
     Hierarchy-scoped: a Manager / Team Leader only sees their own reporting
@@ -4452,7 +4452,7 @@ async def get_counselor_performance(current_user: dict = Depends(current_active_
 
 @app.get("/api/counselors/performance-comparison",
          dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
-async def get_counselor_performance_comparison(
+def get_counselor_performance_comparison(
     created_from: Optional[str] = None,
     created_to: Optional[str] = None,
     current_user: dict = Depends(current_active_user),
@@ -4605,7 +4605,7 @@ def _count_active_super_admins(exclude_id=None) -> int:
 
 
 @app.get("/api/users")
-async def get_users(actor: dict = Depends(require_permission(P.VIEW_USERS))):
+def get_users(actor: dict = Depends(require_permission(P.VIEW_USERS))):
     """List users. Requires view_users (Super Admin / Manager / Team Leader).
     Secrets (password hashes, tokens) are stripped from the response.
 
@@ -4625,7 +4625,7 @@ async def get_users(actor: dict = Depends(require_permission(P.VIEW_USERS))):
         return []
 
 @app.get("/api/users/{user_id}", response_model=UserResponse)
-async def get_user(user_id: int, actor: dict = Depends(current_active_user)):
+def get_user(user_id: int, actor: dict = Depends(current_active_user)):
     """Get a specific user. Callers may always read their own record;
     reading anyone else's requires view_users."""
     if str(actor.get("id")) != str(user_id) and not rbac.has_permission(actor["role"], P.VIEW_USERS):
@@ -4759,7 +4759,7 @@ async def delete_user(user_id: int, actor: dict = Depends(require_permission(P.D
 
 @app.get("/api/analytics/revenue-by-country",
          dependencies=[Depends(require_permission(P.VIEW_ALL_REVENUE))])
-async def revenue_by_country(created_from: Optional[str] = None, created_to: Optional[str] = None):
+def revenue_by_country(created_from: Optional[str] = None, created_to: Optional[str] = None):
     """Get revenue breakdown by country - SUPABASE ONLY"""
 
     try:
@@ -4797,7 +4797,7 @@ async def revenue_by_country(created_from: Optional[str] = None, created_to: Opt
 
 @app.get("/api/analytics/conversion-funnel",
          dependencies=[Depends(require_permission(P.VIEW_ANALYTICS))])
-async def conversion_funnel(created_from: Optional[str] = None, created_to: Optional[str] = None):
+def conversion_funnel(created_from: Optional[str] = None, created_to: Optional[str] = None):
     """Get conversion funnel metrics - SUPABASE ONLY"""
 
     try:
@@ -5037,7 +5037,7 @@ async def trigger_followup(
 # ============================================================================
 
 @app.post("/api/leads/{lead_id}/assign")
-async def assign_lead(
+def assign_lead(
     lead_id: str,
     request: AssignmentRequest,
     actor: dict = Depends(require_permission(P.ASSIGN_LEAD)),
@@ -5077,7 +5077,7 @@ async def assign_lead(
     }
 
 @app.post("/api/leads/assign-all")
-async def assign_all_unassigned(
+def assign_all_unassigned(
     request: AssignmentRequest,
     actor: dict = Depends(require_permission(P.ASSIGN_LEAD)),
 ):
@@ -5118,7 +5118,7 @@ async def assign_all_unassigned(
     }
 
 @app.post("/api/leads/{lead_id}/reassign")
-async def reassign_lead(
+def reassign_lead(
     lead_id: str,
     request: ReassignmentRequest,
     actor: dict = Depends(require_permission(P.ASSIGN_LEAD)),
@@ -5157,7 +5157,7 @@ async def reassign_lead(
 
 @app.get("/api/counselors/workload",
          dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
-async def get_counselor_workloads(actor: dict = Depends(current_active_user)):
+def get_counselor_workloads(actor: dict = Depends(current_active_user)):
     """Get workload statistics for all counselors - SUPABASE ONLY.
 
     Hierarchy-scoped (Manager/Team Leader -> own reporting subtree). Cached
@@ -5211,7 +5211,7 @@ async def get_counselor_workloads(actor: dict = Depends(current_active_user)):
 
 @app.post("/api/workflows/trigger",
           dependencies=[Depends(require_manager_up)])
-async def trigger_workflows():
+def trigger_workflows():
     """Manually trigger automated workflows for all leads - SUPABASE ONLY"""
     
     try:
@@ -5252,7 +5252,7 @@ async def trigger_workflows():
 
 @app.get("/api/cache/stats",
          dependencies=[Depends(require_super_admin)])
-async def get_cache_statistics():
+def get_cache_statistics():
     """Get cache statistics for monitoring"""
     stats = get_cache_stats()
     
@@ -5263,7 +5263,7 @@ async def get_cache_statistics():
 
 @app.post("/api/cache/clear",
           dependencies=[Depends(require_super_admin)])
-async def clear_cache(cache_name: Optional[str] = None):
+def clear_cache(cache_name: Optional[str] = None):
     """Clear cache (all or specific cache)"""
     
     if cache_name:
@@ -5305,7 +5305,7 @@ async def clear_cache(cache_name: Optional[str] = None):
 
 @app.get("/api/ml/model-info",
          dependencies=[Depends(require_manager_up)])
-async def get_model_info():
+def get_model_info():
     """Get current ML model version, metadata, and performance metrics."""
     model = get_cached_model()
     
@@ -5741,7 +5741,7 @@ async def get_coaching_tip(lead_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/ai/status")
-async def ai_status():
+def ai_status():
     """Check AI assistant availability and configuration"""
     
     return {
@@ -5893,7 +5893,7 @@ async def health_check():
     return health_status
 
 @app.get("/ready")
-async def readiness_check():
+def readiness_check():
     """Readiness probe for Kubernetes/deployment orchestration - SUPABASE ONLY"""
     try:
         # Check Supabase connection
@@ -5914,7 +5914,7 @@ async def readiness_check():
         raise HTTPException(status_code=503, detail={"status": "not_ready", "reason": str(e)})
 
 @app.get("/metrics")
-async def metrics():
+def metrics():
     """Prometheus metrics endpoint"""
     if not PROMETHEUS_ENABLED:
         raise HTTPException(status_code=501, detail="Prometheus metrics not enabled")
@@ -6006,7 +6006,7 @@ async def get_communication_history(
 
 
 @app.post("/api/communications/call/initiate")
-async def initiate_communication_call(
+def initiate_communication_call(
     payload: CallInitiateRequest,
     current_user: dict = Depends(require_permission(P.SEND_WHATSAPP)),
 ):
@@ -6044,7 +6044,7 @@ async def initiate_communication_call(
 
 
 @app.get("/api/communications/training-data")
-async def get_communications_training_data(
+def get_communications_training_data(
     type: Optional[str] = Query(None),
     limit: int = Query(1000, ge=1, le=5000),
     current_user: dict = Depends(require_team_leader_up),
@@ -6058,7 +6058,7 @@ async def get_communications_training_data(
 
 
 @app.post("/api/communications/mark-training")
-async def mark_communications_training(
+def mark_communications_training(
     data: Dict[str, Any],
     current_user: dict = Depends(require_team_leader_up),
 ):
@@ -6108,7 +6108,7 @@ class ChatMessageResponse(BaseModel):
 
 
 @app.get("/api/leads/{lead_id}/chat", response_model=List[ChatMessageResponse])
-async def get_chat_messages(
+def get_chat_messages(
     lead_id: str,
     current_user: dict = Depends(require_permission(P.VIEW_OWN_WHATSAPP, P.VIEW_ALL_WHATSAPP)),
 ):
@@ -6369,7 +6369,7 @@ async def get_admin_stats():
 
 @app.get("/api/admin/team-performance",
          dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
-async def get_team_performance(current_user: dict = Depends(current_active_user)):
+def get_team_performance(current_user: dict = Depends(current_active_user)):
     """Admin dashboard: per-counselor performance metrics - SUPABASE ONLY.
 
     Hierarchy-scoped (Manager/Team Leader -> reporting subtree). Cached 1
@@ -6516,7 +6516,7 @@ _SEGMENT_COLOR = {"Hot": "#ef4444", "Warm": "#f59e0b", "Cold": "#3b82f6", "Junk"
 
 
 @app.get("/api/users/{user_id}/stats")
-async def get_user_stats(user_id: int, actor: dict = Depends(current_active_user)):
+def get_user_stats(user_id: int, actor: dict = Depends(current_active_user)):
     """Per-user stats for counselor dashboard - SUPABASE ONLY.
     Own stats always allowed; other users' stats need view_users / team analytics."""
     if str(actor.get("id")) != str(user_id) and not rbac.has_any_permission(
@@ -6621,7 +6621,7 @@ async def get_user_stats(user_id: int, actor: dict = Depends(current_active_user
 
 
 @app.get("/api/users/{user_id}/performance")
-async def get_user_performance(user_id: int, days: int = 7,
+def get_user_performance(user_id: int, days: int = 7,
                                actor: dict = Depends(current_active_user)):
     """Per-user daily performance for sparkline charts - SUPABASE ONLY.
     Own data always allowed; others need view_users / team analytics."""
@@ -6674,7 +6674,7 @@ class SnoozeRequest(BaseModel):
 
 
 @app.patch("/api/notifications/{notification_id}/read")
-async def mark_notification_read(notification_id: str, current_user: dict = Depends(get_current_user)):
+def mark_notification_read(notification_id: str, current_user: dict = Depends(get_current_user)):
     """Mark a notification as read (persisted per-user)."""
     user_email = (current_user.get('email') or '').lower()
     supabase_data.client.table('notification_state').upsert({
@@ -6686,7 +6686,7 @@ async def mark_notification_read(notification_id: str, current_user: dict = Depe
 
 
 @app.patch("/api/notifications/{notification_id}/snooze")
-async def snooze_notification(notification_id: str, payload: SnoozeRequest, current_user: dict = Depends(get_current_user)):
+def snooze_notification(notification_id: str, payload: SnoozeRequest, current_user: dict = Depends(get_current_user)):
     """Snooze a notification for N hours (persisted per-user)."""
     user_email = (current_user.get('email') or '').lower()
     snooze_until = (datetime.utcnow() + timedelta(hours=payload.hours)).isoformat()
@@ -6699,7 +6699,7 @@ async def snooze_notification(notification_id: str, payload: SnoozeRequest, curr
 
 
 @app.post("/api/notifications/read-all")
-async def mark_all_notifications_read(current_user: dict = Depends(get_current_user)):
+def mark_all_notifications_read(current_user: dict = Depends(get_current_user)):
     """Mark every currently-visible notification as read for this user.
     Must use the same scoping as GET /api/notifications or this would mark
     notifications as read that the user never actually saw."""
@@ -6794,7 +6794,7 @@ def _student_payload(model, *, creator: Optional[str] = None) -> dict:
 
 @app.get("/api/hospitals/{hospital_id}/students",
          dependencies=[Depends(require_team_leader_up)])
-async def list_hospital_students(hospital_id: int):
+def list_hospital_students(hospital_id: int):
     """Clinical-practice roster for a hospital (full training-time record)."""
     try:
         res = (supabase_data.client.table('hospital_students')
@@ -6808,7 +6808,7 @@ async def list_hospital_students(hospital_id: int):
 
 @app.post("/api/hospitals/{hospital_id}/students",
           dependencies=[Depends(require_team_leader_up)])
-async def add_hospital_student(hospital_id: int, student: HospitalStudentCreate,
+def add_hospital_student(hospital_id: int, student: HospitalStudentCreate,
                               current_user: dict = Depends(get_current_user)):
     _hospital_or_404(hospital_id)
     try:
@@ -6824,7 +6824,7 @@ async def add_hospital_student(hospital_id: int, student: HospitalStudentCreate,
 
 @app.put("/api/hospitals/{hospital_id}/students/{student_id}",
          dependencies=[Depends(require_team_leader_up)])
-async def update_hospital_student(hospital_id: int, student_id: int, student: HospitalStudentUpdate):
+def update_hospital_student(hospital_id: int, student_id: int, student: HospitalStudentUpdate):
     try:
         existing = (supabase_data.client.table('hospital_students')
                     .select('id').eq('id', student_id).eq('hospital_id', hospital_id)
@@ -6844,7 +6844,7 @@ async def update_hospital_student(hospital_id: int, student_id: int, student: Ho
 
 @app.delete("/api/hospitals/{hospital_id}/students/{student_id}",
             dependencies=[Depends(require_team_leader_up)])
-async def delete_hospital_student(hospital_id: int, student_id: int):
+def delete_hospital_student(hospital_id: int, student_id: int):
     try:
         (supabase_data.client.table('hospital_students')
          .delete().eq('id', student_id).eq('hospital_id', hospital_id).execute())
@@ -6856,7 +6856,7 @@ async def delete_hospital_student(hospital_id: int, student_id: int):
 
 @app.get("/api/hospitals/{hospital_id}/leads",
          dependencies=[Depends(require_permission(P.VIEW_ALL_LEADS, P.VIEW_OWN_LEADS))])
-async def list_hospital_leads(hospital_id: int):
+def list_hospital_leads(hospital_id: int):
     """Leads associated with a hospital, joined to current lead fields."""
     try:
         links = (supabase_data.client.table('hospital_leads')
@@ -6879,7 +6879,7 @@ async def list_hospital_leads(hospital_id: int):
 
 @app.post("/api/hospitals/{hospital_id}/leads",
           dependencies=[Depends(require_permission(P.EDIT_LEAD))])
-async def link_hospital_lead(hospital_id: int, body: HospitalLeadLinkCreate,
+def link_hospital_lead(hospital_id: int, body: HospitalLeadLinkCreate,
                              current_user: dict = Depends(get_current_user)):
     _hospital_or_404(hospital_id)
     try:
@@ -6907,7 +6907,7 @@ async def link_hospital_lead(hospital_id: int, body: HospitalLeadLinkCreate,
 
 @app.delete("/api/hospitals/{hospital_id}/leads/{lead_id}",
             dependencies=[Depends(require_permission(P.EDIT_LEAD))])
-async def unlink_hospital_lead(hospital_id: int, lead_id: str):
+def unlink_hospital_lead(hospital_id: int, lead_id: str):
     try:
         (supabase_data.client.table('hospital_leads')
          .delete().eq('hospital_id', hospital_id).eq('lead_id', lead_id).execute())
@@ -6983,7 +6983,7 @@ class PasswordChangeRequest(BaseModel):
 
 
 @app.put("/api/users/{user_id}/password")
-async def change_password(user_id: int, data: PasswordChangeRequest,
+def change_password(user_id: int, data: PasswordChangeRequest,
                           actor: dict = Depends(current_active_user)):
     """Change a password by supplying the current one.
 
@@ -7049,7 +7049,7 @@ class AdminPasswordResetRequest(BaseModel):
 
 
 @app.put("/api/users/{user_id}/admin-reset-password")
-async def admin_reset_password(user_id: int, data: AdminPasswordResetRequest,
+def admin_reset_password(user_id: int, data: AdminPasswordResetRequest,
                                actor: dict = Depends(require_permission(P.MANAGE_ROLES))):
     """Reset any user's password WITHOUT their current one.
 
@@ -7134,7 +7134,7 @@ def _is_connected(content: str) -> bool:
 
 @app.get("/api/analytics/call-timing",
          dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
-async def get_call_timing(country: Optional[str] = None):
+def get_call_timing(country: Optional[str] = None):
     """
     Analyse call notes by IST hour and day-of-week.
     Mines the notes table (channel='call') for structured call outcomes,
@@ -7310,7 +7310,7 @@ async def get_call_timing(country: Optional[str] = None):
 
 @app.get("/api/admin/sla-config",
          dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
-async def get_sla_config():
+def get_sla_config():
     """Get SLA config from Supabase - SUPABASE ONLY"""
     
     try:
@@ -7352,7 +7352,7 @@ class SLAConfigUpdate(BaseModel):
 
 @app.put("/api/admin/sla-config",
          dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
-async def update_sla_config(data: SLAConfigUpdate):
+def update_sla_config(data: SLAConfigUpdate):
     """Update SLA config in Supabase - SUPABASE ONLY"""
     
     try:
@@ -7383,7 +7383,7 @@ async def update_sla_config(data: SLAConfigUpdate):
 
 @app.get("/api/admin/sla-compliance",
          dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
-async def get_sla_compliance():
+def get_sla_compliance():
     """
     Returns per-lead SLA status for three rules:
       1. first_contact  – first note logged within first_contact_hours of lead creation
@@ -7418,7 +7418,7 @@ async def get_sla_compliance():
 
 @app.get("/api/admin/cohort-analysis",
          dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
-async def get_cohort_analysis(current_user: dict = Depends(current_active_user)):
+def get_cohort_analysis(current_user: dict = Depends(current_active_user)):
     """Cohort analysis grouped by signup month, with conversion-rate benchmarks - SUPABASE ONLY.
 
     Hierarchy-scoped: a Manager / Team Leader only sees their own reporting
@@ -7555,7 +7555,7 @@ async def get_cohort_analysis(current_user: dict = Depends(current_active_user))
 
 @app.get("/api/admin/conversion-time",
          dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
-async def get_conversion_time(created_from: Optional[str] = None, created_to: Optional[str] = None,
+def get_conversion_time(created_from: Optional[str] = None, created_to: Optional[str] = None,
                               current_user: dict = Depends(current_active_user)):
     """Compute days from creation to enrollment, with histogram + breakdowns - SUPABASE ONLY.
 
@@ -7656,7 +7656,7 @@ async def get_conversion_time(created_from: Optional[str] = None, created_to: Op
 
 @app.get("/api/admin/source-analytics",
          dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
-async def get_source_analytics(created_from: Optional[str] = None, created_to: Optional[str] = None):
+def get_source_analytics(created_from: Optional[str] = None, created_to: Optional[str] = None):
     """Per-source and per-campaign attribution metrics - SUPABASE ONLY"""
 
     def _aggregate(leads, group_key):
@@ -7936,7 +7936,7 @@ async def _decay_scheduler_loop():
 
 @app.get("/api/admin/decay-config",
          dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
-async def get_decay_config(
+def get_decay_config(
     current_user: dict = Depends(get_current_user),
 ):
     # Return default decay config (requires Supabase table migration)
@@ -7954,7 +7954,7 @@ async def get_decay_config(
 
 @app.put("/api/admin/decay-config",
          dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
-async def update_decay_config(
+def update_decay_config(
     payload: dict,
     current_user: dict = Depends(get_current_user)
 ):
@@ -7966,7 +7966,7 @@ async def update_decay_config(
 
 @app.post("/api/admin/run-decay",
           dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
-async def manual_run_decay(
+def manual_run_decay(
     current_user: dict = Depends(get_current_user)
 ):
     """Manually trigger one decay cycle (admin only) - SUPABASE ONLY (Stub)"""
@@ -7975,7 +7975,7 @@ async def manual_run_decay(
 
 @app.get("/api/admin/decay-log",
          dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
-async def get_decay_log(
+def get_decay_log(
     limit: int = 100,
     offset: int = 0,
     current_user: dict = Depends(get_current_user)
@@ -7988,7 +7988,7 @@ async def get_decay_log(
 
 @app.get("/api/admin/decay-preview",
          dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
-async def get_decay_preview(
+def get_decay_preview(
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -8185,7 +8185,7 @@ def _render_template(body: str, variables: dict) -> str:
 
 @app.get("/api/wa-templates",
          dependencies=[Depends(require_permission(P.SEND_WHATSAPP, P.VIEW_ALL_WHATSAPP))])
-async def list_wa_templates(
+def list_wa_templates(
     category: Optional[str] = None,
     current_user: dict = Depends(get_current_user),
 ):
@@ -8221,7 +8221,7 @@ async def list_wa_templates(
 
 @app.post("/api/wa-templates",
           dependencies=[Depends(require_manager_up)])
-async def create_wa_template(
+def create_wa_template(
     payload: dict,
     current_user: dict = Depends(get_current_user)
 ):
@@ -8256,7 +8256,7 @@ async def create_wa_template(
 
 @app.put("/api/wa-templates/{template_id}",
          dependencies=[Depends(require_manager_up)])
-async def update_wa_template(
+def update_wa_template(
     template_id: int,
     payload: dict,
     current_user: dict = Depends(get_current_user)
@@ -8288,7 +8288,7 @@ async def update_wa_template(
 
 @app.delete("/api/wa-templates/{template_id}",
             dependencies=[Depends(require_manager_up)])
-async def delete_wa_template(
+def delete_wa_template(
     template_id: int,
     current_user: dict = Depends(get_current_user)
 ):
@@ -8439,7 +8439,7 @@ def _strip_phone(phone: str) -> str:
 
 
 @app.post("/api/leads/check-duplicates")
-async def check_duplicates(
+def check_duplicates(
     payload: dict,
     current_user: dict = Depends(get_current_user)
 ):
@@ -8538,7 +8538,7 @@ def _lead_row(db_lead) -> dict:
 
 
 @app.get("/api/leads-repeated")
-async def get_repeated_leads(
+def get_repeated_leads(
     request: Request,
     limit: int = 500,
     current_user: dict = Depends(current_active_user)
@@ -8594,7 +8594,7 @@ async def refresh_repeated_marks(current_user: dict = Depends(get_current_user))
 
 
 @app.post("/api/leads/merge")
-async def merge_leads(
+def merge_leads(
     payload: dict,
     current_user: dict = Depends(require_team_leader_up)
 ):
@@ -8802,7 +8802,7 @@ def _get_lead_by_phone(phone: str) -> Optional[dict]:
 
 
 @app.get("/api/whatsapp/webhook")
-async def meta_whatsapp_verify(
+def meta_whatsapp_verify(
     hub_mode: Optional[str] = Query(None, alias="hub.mode"),
     hub_verify_token: Optional[str] = Query(None, alias="hub.verify_token"),
     hub_challenge: Optional[str] = Query(None, alias="hub.challenge"),
@@ -9030,7 +9030,7 @@ async def _ingest_meta_leadgen(leadgen_id: str, change_value: dict,
 
 
 @app.get("/api/meta/leads-webhook")
-async def meta_leads_verify(
+def meta_leads_verify(
     hub_mode: Optional[str] = Query(None, alias="hub.mode"),
     hub_verify_token: Optional[str] = Query(None, alias="hub.verify_token"),
     hub_challenge: Optional[str] = Query(None, alias="hub.challenge"),
@@ -9110,7 +9110,7 @@ def _wa_scope_names(user: dict) -> Optional[list[str]]:
 
 
 @app.post("/api/whatsapp/send")
-async def meta_whatsapp_send(
+def meta_whatsapp_send(
     payload: MetaWASendRequest,
     current_user: dict = Depends(require_permission(P.SEND_WHATSAPP)),
 ):
@@ -9159,7 +9159,7 @@ async def meta_whatsapp_send(
 
 
 @app.get("/api/whatsapp/conversations")
-async def get_whatsapp_conversations(
+def get_whatsapp_conversations(
     current_user: dict = Depends(require_permission(P.VIEW_OWN_WHATSAPP, P.VIEW_ALL_WHATSAPP)),
 ):
     """
@@ -9180,7 +9180,7 @@ async def get_whatsapp_conversations(
 
 
 @app.get("/api/whatsapp/history/{phone_number}")
-async def get_whatsapp_history(
+def get_whatsapp_history(
     phone_number: str,
     current_user: dict = Depends(require_permission(P.VIEW_OWN_WHATSAPP, P.VIEW_ALL_WHATSAPP)),
 ):
@@ -9209,7 +9209,7 @@ async def get_whatsapp_history(
 
 
 @app.post("/api/whatsapp/mark-read")
-async def mark_whatsapp_read(
+def mark_whatsapp_read(
     payload: dict,
     current_user: dict = Depends(require_permission(P.VIEW_OWN_WHATSAPP, P.VIEW_ALL_WHATSAPP)),
 ):
@@ -9240,7 +9240,7 @@ async def mark_whatsapp_read(
 
 
 @app.post("/api/leads/cleanup-duplicates")
-async def cleanup_duplicate_leads_endpoint(current_user: dict = Depends(require_manager_up)):
+def cleanup_duplicate_leads_endpoint(current_user: dict = Depends(require_manager_up)):
     """
     Merge duplicate leads that share a phone number or email address.
     Keeps the most-progressed record, transfers notes/activities, deletes the rest.
@@ -9273,7 +9273,7 @@ def _fmt_phone_mbg(phone: str) -> str:
 
 @app.get("/api/export/mbg-contacts",
          dependencies=[Depends(require_permission(P.EXPORT_REPORTS, P.EXPORT_FINANCIAL_DATA))])
-async def export_mbg_contacts(
+def export_mbg_contacts(
     status: Optional[str] = None,
     assigned_to: Optional[str] = None,
     date_from: Optional[str] = None,

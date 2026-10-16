@@ -8,8 +8,61 @@ from functools import wraps
 import hashlib
 import json
 import time
-from cachetools import TTLCache, LRUCache
+import threading
+from cachetools import TTLCache as _TTLCache, LRUCache as _LRUCache
 from logger_config import logger
+
+def _locked(base):
+    """Thread-safe variant of a cachetools cache. Endpoints run in worker
+    threads, and a bare TTLCache can raise KeyError when an entry expires
+    between `key in cache` and `cache[key]`. Every operation takes one
+    re-entrant lock, and reads of a missing/expired key fall through to the
+    normal KeyError/default behaviour."""
+    class Locked(base):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self._lock = threading.RLock()
+
+        def __contains__(self, key):
+            with self._lock:
+                return super().__contains__(key)
+
+        def __getitem__(self, key):
+            with self._lock:
+                return super().__getitem__(key)
+
+        def __setitem__(self, key, value, *a, **kw):
+            with self._lock:
+                return super().__setitem__(key, value, *a, **kw)
+
+        def __delitem__(self, key, *a, **kw):
+            with self._lock:
+                return super().__delitem__(key, *a, **kw)
+
+        def get(self, key, default=None):
+            with self._lock:
+                try:
+                    return super().__getitem__(key)
+                except KeyError:
+                    return default
+
+        def keys(self):
+            with self._lock:
+                return list(super().keys())
+
+        def clear(self):
+            with self._lock:
+                return super().clear()
+
+        def __len__(self):
+            with self._lock:
+                return super().__len__()
+
+    return Locked
+
+
+TTLCache = _locked(_TTLCache)
+LRUCache = _locked(_LRUCache)
 
 # ============================================================================
 # IN-MEMORY CACHE (Fast, per-instance)
@@ -52,12 +105,16 @@ def cache_result(cache: Any, key_prefix: str = ""):
             cache_key = f"{key_prefix}:{get_cache_key(*args, **kwargs)}"
             
             # Try to get from cache
-            if cache_key in cache:
+            try:
+                _hit = cache[cache_key]
+            except KeyError:
+                _hit = None
+            else:
                 logger.debug(
                     f"🎯 Cache HIT: {func.__name__}",
                     extra={"cache_key": cache_key, "performance": True}
                 )
-                return cache[cache_key]
+                return _hit
             
             # Cache miss - execute function
             logger.debug(
@@ -104,12 +161,16 @@ def cache_async_result(cache: Any, key_prefix: str = ""):
             cache_key = f"{key_prefix}:{get_cache_key(*args, **kwargs)}"
             
             # Try to get from cache
-            if cache_key in cache:
+            try:
+                _hit = cache[cache_key]
+            except KeyError:
+                _hit = None
+            else:
                 logger.debug(
                     f"🎯 Cache HIT: {func.__name__}",
                     extra={"cache_key": cache_key, "performance": True}
                 )
-                return cache[cache_key]
+                return _hit
             
             # Cache miss - execute function
             logger.debug(
