@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import {
   Table, Card, DatePicker, Select, Button, Tag, Badge, Drawer,
   Typography, Space, Statistic, Row, Col, Timeline, Empty, Tooltip,
-  Input, Result,
+  Input, Result, Checkbox,
 } from 'antd';
 import {
   CalendarOutlined, UserOutlined, EditOutlined, FileTextOutlined,
@@ -77,7 +77,7 @@ export default function LeadUpdateActivityPage() {
   const isCounselor = currentUser.role === 'Counselor';
 
   const [dateRange, setDateRange]   = useState([dayjs().subtract(6, 'day'), dayjs()]);
-  const [userFilter, setUserFilter] = useState('');
+  const [userFilter, setUserFilter] = useState([]);
   const [drawerRow, setDrawerRow]   = useState(null);
   const [leadSearch, setLeadSearch] = useState('');
 
@@ -116,8 +116,9 @@ export default function LeadUpdateActivityPage() {
 
   // ── Apply user filter ──────────────────────────────────────────────────────
   const filteredRows = useMemo(() => {
-    if (!userFilter) return rows;
-    return rows.filter(r => r.user === userFilter);
+    if (!userFilter.length) return rows;
+    const picked = new Set(userFilter);
+    return rows.filter(r => picked.has(r.user));
   }, [rows, userFilter]);
 
   // ── Summary stats ─────────────────────────────────────────────────────────
@@ -354,16 +355,31 @@ export default function LeadUpdateActivityPage() {
           />
           {!isCounselor && (
             <Select
+              mode="multiple"
               value={userFilter}
               onChange={setUserFilter}
               placeholder="All users"
               allowClear
-              style={{ width: 200 }}
+              style={{ minWidth: 220, maxWidth: 420 }}
+              maxTagCount="responsive"
               showSearch
-              options={[
-                { label: 'All users', value: '' },
-                ...allUsers.map(u => ({ label: u, value: u })),
-              ]}
+              optionFilterProp="label"
+              menuItemSelectedIcon={null}
+              options={allUsers.map(u => ({ label: u, value: u }))}
+              optionRender={(option) => (
+                <Checkbox checked={userFilter.includes(option.value)} style={{ pointerEvents: 'none' }}>
+                  {option.label}
+                </Checkbox>
+              )}
+              dropdownRender={(menu) => (
+                <>
+                  <div style={{ padding: '6px 12px', display: 'flex', justifyContent: 'space-between' }}>
+                    <Button type="link" size="small" style={{ padding: 0 }} onClick={() => setUserFilter(allUsers)}>Select all</Button>
+                    <Button type="link" size="small" style={{ padding: 0 }} onClick={() => setUserFilter([])}>Clear</Button>
+                  </div>
+                  {menu}
+                </>
+              )}
               suffixIcon={<UserOutlined />}
             />
           )}
