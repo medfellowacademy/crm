@@ -3,6 +3,7 @@
 from consolidated_reports import (
     month_key, last_n_months, build_monthly_trend, growth_pct, compute_kpis, month_breakdown,
     funnel_breakdown, source_closed_stats, compute_source_roi, select_leads,
+    enrollment_cohort, lead_cohort_conversion,
 )
 
 
@@ -57,12 +58,17 @@ class TestBuildMonthlyTrend:
         assert sep["leads_in"] == 0 and sep["leads_closed"] == 1
         assert sep["revenue"] == 5000
 
-    def test_falls_back_to_updated_at_when_enrolled_at_missing(self):
+    def test_never_uses_updated_at_as_the_close_date(self):
         leads = [lead(created_at="2026-09-01", status="Enrolled", enrolled_at=None,
                       updated_at="2026-09-15", revenue=2000)]
         trend = build_monthly_trend(leads, end_month="2026-09", months=1)
-        assert trend[0]["leads_closed"] == 1
-        assert trend[0]["revenue"] == 2000
+        assert trend[0]["leads_closed"] == 0 and trend[0]["revenue"] == 0
+
+    def test_uses_resolved_enroll_date_when_enrolled_at_missing(self):
+        l = lead(created_at="2026-09-01", status="Enrolled", revenue=2000)
+        l["enroll_date"] = "2026-09-15T00:00:00"
+        trend = build_monthly_trend([l], end_month="2026-09", months=1)
+        assert trend[0]["leads_closed"] == 1 and trend[0]["revenue"] == 2000
 
     def test_conversion_rate_is_closed_over_in_for_that_month(self):
         leads = [lead(created_at="2026-09-01", status="Fresh")] * 3 + [
@@ -208,3 +214,53 @@ class TestSelectLeads:
         assert select_leads(self.LEADS, "2026-09", "closed", country="UAE") == []
         assert len(select_leads(self.LEADS, "2026-09", "closed", employee="Ravi", course="Cardiology")) == 1
         assert len(select_leads(self.LEADS, "2026-09", "in", status="Fresh", source="Facebook")) == 1
+
+
+class TestEnrollmentCohort:
+    LEADS = [
+        lead(created_at="2026-09-02", status="Enrolled", enrolled_at="2026-09-12", revenue=100),
+        lead(created_at="2026-08-10", status="Enrolled", enrolled_at="2026-09-05", revenue=200),
+        lead(created_at="2026-08-20", status="Enrolled", enrolled_at="2026-09-06", revenue=300),
+        lead(created_at="2026-06-01", status="Enrolled", enrolled_at="2026-09-07", revenue=400),
+        lead(created_at="2026-08-01", status="Enrolled", enrolled_at="2026-10-01", revenue=999),  # other month
+        lead(created_at=None, status="Enrolled", enrolled_at="2026-09-08", revenue=50),
+    ]
+
+    def test_groups_closed_enrollments_by_lead_creation_month(self):
+        out = enrollment_cohort(self.LEADS, "2026-09")
+        by = {r["created_month"]: r for r in out["rows"]}
+        assert by["2026-08"]["count"] == 2 and by["2026-08"]["revenue"] == 500
+        assert by["2026-08"]["lag_months"] == 1
+        assert by["2026-06"]["lag_months"] == 3
+        assert by["2026-09"]["lag_months"] == 0
+        assert out["total"] == 5
+
+    def test_unknown_creation_month_sorted_last(self):
+        rows = enrollment_cohort(self.LEADS, "2026-09")["rows"]
+        assert rows[-1]["created_month"] == "Unknown" and rows[-1]["lag_months"] is None
+        assert [r["created_month"] for r in rows[:-1]] == sorted(r["created_month"] for r in rows[:-1])
+
+    def test_same_month_pct_and_avg_days(self):
+        out = enrollment_cohort(self.LEADS[:1], "2026-09")
+        assert out["same_month_pct"] == 100.0 and out["avg_days_to_close"] == 10.0
+
+    def test_empty(self):
+        assert enrollment_cohort([], "2026-09") == {"rows": [], "total": 0, "same_month_pct": 0.0, "avg_days_to_close": None}
+
+    def test_drill_down_by_created_month(self):
+        out = select_leads(self.LEADS, "2026-09", "closed", created_month="2026-08")
+        assert len(out) == 2
+        assert len(select_leads(self.LEADS, "2026-09", "closed", created_month="Unknown")) == 1
+
+
+class TestLeadCohortConversion:
+    def test_of_leads_that_came_in_how_many_enrolled_since(self):
+        leads = [
+            lead(created_at="2026-08-01", status="Enrolled", revenue=1000),
+            lead(created_at="2026-08-02", status="Fresh"),
+            lead(created_at="2026-08-03", status="Fresh"),
+            lead(created_at="2026-08-04", status="Fresh"),
+            lead(created_at="2026-09-01", status="Enrolled", revenue=5),
+        ]
+        out = lead_cohort_conversion(leads, "2026-08")
+        assert out == {"leads_in": 4, "enrolled_so_far": 1, "rate": 25.0, "revenue": 1000.0}

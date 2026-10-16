@@ -3,12 +3,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, Link } from 'react-router-dom';
 import {
   Card, Row, Col, Statistic, DatePicker, Button, Typography, Spin, Empty, Table, Space, Tag,
-  Segmented, Drawer, InputNumber, message, Tooltip,
+  Segmented, Drawer, InputNumber, message, Tooltip, Alert,
 } from 'antd';
 import {
   ArrowUpOutlined, ArrowDownOutlined, DownloadOutlined, FileTextOutlined,
   TeamOutlined, GlobalOutlined, BookOutlined, ShareAltOutlined, FilterOutlined,
-  UnorderedListOutlined, DollarOutlined, PrinterOutlined,
+  UnorderedListOutlined, DollarOutlined, PrinterOutlined, BranchesOutlined,
 } from '@ant-design/icons';
 import {
   ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
@@ -103,7 +103,7 @@ function LeadsDrawer({ monthStr, drill, onClose, onChange }) {
   });
 
   const filterTags = drill
-    ? ['source', 'country', 'course', 'employee', 'status'].filter((k) => drill[k])
+    ? ['source', 'country', 'course', 'employee', 'status', 'created_month'].filter((k) => drill[k])
     : [];
 
   const columns = [
@@ -169,6 +169,55 @@ function LeadsDrawer({ monthStr, drill, onClose, onChange }) {
         </>
       )}
     </Drawer>
+  );
+}
+
+function EnrollmentCohortCard({ cohort, leadCohort, monthStr, onSelect }) {
+  const rows = (cohort?.rows || []).map((r) => ({
+    ...r,
+    label: r.created_month === 'Unknown' ? 'Unknown' : dayjs(r.created_month + '-01').format('MMM YY'),
+    note: r.lag_months === 0 ? 'same month' : r.lag_months == null ? '' : `${r.lag_months} mo earlier`,
+  }));
+  return (
+    <Card
+      style={{ marginBottom: 20 }}
+      title={<Space><BranchesOutlined />Where {monthLabel(monthStr)}'s enrollments came from</Space>}
+      extra={rows.length ? <Text type="secondary" style={{ fontSize: 12 }}>click a bar to see those leads</Text> : null}
+    >
+      {rows.length ? (
+        <>
+          <Space wrap style={{ marginBottom: 12 }}>
+            <Tag color="green">{cohort.total} enrollments</Tag>
+            <Tag color="blue">{cohort.same_month_pct}% came in and closed the same month</Tag>
+            {cohort.avg_days_to_close != null && <Tag>avg {cohort.avg_days_to_close} days from lead to enrollment</Tag>}
+          </Space>
+          <ResponsiveContainer width="100%" height={260}>
+            <ComposedChart data={rows}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="label" fontSize={12} />
+              <YAxis yAxisId="left" fontSize={12} allowDecimals={false} />
+              <YAxis yAxisId="right" orientation="right" fontSize={12} />
+              <RTooltip
+                formatter={(v, name) => (name === 'Revenue' ? inr(v) : v)}
+                labelFormatter={(label, p) => `Leads from ${label}${p?.[0]?.payload?.note ? ` (${p[0].payload.note})` : ''}`}
+              />
+              <Legend />
+              <Bar
+                yAxisId="left" dataKey="count" name="Enrollments" fill="#52c41a" radius={[4, 4, 0, 0]}
+                cursor="pointer" onClick={(d) => onSelect(d.created_month)}
+              />
+              <Line yAxisId="right" type="monotone" dataKey="revenue" name="Revenue" stroke="#fa8c16" strokeWidth={2.5} dot={{ r: 3 }} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </>
+      ) : <Empty description="No enrollments this month" image={Empty.PRESENTED_IMAGE_SIMPLE} />}
+      {leadCohort?.leads_in > 0 && (
+        <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid rgba(128,128,128,0.2)' }}>
+          <Text type="secondary">The other way round — </Text>
+          <Text>of the <b>{leadCohort.leads_in}</b> leads that came in during {monthLabel(monthStr)}, <b>{leadCohort.enrolled_so_far}</b> have enrolled so far ({leadCohort.rate}%{leadCohort.revenue ? `, ${inr(leadCohort.revenue)}` : ''}).</Text>
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -296,6 +345,13 @@ const ConsolidatedReportsPage = () => {
         <div style={{ textAlign: 'center', padding: 60 }}><Spin size="large" /></div>
       ) : (
         <>
+          {data?.undated_enrolled > 0 && (
+            <Alert
+              type="warning" showIcon closable style={{ marginBottom: 16 }}
+              message={`${data.undated_enrolled} enrolled lead(s) have no enrollment date`}
+              description="They can't be placed in a month, so they are left out of the monthly numbers. Set the Enrolled Date on those leads to include them."
+            />
+          )}
           <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
             <Col xs={12} md={6}>
               <KpiCard title={`Leads In — ${monthLabel(monthStr)}`} kpi={kpis.leads_in} compare={compare}
@@ -374,6 +430,11 @@ const ConsolidatedReportsPage = () => {
                 onBarClick={(course) => openDrill({ kind: 'closed', course })} />
             </Col>
           </Row>
+
+          <EnrollmentCohortCard
+            cohort={data?.enrollment_cohort} leadCohort={data?.lead_cohort} monthStr={monthStr}
+            onSelect={(created_month) => openDrill({ kind: 'closed', created_month })}
+          />
 
           <SourceRoiCard rows={data?.source_roi} monthStr={monthStr} canEdit={FINANCE_ROLES.includes(role)} />
 

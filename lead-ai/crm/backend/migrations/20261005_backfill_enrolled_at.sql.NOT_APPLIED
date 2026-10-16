@@ -1,0 +1,28 @@
+-- OPTIONAL, NOT APPLIED. Reports already recover enrollment dates from the
+-- activity log in code (enrollment_dates.py); this permanently writes them
+-- into leads.enrolled_at and stamps future enrollments automatically.
+-- Review, then run in the Supabase SQL editor if you want it. Rename to .sql.
+
+update public.leads l
+set enrolled_at = ev.first_enroll
+from (
+  select a.lead_id::text as lid, min(a.created_at) as first_enroll
+  from public.activities a
+  where a.activity_type = 'field_update' and a.description ~* '→ (LeadStatus\.)?ENROLLED'
+  group by 1
+) ev
+where l.status = 'Enrolled' and l.enrolled_at is null and ev.lid = l.id::text;
+
+create or replace function public.set_enrolled_at_default()
+returns trigger language plpgsql as $$
+begin
+  if new.status = 'Enrolled' and new.enrolled_at is null then
+    new.enrolled_at := now();
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists trg_set_enrolled_at on public.leads;
+create trigger trg_set_enrolled_at
+before insert or update of status, enrolled_at on public.leads
+for each row execute function public.set_enrolled_at_default();

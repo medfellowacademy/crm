@@ -21,7 +21,10 @@ def month_key(date_str) -> str:
 
 
 def _enroll_date(lead: dict):
-    return lead.get("enrolled_at") or lead.get("updated_at")
+    """When the sale closed. Never `updated_at` (it moves on every edit and
+    files sales under the wrong month) — see enrollment_dates.py, which
+    recovers missing dates from the activity log into `enroll_date`."""
+    return lead.get("enroll_date") or lead.get("enrolled_at")
 
 
 def _shift_month(ym: str, delta: int) -> str:
@@ -105,7 +108,7 @@ def compute_kpis(trend: list, selected_month: str) -> dict:
 
 
 def select_leads(leads: list, selected_month: str, kind: str = "in", source=None,
-                 country=None, course=None, employee=None, status=None) -> list:
+                 country=None, course=None, employee=None, status=None, created_month=None) -> list:
     """The actual leads behind a month's numbers, for drill-down. kind='in'
     -> leads that came in that month (matches `leads_in` / source / funnel
     charts); kind='closed' -> Enrolled leads that closed that month (matches
@@ -131,9 +134,68 @@ def select_leads(leads: list, selected_month: str, kind: str = "in", source=None
             continue
         if status and lead.get("status") != status:
             continue
+        if created_month and (month_key(lead.get("created_at")) or "Unknown") != created_month:
+            continue
         out.append((sort_key, lead))
     out.sort(key=lambda t: t[0], reverse=True)
     return [lead for _, lead in out]
+
+
+def enrollment_cohort(leads: list, selected_month: str) -> dict:
+    """Where this month's enrollments came from: the enrollments that CLOSED in
+    `selected_month`, grouped by the month the lead originally CAME IN.
+    `lag_months` is how many months passed between the two (0 = closed in the
+    same month it arrived). Oldest lead-month first."""
+    counts, revenue, days = Counter(), Counter(), []
+    for lead in leads or []:
+        if lead.get("status") != "Enrolled" or month_key(_enroll_date(lead)) != selected_month:
+            continue
+        cm = month_key(lead.get("created_at")) or "Unknown"
+        counts[cm] += 1
+        revenue[cm] += float(lead.get("actual_revenue") or 0)
+        a, b = str(lead.get("created_at") or "")[:10], str(_enroll_date(lead) or "")[:10]
+        try:
+            n = (datetime.fromisoformat(b) - datetime.fromisoformat(a)).days
+            if n >= 0:
+                days.append(n)
+        except ValueError:
+            pass
+
+    rows = []
+    for cm in sorted(counts, key=lambda k: (k == "Unknown", k)):
+        lag = None
+        if cm != "Unknown":
+            lag = (int(selected_month[:4]) * 12 + int(selected_month[5:7])) - (int(cm[:4]) * 12 + int(cm[5:7]))
+        rows.append({"created_month": cm, "count": counts[cm], "revenue": round(revenue[cm], 2), "lag_months": lag})
+
+    total = sum(counts.values())
+    same = counts.get(selected_month, 0)
+    return {
+        "rows": rows,
+        "total": total,
+        "same_month_pct": round(same / total * 100, 1) if total else 0.0,
+        "avg_days_to_close": round(sum(days) / len(days), 1) if days else None,
+    }
+
+
+def lead_cohort_conversion(leads: list, selected_month: str) -> dict:
+    """The reverse view: of the leads that CAME IN during `selected_month`, how
+    many have enrolled so far (any time since), and for how much."""
+    came_in = enrolled = 0
+    revenue = 0.0
+    for lead in leads or []:
+        if month_key(lead.get("created_at")) != selected_month:
+            continue
+        came_in += 1
+        if lead.get("status") == "Enrolled":
+            enrolled += 1
+            revenue += float(lead.get("actual_revenue") or 0)
+    return {
+        "leads_in": came_in,
+        "enrolled_so_far": enrolled,
+        "rate": round(enrolled / came_in * 100, 1) if came_in else 0.0,
+        "revenue": round(revenue, 2),
+    }
 
 
 def funnel_breakdown(leads: list, selected_month: str) -> list:

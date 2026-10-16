@@ -3608,11 +3608,13 @@ def _compute_raw_notifications(scope_names: Optional[list] = None) -> list:
             _last_month = (today.replace(day=1) - timedelta(days=1)).strftime('%Y-%m')
             _enrolled_rows = _scoped(
                 supabase_data.client.table('leads')
-                .select('actual_revenue,enrolled_at,updated_at')
+                .select('id,status,actual_revenue,enrolled_at')
                 .eq('status', 'Enrolled')
             ).limit(5000).execute().data or []
+            from enrollment_dates import load_enroll_dates
+            _enrolled_rows = load_enroll_dates(supabase_data.client, _enrolled_rows)
             _closed = [r for r in _enrolled_rows
-                       if str(r.get('enrolled_at') or r.get('updated_at') or '')[:7] == _last_month]
+                       if str(r.get('enroll_date') or r.get('enrolled_at') or '')[:7] == _last_month]
             if _closed:
                 _rev = sum(float(r.get('actual_revenue') or 0) for r in _closed)
                 notifications.append({
@@ -3634,7 +3636,7 @@ def _compute_raw_notifications(scope_names: Optional[list] = None) -> list:
 
 
 @app.get("/api/notifications")
-async def get_notifications(current_user: dict = Depends(get_current_user)):
+def get_notifications(current_user: dict = Depends(get_current_user)):
     """Real notifications, enriched with per-user read/snooze state.
     Scoped to the caller's lead visibility (Counselor: own; Manager / Team
     Leader: own + reporting subtree; Super Admin / Finance / Marketing: all)."""

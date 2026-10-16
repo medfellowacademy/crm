@@ -16,35 +16,18 @@ import rbac
 from rbac import require_permission, P
 from supabase_data_layer import supabase_data
 from logger_config import logger
-from employee_performance import aggregate_employee_stats, tenure_label
+from employee_performance import aggregate_employee_stats, tenure_label, norm
+from report_data import get_report_leads
 
 router = APIRouter(prefix="/api/employees/performance", tags=["employee-performance"])
 
-_LEAD_COLS = "assigned_to,status,actual_revenue,country,course_interested,enrolled_at,updated_at"
 _EMPLOYEE_ROLES = {"Counselor", "Team Leader", "Manager"}
 
 
-def _fetch_all_assigned_leads(names: Optional[list]) -> list:
-    """Every lead assigned to `names` (or everyone, if None) — any status,
-    any date. Paginates past Supabase's 1000-row cap."""
-    rows: list = []
-    offset, page_size = 0, 1000
-    while True:
-        q = supabase_data.client.table("leads").select(_LEAD_COLS)
-        if names is not None:
-            q = q.in_("assigned_to", names or ["\x00none"])
-        batch = q.range(offset, offset + page_size - 1).execute().data or []
-        rows.extend(batch)
-        if len(batch) < page_size:
-            break
-        offset += page_size
-    return rows
-
-
 @router.get("", dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
-async def get_employee_performance(
-    date_from: Optional[str] = Query(None, description="ISO date — sales on/after this count"),
-    date_to: Optional[str] = Query(None, description="ISO date — sales on/before this count"),
+def get_employee_performance(
+    date_from: Optional[str] = Query(None, description="YYYY-MM-DD — sales on/after this day count"),
+    date_to: Optional[str] = Query(None, description="YYYY-MM-DD — sales on/before this day count"),
     current_user: dict = Depends(get_current_user),
 ):
     """Per-employee sales performance. `date_from`/`date_to` scope the
@@ -66,24 +49,41 @@ async def get_employee_performance(
         # Filter leads to exactly the employees we're reporting on (their name
         # set, not the raw RBAC scope — the two coincide in practice, but this
         # is the actual source of truth for who a row in the response is).
-        leads = _fetch_all_assigned_leads(employee_names)
+        leads = get_report_leads(supabase_data.client, employee_names)
         stats = aggregate_employee_stats(leads, date_from=date_from, date_to=date_to, all_names=employee_names)
+        stats_by_norm = {norm(k): v for k, v in stats.items()}
 
         rows = []
         for u in employees:
             name = u.get("full_name")
-            s = stats.get(name, {})
+            s = stats_by_norm.get(norm(name), {})
             rows.append({
                 "id": u.get("id"),
                 "name": name,
                 "role": u.get("role"),
                 "date_of_joining": u.get("date_of_joining"),
                 "tenure": tenure_label(u.get("date_of_joining")),
-                **{k: v for k, v in s.items() if k != "monthly"},
-                "monthly": s.get("monthly", []),
+                **{k: v for k, v in s.items() if k not in ("monthly", "weekly")},
+                "monthly": s.get("monthly", [])[-12:],
+                "weekly": s.get("weekly", [])[-16:],
             })
         rows.sort(key=lambda r: r.get("revenue") or 0, reverse=True)
-        return {"employees": rows, "date_from": date_from, "date_to": date_to}
+        for i, r in enumerate(rows, start=1):
+            r["rank"] = i
+
+        team = {
+            "employees": len(rows),
+            "revenue": round(sum(r.get("revenue") or 0 for r in rows), 2),
+            "enrolled": sum(r.get("enrolled") or 0 for r in rows),
+            "avg_revenue_per_employee": round(sum(r.get("revenue") or 0 for r in rows) / len(rows), 2) if rows else 0.0,
+            "avg_win_rate": round(sum(r.get("win_rate") or 0 for r in rows) / len(rows), 1) if rows else 0.0,
+        }
+        data_quality = {
+            "undated_sales": sum(r.get("undated_sales") or 0 for r in rows),
+            "sales_without_revenue": sum(r.get("missing_revenue") or 0 for r in rows),
+        }
+        return {"employees": rows, "team": team, "data_quality": data_quality,
+                "date_from": date_from, "date_to": date_to}
     except Exception as e:
         logger.error(f"get_employee_performance error: {e}")
         raise HTTPException(status_code=500, detail="Failed to load employee performance")

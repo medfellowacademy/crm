@@ -24,7 +24,10 @@ from logger_config import logger
 from consolidated_reports import (
     build_monthly_trend, compute_kpis, month_breakdown, funnel_breakdown,
     source_closed_stats, compute_source_roi, select_leads,
+    enrollment_cohort, lead_cohort_conversion,
 )
+from enrollment_dates import count_undated
+from report_data import get_report_leads
 
 router = APIRouter(prefix="/api/reports/consolidated", tags=["reports"])
 
@@ -34,26 +37,7 @@ _VIEW = Depends(require_permission(P.VIEW_TEAM_ANALYTICS, P.VIEW_ANALYTICS))
 # short trend to chart — fetched once and sliced, not two separate builds.
 _MIN_TREND_MONTHS_FOR_YOY = 13
 
-_REPORT_COLS = "assigned_to,status,actual_revenue,country,course_interested,source,created_at,enrolled_at,updated_at"
-_DRILL_COLS = "id,lead_id,full_name," + _REPORT_COLS
 _DRILL_LIMIT = 500
-
-
-def _fetch_leads(names: Optional[list], cols: str = _REPORT_COLS) -> list:
-    """Every lead in scope — any status, any date. Paginates past
-    Supabase's 1000-row cap."""
-    rows: list = []
-    offset, page_size = 0, 1000
-    while True:
-        q = supabase_data.client.table("leads").select(cols)
-        if names is not None:
-            q = q.in_("assigned_to", names or ["\x00none"])
-        batch = q.range(offset, offset + page_size - 1).execute().data or []
-        rows.extend(batch)
-        if len(batch) < page_size:
-            break
-        offset += page_size
-    return rows
 
 
 def _fetch_ad_spend(month: str) -> dict:
@@ -68,7 +52,7 @@ def _fetch_ad_spend(month: str) -> dict:
 
 
 @router.get("", dependencies=[_VIEW])
-async def get_consolidated_report(
+def get_consolidated_report(
     month: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}$", description="'YYYY-MM', defaults to the current month"),
     months: int = Query(12, ge=1, le=24, description="How many months of trend to return"),
     current_user: dict = Depends(get_current_user),
@@ -77,7 +61,7 @@ async def get_consolidated_report(
         selected_month = month or datetime.now(timezone.utc).strftime("%Y-%m")
 
         scope_names = rbac.lead_scope_names(current_user)  # None => everyone
-        leads = _fetch_leads(scope_names)
+        leads = get_report_leads(supabase_data.client, scope_names)
 
         full_trend = build_monthly_trend(leads, end_month=selected_month, months=max(months, _MIN_TREND_MONTHS_FOR_YOY))
         kpis = compute_kpis(full_trend, selected_month)
@@ -90,6 +74,9 @@ async def get_consolidated_report(
             "trend": trend,
             **breakdown,
             "funnel_breakdown": funnel_breakdown(leads, selected_month),
+            "enrollment_cohort": enrollment_cohort(leads, selected_month),
+            "lead_cohort": lead_cohort_conversion(leads, selected_month),
+            "undated_enrolled": count_undated(leads),
             "source_roi": compute_source_roi(source_closed_stats(leads, selected_month), _fetch_ad_spend(selected_month)),
             "scoped": scope_names is not None,
         }
@@ -99,7 +86,7 @@ async def get_consolidated_report(
 
 
 @router.get("/leads", dependencies=[_VIEW])
-async def get_consolidated_leads(
+def get_consolidated_leads(
     month: str = Query(..., pattern=r"^\d{4}-\d{2}$"),
     kind: str = Query("in", pattern="^(in|closed)$", description="'in' = came in that month, 'closed' = enrolled that month"),
     source: Optional[str] = None,
@@ -107,13 +94,14 @@ async def get_consolidated_leads(
     course: Optional[str] = None,
     employee: Optional[str] = None,
     status: Optional[str] = None,
+    created_month: Optional[str] = Query(None, description="'YYYY-MM' (or 'Unknown') the lead originally came in"),
     current_user: dict = Depends(get_current_user),
 ):
     """The leads behind a number on the report, same RBAC scope as the report
     itself. Capped at 500 rows (`total` still reports the full match count)."""
     try:
-        leads = _fetch_leads(rbac.lead_scope_names(current_user), cols=_DRILL_COLS)
-        matched = select_leads(leads, month, kind, source, country, course, employee, status)
+        leads = get_report_leads(supabase_data.client, rbac.lead_scope_names(current_user))
+        matched = select_leads(leads, month, kind, source, country, course, employee, status, created_month)
         return {
             "total": len(matched),
             "revenue": round(sum(float(l.get("actual_revenue") or 0) for l in matched if l.get("status") == "Enrolled"), 2),
@@ -132,7 +120,7 @@ class AdSpendUpdate(BaseModel):
 
 
 @router.post("/ad-spend", dependencies=[Depends(require_permission(P.MANAGE_SETTINGS, P.EXPORT_FINANCIAL_DATA))])
-async def set_ad_spend(payload: AdSpendUpdate, current_user: dict = Depends(get_current_user)):
+def set_ad_spend(payload: AdSpendUpdate, current_user: dict = Depends(get_current_user)):
     """Enter/overwrite one source's ad spend for a month (drives the source ROI
     table). Finance and Super Admin only — it's financial data."""
     try:
