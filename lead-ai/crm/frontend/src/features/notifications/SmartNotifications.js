@@ -103,6 +103,8 @@ const SmartNotifications = () => {
       stale_hot_lead: AlertCircle,
       stale_lead_reminder: Bell,
       monthly_digest: Sparkles,
+      emi_overdue: CreditCard,
+      emi_due: Clock,
       followup_today: Phone,
       new_lead: UserPlus,
       // Legacy/aspirational types kept for forward-compat

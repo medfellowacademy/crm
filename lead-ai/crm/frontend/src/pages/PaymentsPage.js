@@ -1,9 +1,9 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Table, Card, Row, Col, Input, Select, DatePicker, Spin, Empty, Tag,
   Button, Modal, Upload, Space, Divider, Typography, Tooltip, message,
-  Descriptions, Badge, Progress,
+  Descriptions, Badge, Progress, Tabs, Alert, Result,
 } from 'antd';
 import {
   DollarSign, Users, TrendingUp, FileText, Upload as UploadIcon,
@@ -11,16 +11,16 @@ import {
 } from 'lucide-react';
 import {
   UploadOutlined, FilePdfOutlined, FileImageOutlined,
-  EyeOutlined, PlusOutlined,
+  EyeOutlined, PlusOutlined, DownloadOutlined, CheckOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import isBetween from 'dayjs/plugin/isBetween';
-import { leadsAPI, uploadAPI } from '../api/api';
+import { leadsAPI, uploadAPI, paymentsAPI } from '../api/api';
+import PayEmiModal from '../components/payments/PayEmiModal';
+import CollectionsTab from '../components/payments/CollectionsTab';
+import OverdueTab from '../components/payments/OverdueTab';
 import EnrollmentModal from '../components/leads/EnrollmentModal';
 import { useAuth } from '../context/AuthContext';
 import { fmt, safeParse, financeFor, PAYMENT_STATUS_CONFIG } from '../utils/finance';
-
-dayjs.extend(isBetween);
 
 const { Text, Title } = Typography;
 
@@ -41,8 +41,39 @@ const EmiStatus = ({ status }) => {
   return <Badge status={cfg.color} text={cfg.label} />;
 };
 
+// ── Payment log: audit ledger + follow-ups for one lead (loaded on demand) ───
+const PaymentLog = ({ leadId }) => {
+  const { data, isLoading } = useQuery({
+    queryKey: ['payment-history', leadId],
+    queryFn: () => paymentsAPI.history(leadId).then(r => r.data),
+  });
+  if (isLoading) return <Spin size="small" />;
+  const payments = data?.payments || [];
+  const followups = data?.followups || [];
+  if (!payments.length && !followups.length) return <Text type="secondary" style={{ fontSize: 12 }}>Nothing recorded yet.</Text>;
+  return (
+    <div style={{ fontSize: 12 }}>
+      {payments.map(p => (
+        <div key={`p${p.id}`} style={{ padding: '3px 0', borderBottom: '1px solid #e5e7eb' }}>
+          <b>{fmt(p.amount)}</b> EMI {Number(p.emi_index) + 1} paid {dayjs(p.paid_on).format('DD MMM YYYY')}
+          {p.method ? ` via ${p.method}` : ''} <Text type="secondary">· {p.recorded_by}</Text>
+          {p.note ? <div style={{ color: '#6b7280' }}>{p.note}</div> : null}
+        </div>
+      ))}
+      {followups.map(f => (
+        <div key={`f${f.id}`} style={{ padding: '3px 0', borderBottom: '1px solid #e5e7eb' }}>
+          <MessageIcon /> {f.note}
+          <div><Text type="secondary">{f.created_by} · {dayjs(f.created_at).format('DD MMM')}{f.promised_date ? ` · promised ${dayjs(f.promised_date).format('DD MMM')}` : ''}</Text></div>
+        </div>
+      ))}
+    </div>
+  );
+};
+const MessageIcon = () => <span style={{ color: '#9ca3af' }}>›</span>;
+
 // ── Expanded Row ─────────────────────────────────────────────────────────────
-const ExpandedRow = ({ lead, onUpload, uploading }) => {
+const ExpandedRow = ({ lead, onUpload, uploading, onMarkPaid }) => {
+  const [showLog, setShowLog] = useState(false);
   const regPayments = safeParse(lead.registration_payments, []);
   const lmsModules  = safeParse(lead.lms_modules, []);
   const { total, reg, emis, emiPaid, collected, balance: remaining, pct, overdueAmount } = financeFor(lead);
@@ -123,10 +154,25 @@ const ExpandedRow = ({ lead, onUpload, uploading }) => {
                   {isOverdue
                     ? <Badge status="error" text={<Text type="danger" style={{ fontSize: 12 }}>Overdue</Text>} />
                     : <EmiStatus status={emi.status} />}
+                  {emi.status !== 'paid' && (
+                    <Button size="small" type="link" icon={<CheckOutlined />} style={{ padding: 0 }}
+                      onClick={() => onMarkPaid({ leadId: lead.lead_id, index: i, name: lead.full_name, amount: emi.amount, dueDate: emi.date })}>
+                      Mark paid
+                    </Button>
+                  )}
+                  {emi.status === 'paid' && emi.paid_date && (
+                    <Text type="secondary" style={{ fontSize: 11 }}>on {dayjs(emi.paid_date).format('DD MMM')}{emi.method ? ` · ${emi.method}` : ''}</Text>
+                  )}
                 </div>
               );
             })
           }
+          <div style={{ marginTop: 12 }}>
+            <Button size="small" type="link" style={{ padding: 0 }} onClick={() => setShowLog(v => !v)}>
+              {showLog ? 'Hide' : 'Show'} payment log &amp; follow-ups
+            </Button>
+            {showLog && <div style={{ marginTop: 6 }}><PaymentLog leadId={lead.lead_id} /></div>}
+          </div>
         </Col>
 
         {/* Documents */}
@@ -222,58 +268,82 @@ const PaymentsPage = () => {
   const [dateRange,       setDateRange]       = useState([null, null]);
   const [uploading,       setUploading]       = useState(null);
   const [editLead,        setEditLead]        = useState(null);
+  const [payTarget,       setPayTarget]       = useState(null);
+  const [tab,             setTab]             = useState('payments');
 
-  // Counselors only see their own enrolled leads
-  const queryParams = {
-    status: 'Enrolled',
-    limit: 10000,
-    ...(isCounselor && authUser?.full_name
-      ? { assigned_to: authUser.full_name }
-      : {}),
-  };
-
-  const { data: leadsResponse, isLoading } = useQuery({
-    queryKey: ['enrolled-leads', isCounselor ? authUser?.full_name : 'all'],
-    queryFn: () => leadsAPI.getAll(queryParams).then(r => r.data),
+  // Server-side overview: enrolled leads (scoped to the caller), summary,
+  // collections, aging and due-soon in ONE small request. The date range
+  // filters by ENROLLMENT date (not last-edited, which moves on every edit).
+  const dateFrom = dateRange?.[0] ? dateRange[0].format('YYYY-MM-DD') : undefined;
+  const dateTo   = dateRange?.[1] ? dateRange[1].format('YYYY-MM-DD') : undefined;
+  const { data: overview, isLoading, isError, refetch } = useQuery({
+    queryKey: ['payments-overview', dateFrom, dateTo],
+    queryFn: () => paymentsAPI.overview({ date_from: dateFrom, date_to: dateTo }).then(r => r.data),
   });
+
+  const refreshAll = () => {
+    queryClient.invalidateQueries({ queryKey: ['payments-overview'] });
+    queryClient.invalidateQueries({ queryKey: ['payments-overdue'] });
+    queryClient.invalidateQueries({ queryKey: ['payment-history'] });
+    queryClient.invalidateQueries({ queryKey: ['enrolled-leads'] });
+    queryClient.invalidateQueries({ queryKey: ['leads'] });
+  };
 
   const updateMutation = useMutation({
     mutationFn: ({ leadId, data }) => leadsAPI.update(leadId, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['enrolled-leads'] });
-      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      refreshAll();
       setEditLead(null);
       message.success('Payment details updated');
     },
   });
 
-  const leads = leadsResponse?.leads || (Array.isArray(leadsResponse) ? leadsResponse : []);
+  const leads = useMemo(() => overview?.leads || [], [overview]);
 
   const filtered = leads.filter(l => {
-    if (searchText && !l.full_name?.toLowerCase().includes(searchText.toLowerCase()) &&
-        !l.phone?.includes(searchText)) return false;
+    const q = searchText.trim().toLowerCase();
+    if (q && !l.full_name?.toLowerCase().includes(q) && !l.phone?.includes(searchText.trim()) &&
+        !l.email?.toLowerCase().includes(q)) return false;
     if (filterCounselor && l.assigned_to !== filterCounselor) return false;
     if (filterCourse    && l.course_interested !== filterCourse) return false;
     if (filterStatus    && financeFor(l).paymentStatus !== filterStatus) return false;
-    if (dateRange[0] && dateRange[1]) {
-      const d = dayjs(l.updated_at || l.created_at);
-      if (!d.isBetween(dateRange[0], dateRange[1], 'day', '[]')) return false;
-    }
     return true;
   });
 
-  // Summary stats — every card below is derived from the same financeFor()
-  // helper the table/expanded-row use, so the top-line numbers can never
-  // disagree with what a counselor sees when they expand an individual lead.
+  // Summary cards — derived from the same financeFor() the table and the
+  // expanded row use, so the top-line numbers always match what you see per lead.
   const finances       = filtered.map(financeFor);
   const totalRevenue   = finances.reduce((s, f) => s + f.total,     0);
   const totalCollected = finances.reduce((s, f) => s + f.collected, 0);
   const totalBalance   = finances.reduce((s, f) => s + f.balance,   0);
   const totalOverdue   = finances.reduce((s, f) => s + f.overdueAmount, 0);
   const overdueCount   = finances.filter(f => f.overdueAmount > 0).length;
+  const collectionRate = totalRevenue > 0 ? Math.round((totalCollected / totalRevenue) * 1000) / 10 : 0;
 
   const counselors = [...new Set(leads.map(l => l.assigned_to).filter(Boolean))];
   const courses    = [...new Set(leads.map(l => l.course_interested).filter(Boolean))];
+
+  const exportCsv = () => {
+    const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const header = ['Lead ID', 'Name', 'Phone', 'Email', 'Counselor', 'Course', 'Country', 'Enrolled', 'Total fee', 'Collected', 'Balance', 'Overdue', 'Status', 'EMIs paid'];
+    const body = filtered.map(l => {
+      const f = financeFor(l);
+      const emis = safeParse(l.emi_details, []);
+      return [l.lead_id, l.full_name, l.phone, l.email, l.assigned_to, l.course_interested, l.country,
+        (l.enroll_date || l.enrolled_at) ? dayjs(l.enroll_date || l.enrolled_at).format('YYYY-MM-DD') : '',
+        f.total, f.collected, f.balance, f.overdueAmount, PAYMENT_STATUS_CONFIG[f.paymentStatus].label,
+        `${emis.filter(e => e.status === 'paid').length}/${emis.length}`].map(esc).join(',');
+    });
+    const blob = new Blob(['\uFEFF' + [header.map(esc).join(','), ...body].join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `payments-${dayjs().format('YYYY-MM-DD')}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
 
   // Uploads must run one-at-a-time per lead+docType: the backend appends to
   // the `documents` array via read-modify-write (fetch lead -> push -> save
@@ -320,6 +390,7 @@ const PaymentsPage = () => {
         <div>
           <div style={{ fontWeight: 600 }}>{t}</div>
           <div style={{ fontSize: 12, color: '#6b7280' }}>{r.phone}</div>
+          {r.email && <div style={{ fontSize: 11, color: '#9ca3af' }}>{r.email}</div>}
         </div>
       ),
     },
@@ -339,7 +410,7 @@ const PaymentsPage = () => {
       title: 'Total Fee',
       dataIndex: 'actual_revenue',
       key: 'actual_revenue',
-      render: v => Number(v) ? <Text strong style={{ color: '#059669' }}>{fmt(Number(v))}</Text> : <Text type="secondary">—</Text>,
+      render: v => Number(v) ? <Text strong style={{ color: '#059669' }}>{fmt(Number(v))}</Text> : <Tag color="warning">Fee missing</Tag>,
       sorter: (a, b) => (Number(a.actual_revenue) || 0) - (Number(b.actual_revenue) || 0),
       defaultSortOrder: 'descend',
     },
@@ -404,10 +475,12 @@ const PaymentsPage = () => {
     },
     {
       title: 'Enrolled',
-      dataIndex: 'updated_at',
       key: 'enrolled_at',
-      render: d => d ? dayjs(d).format('DD MMM YYYY') : '—',
-      sorter: (a, b) => dayjs(a.updated_at).unix() - dayjs(b.updated_at).unix(),
+      render: (_, r) => {
+        const d = r.enroll_date || r.enrolled_at;
+        return d ? dayjs(d).format('DD MMM YYYY') : <Text type="secondary">Date missing</Text>;
+      },
+      sorter: (a, b) => dayjs(a.enroll_date || a.enrolled_at || 0).unix() - dayjs(b.enroll_date || b.enrolled_at || 0).unix(),
     },
     ...(!isCounselor ? [{
       title: 'Counselor',
@@ -448,69 +521,38 @@ const PaymentsPage = () => {
     },
   ];
 
-  return (
-    <div style={{ padding: '24px' }}>
-      <div style={{ marginBottom: 24 }}>
-        <h1 style={{ fontSize: 28, fontWeight: 600, marginBottom: 4 }}>Enrolled Leads & Payments</h1>
-        <p style={{ color: 'var(--text-secondary)' }}>
-          {isCounselor
-            ? `Your enrolled leads — ${authUser?.full_name}`
-            : 'Track fees, EMI schedules and documents for all enrolled leads'}
-        </p>
-      </div>
+  const cards = [
+    { label: 'Total Revenue',   value: fmt(totalRevenue),   sub: `₹${(totalRevenue / 100000).toFixed(1)}L`,   bg: 'linear-gradient(135deg,#10b981,#059669)', Icon: DollarSign },
+    { label: 'Collected',       value: fmt(totalCollected), sub: `${collectionRate}% of fees`,                bg: 'linear-gradient(135deg,#8b5cf6,#7c3aed)', Icon: TrendingUp },
+    { label: 'Balance Pending', value: fmt(totalBalance),   sub: `₹${(totalBalance / 100000).toFixed(1)}L`,   bg: 'linear-gradient(135deg,#f59e0b,#d97706)', Icon: FileText },
+    {
+      label: 'Overdue', value: fmt(totalOverdue),
+      sub: overdueCount > 0 ? `${overdueCount} lead${overdueCount > 1 ? 's' : ''}` : 'all on time',
+      bg: totalOverdue > 0 ? 'linear-gradient(135deg,#ef4444,#dc2626)' : 'linear-gradient(135deg,#9ca3af,#6b7280)',
+      Icon: AlertTriangle,
+    },
+    { label: 'Total Enrolled', value: filtered.length, bg: 'linear-gradient(135deg,#3b82f6,#2563eb)', Icon: Users },
+  ];
+  const dq = overview?.data_quality || {};
 
-      {/* Summary Cards — Total Revenue is what's owed across all enrollments,
-          Collected + Balance Pending always add back up to it, and Overdue
-          is the subset of Balance Pending that's actually late (a due EMI
-          date has already passed), so at a glance you can tell "how much
-          money is coming" apart from "how much is late right now". */}
-      <div style={{
-        display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))',
-        gap: 16, marginBottom: 24,
-      }}>
-        {[
-          { label: 'Total Revenue',     value: `₹${(totalRevenue/100000).toFixed(1)}L`,   bg: 'linear-gradient(135deg,#10b981,#059669)', Icon: DollarSign },
-          { label: 'Collected',         value: `₹${(totalCollected/100000).toFixed(1)}L`, bg: 'linear-gradient(135deg,#8b5cf6,#7c3aed)', Icon: TrendingUp },
-          { label: 'Balance Pending',   value: `₹${(totalBalance/100000).toFixed(1)}L`,   bg: 'linear-gradient(135deg,#f59e0b,#d97706)', Icon: FileText },
-          {
-            label: 'Overdue', value: `₹${(totalOverdue/100000).toFixed(1)}L`,
-            sub: overdueCount > 0 ? `${overdueCount} lead${overdueCount > 1 ? 's' : ''}` : null,
-            bg: totalOverdue > 0 ? 'linear-gradient(135deg,#ef4444,#dc2626)' : 'linear-gradient(135deg,#9ca3af,#6b7280)',
-            Icon: AlertTriangle,
-          },
-          { label: 'Total Enrolled',    value: filtered.length,                           bg: 'linear-gradient(135deg,#3b82f6,#2563eb)', Icon: Users },
-        ].map(({ label, value, sub, bg, Icon }) => (
-          <Card key={label} style={{ background: bg, color: 'white', borderRadius: 12, border: 'none' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-              <div>
-                <div style={{ fontSize: 12, opacity: 0.9, marginBottom: 8 }}>{label}</div>
-                <div style={{ fontSize: 26, fontWeight: 700 }}>{value}</div>
-                {sub && <div style={{ fontSize: 12, opacity: 0.9, marginTop: 4 }}>{sub}</div>}
-              </div>
-              <Icon size={32} opacity={0.3} />
-            </div>
-          </Card>
-        ))}
-      </div>
-
-      {/* Filters */}
+  const paymentsTab = (
+    <>
       <Card style={{ marginBottom: 20, borderRadius: 12 }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12 }}>
-          <Input placeholder="Search name / phone…" value={searchText}
-            onChange={e => setSearchText(e.target.value)} />
+          <Input placeholder="Search name / phone / email…" value={searchText}
+            onChange={e => setSearchText(e.target.value)} allowClear />
           {!isCounselor && (
             <Select placeholder="Counselor" value={filterCounselor} onChange={setFilterCounselor}
-              allowClear options={counselors.map(c => ({ label: c, value: c }))} />
+              allowClear showSearch options={counselors.map(c => ({ label: c, value: c }))} />
           )}
           <Select placeholder="Course" value={filterCourse} onChange={setFilterCourse}
             allowClear showSearch options={courses.map(c => ({ label: c, value: c }))} />
           <Select placeholder="Payment Status" value={filterStatus} onChange={setFilterStatus}
             allowClear options={Object.entries(PAYMENT_STATUS_CONFIG).map(([value, { label }]) => ({ label, value }))} />
-          <DatePicker.RangePicker value={dateRange} onChange={setDateRange} />
+          <DatePicker.RangePicker value={dateRange} onChange={v => setDateRange(v || [null, null])}
+            placeholder={['Enrolled from', 'Enrolled to']} />
         </div>
       </Card>
-
-      {/* Table */}
       <Card style={{ borderRadius: 12 }}>
         {isLoading
           ? <div style={{ textAlign: 'center', padding: 48 }}><Spin size="large" /></div>
@@ -525,13 +567,82 @@ const PaymentsPage = () => {
                 rowClassName={r => financeFor(r).overdueAmount > 0 ? 'payments-row-overdue' : ''}
                 expandable={{
                   expandedRowRender: r => (
-                    <ExpandedRow lead={r} onUpload={handleUpload} uploading={uploading} />
+                    <ExpandedRow lead={r} onUpload={handleUpload} uploading={uploading} onMarkPaid={setPayTarget} />
                   ),
                 }}
               />
             )
         }
       </Card>
+    </>
+  );
+
+  if (isError) {
+    return (
+      <div style={{ padding: 24 }}>
+        <Result status="warning" title="Couldn't load payments"
+          subTitle="The server was slow or didn't respond. Your data is fine — try again."
+          extra={<Button type="primary" onClick={() => refetch()}>Retry</Button>} />
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: '24px' }}>
+      <div style={{ marginBottom: 24, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <h1 style={{ fontSize: 28, fontWeight: 600, marginBottom: 4 }}>Enrolled Leads & Payments</h1>
+          <p style={{ color: 'var(--text-secondary)', margin: 0 }}>
+            {isCounselor
+              ? `Your enrolled leads — ${authUser?.full_name}`
+              : 'Track fees, EMI schedules, collections and overdue accounts'}
+          </p>
+        </div>
+        <Button icon={<DownloadOutlined />} onClick={exportCsv} disabled={!filtered.length}>Export CSV</Button>
+      </div>
+
+      {(dq.missing_fee > 0 || dq.undated_enrollments > 0) && (
+        <Alert
+          type="warning" showIcon closable style={{ marginBottom: 16 }}
+          message="Some enrollments have incomplete data"
+          description={[
+            dq.missing_fee > 0 && `${dq.missing_fee} enrolled lead(s) have no total fee, so their revenue and balance read as zero.`,
+            dq.undated_enrollments > 0 && `${dq.undated_enrollments} have no enrollment date and are hidden whenever an enrolled-date range is set.`,
+            'Use "Edit Payment" on those rows to fill them in.',
+          ].filter(Boolean).join(' ')}
+        />
+      )}
+
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))',
+        gap: 16, marginBottom: 24,
+      }}>
+        {cards.map(({ label, value, sub, bg, Icon }) => (
+          <Card key={label} style={{ background: bg, color: 'white', borderRadius: 12, border: 'none' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+              <div>
+                <div style={{ fontSize: 12, opacity: 0.9, marginBottom: 8 }}>{label}</div>
+                <div style={{ fontSize: 22, fontWeight: 700 }}>{value}</div>
+                {sub && <div style={{ fontSize: 12, opacity: 0.9, marginTop: 4 }}>{sub}</div>}
+              </div>
+              <Icon size={32} opacity={0.3} />
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      <Tabs
+        activeKey={tab}
+        onChange={setTab}
+        destroyInactiveTabPane
+        items={[
+          { key: 'payments', label: 'Enrolled & Payments', children: paymentsTab },
+          { key: 'collections', label: 'Collections', children: <CollectionsTab data={overview} /> },
+          { key: 'overdue', label: `Overdue${overview?.summary?.overdue_leads ? ` (${overview.summary.overdue_leads})` : ''}`, children: <OverdueTab onChanged={refreshAll} /> },
+        ]}
+      />
+
+      <PayEmiModal target={payTarget} onClose={() => setPayTarget(null)} onDone={refreshAll} />
 
       {/* Edit Payment Modal */}
       <EnrollmentModal

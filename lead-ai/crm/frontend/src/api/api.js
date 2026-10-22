@@ -209,6 +209,14 @@ export const employeePerformanceAPI = {
 };
 
 // Consolidated Reports — monthly growth, sales, revenue, breakdowns
+export const paymentsAPI = {
+  overview: (params) => api.get('/api/payments/enrolled', { params }),
+  overdue: () => api.get('/api/payments/overdue'),
+  markEmiPaid: (leadId, index, data) => api.post(`/api/payments/${leadId}/emis/${index}/pay`, data),
+  addFollowup: (leadId, data) => api.post(`/api/payments/${leadId}/followups`, data),
+  history: (leadId) => api.get(`/api/payments/${leadId}/followups`),
+};
+
 export const consolidatedReportsAPI = {
   get: (params) => api.get('/api/reports/consolidated', { params }),
   leads: (params) => api.get('/api/reports/consolidated/leads', { params }),

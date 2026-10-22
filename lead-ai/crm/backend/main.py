@@ -134,6 +134,7 @@ from brochures_router import router as brochures_router
 from preferences_router import router as preferences_router
 from reengagement_router import router as reengagement_router
 from employee_performance_router import router as employee_performance_router
+from payments_router import router as payments_router
 from consolidated_reports_router import router as consolidated_reports_router
 
 # Password hashing
@@ -718,6 +719,7 @@ app.include_router(brochures_router)
 app.include_router(preferences_router)
 app.include_router(reengagement_router)
 app.include_router(employee_performance_router)
+app.include_router(payments_router)
 app.include_router(consolidated_reports_router)
 
 logger.info("🚀 FastAPI application initialized with logging and error handling")
@@ -3599,6 +3601,30 @@ def _compute_raw_notifications(scope_names: Optional[list] = None) -> list:
             "lead_name": lead['full_name'],
             "event_time": lead.get('created_at'),
         })
+
+    # EMI reminders — overdue and due-within-7-days instalments on enrolled
+    # leads, scoped like everything else here (see payments_analytics.py).
+    try:
+        import payments_analytics as _pa
+        from payments_router import scoped_enrolled as _scoped_enrolled
+        for n in _pa.emi_notifications(_scoped_enrolled(scope_names), _pa.today_ist()):
+            lead = n["lead"]
+            overdue = n["kind"] == "emi_overdue"
+            notifications.append({
+                "type": n["kind"],
+                "severity": "error" if overdue else "info",
+                "title": (f"EMI overdue — {lead.get('full_name')}" if overdue else f"EMI due soon — {lead.get('full_name')}"),
+                "message": (f"{n['count']} EMI{'s' if n['count'] != 1 else ''} · ₹{n['amount']:,.0f} · "
+                            + (f"oldest {n['days']} day{'s' if n['days'] != 1 else ''} late" if overdue
+                               else ("due today" if n['days'] == 0 else f"next due in {n['days']} day{'s' if n['days'] != 1 else ''}"))
+                            + f" · {lead.get('assigned_to') or 'Unassigned'}"),
+                "lead_id": lead.get("id"),
+                "lead_string_id": lead.get("lead_id"),
+                "lead_name": lead.get("full_name"),
+                "event_time": now_iso,
+            })
+    except Exception as e:
+        logger.warning(f"EMI notifications unavailable: {e}")
 
     # Monthly digest — in the first 3 days of a month, surface last month's
     # headline numbers (same scope as everything else here) with a pointer to
