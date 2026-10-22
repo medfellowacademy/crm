@@ -8,7 +8,7 @@ with no owner, e.g. created before boards were per-user).
 """
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -108,6 +108,7 @@ class BoardUpdate(BaseModel):
     course_name: Optional[str] = Field(None, min_length=1, max_length=200)
     doctor_name: Optional[str] = Field(None, max_length=200)  # send "" to clear it
     total_seats: Optional[int] = Field(None, ge=1, le=500)
+    enrolled_seats: Optional[List[int]] = Field(None, max_length=500)  # the full set, replaces the saved one
 
 
 @router.patch("/{board_id}")
@@ -120,10 +121,15 @@ def update_board(board_id: int, body: BoardUpdate, current_user: dict = Depends(
             raise HTTPException(status_code=422, detail="Course name cannot be empty")
     if "doctor_name" in body.model_fields_set:
         patch["doctor_name"] = (body.doctor_name or "").strip() or None
+    final_total = body.total_seats if body.total_seats is not None else int(row.get("total_seats") or 0)
     if body.total_seats is not None:
         patch["total_seats"] = body.total_seats
+    if body.enrolled_seats is not None:
+        # "Save" sends the whole edited board in one request; anything outside 1..total is dropped
+        patch["enrolled_seats"] = vacancy.clean_seats(body.enrolled_seats, final_total)
+    elif body.total_seats is not None:
         # shrinking the board drops seats that no longer exist
-        patch["enrolled_seats"] = vacancy.clean_seats(row.get("enrolled_seats"), body.total_seats)
+        patch["enrolled_seats"] = vacancy.clean_seats(row.get("enrolled_seats"), final_total)
     if not patch:
         return _shape(row, current_user)
     return _save(board_id, patch, current_user)

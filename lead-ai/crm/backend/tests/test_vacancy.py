@@ -185,3 +185,26 @@ def test_doctor_name_on_create_and_not_editable_by_others(client):
     assert b["doctor_name"] == "Dr. Sen"
     client.as_user(RAVI)
     assert client.patch(f"/api/vacancy-boards/{b['id']}", json={"doctor_name": "hijack"}).status_code == 404
+
+
+def test_save_sends_the_whole_edited_board_in_one_request(client):
+    b = client.patch("/api/vacancy-boards/1", json={
+        "course_name": "Hysteroscopy", "doctor_name": "Dr. Rao", "total_seats": 12, "enrolled_seats": [3, 1, 2, 3, 40, 0],
+    }).json()
+    assert b["course_name"] == "Hysteroscopy" and b["doctor_name"] == "Dr. Rao" and b["total_seats"] == 12
+    assert b["enrolled_seats"] == [1, 2, 3] and b["enrolled"] == 3 and b["available"] == 9
+
+
+def test_save_can_clear_every_seat(client):
+    assert client.patch("/api/vacancy-boards/1", json={"enrolled_seats": []}).json()["enrolled_seats"] == []
+
+
+def test_seats_are_checked_against_the_new_total_when_both_change(client):
+    b = client.patch("/api/vacancy-boards/1", json={"total_seats": 5, "enrolled_seats": [4, 5, 6, 30]}).json()
+    assert b["enrolled_seats"] == [4, 5]
+
+
+def test_cannot_save_seats_onto_someone_elses_board(client):
+    client.as_user(RAVI)
+    assert client.patch("/api/vacancy-boards/1", json={"enrolled_seats": [9]}).status_code == 404
+    assert client.tables["vacancy_boards"][0]["enrolled_seats"] == [1, 2]

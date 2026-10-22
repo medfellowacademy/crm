@@ -1,14 +1,27 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Tabs, Button, InputNumber, Input, Popconfirm, Spin, Empty, Result, Tooltip, message } from 'antd';
-import { PlusOutlined, DeleteOutlined, EditOutlined, CheckOutlined } from '@ant-design/icons';
+import { Tabs, Button, InputNumber, Input, Popconfirm, Spin, Empty, Result, Tooltip, Dropdown, message } from 'antd';
+import { PlusOutlined, DeleteOutlined, EditOutlined, CheckOutlined, SaveOutlined, UndoOutlined, DownloadOutlined } from '@ant-design/icons';
 import { vacancyAPI } from '../api/api';
+import { downloadBoardPng, downloadBoardPdf } from '../utils/vacancyExport';
 
 const GREEN = '#16a34a';
 const YELLOW = '#facc15';
 const NAVY = '#0b3d91';
 
 const errText = (e, fallback) => e?.response?.data?.detail || fallback;
+
+// ── Drafts: edits stay local until "Save changes" ───────────────────────────
+const FIELDS = ['course_name', 'doctor_name', 'total_seats', 'enrolled_seats'];
+const withStats = (b) => {
+  const total = b.total_seats;
+  const seats = [...new Set(b.enrolled_seats)].filter((n) => n >= 1 && n <= total).sort((x, y) => x - y);
+  return { ...b, enrolled_seats: seats, enrolled: seats.length, available: Math.max(0, total - seats.length),
+    percent: total ? Math.round((seats.length / total) * 100) : 0 };
+};
+const sameBoard = (a, b) => a.course_name === b.course_name && (a.doctor_name || '') === (b.doctor_name || '')
+  && a.total_seats === b.total_seats && a.enrolled_seats.length === b.enrolled_seats.length
+  && a.enrolled_seats.every((n, i) => n === b.enrolled_seats[i]);
 
 function EditableTitle({ value, onSave, placeholder = 'Click to edit', className = 'vb-title', allowEmpty = false, fontSize = 24 }) {
   const [editing, setEditing] = useState(false);
@@ -46,12 +59,45 @@ function EditableTitle({ value, onSave, placeholder = 'Click to edit', className
   );
 }
 
-function Board({ board, onRename, onDoctor, onResize, onToggle, onDelete, saving }) {
+function Board({ board, dirty, saving, onRename, onDoctor, onResize, onToggle, onDelete, onSave, onDiscard }) {
   const seats = useMemo(() => new Set(board.enrolled_seats), [board.enrolled_seats]);
   const numbers = useMemo(() => Array.from({ length: board.total_seats }, (_, i) => i + 1), [board.total_seats]);
+  const [exporting, setExporting] = useState(false);
+
+  const exportAs = async ({ key }) => {
+    setExporting(true);
+    try {
+      if (key === 'png') await downloadBoardPng(board); else await downloadBoardPdf(board);
+    } catch (e) {
+      message.error('Could not create the download');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <div>
+      <div className={`vb-actions ${dirty ? 'is-dirty' : ''}`}>
+        {dirty ? (
+          <>
+            <span className="vb-unsaved"><i /> You have unsaved changes</span>
+            <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={onSave}>Save changes</Button>
+            <Button icon={<UndoOutlined />} disabled={saving} onClick={onDiscard}>Discard</Button>
+          </>
+        ) : (
+          <span className="vb-saved"><CheckOutlined /> All changes saved</span>
+        )}
+        <Dropdown
+          menu={{ onClick: exportAs, items: [
+            { key: 'png', label: 'Download as image (PNG)' },
+            { key: 'pdf', label: 'Download as PDF' },
+          ] }}
+          trigger={['click']}
+        >
+          <Button icon={<DownloadOutlined />} loading={exporting} style={{ marginLeft: 'auto' }}>Download</Button>
+        </Dropdown>
+      </div>
+
       <div className="vb-top">
         <img className="vb-logo" src="/medfellow-logo.png" alt="MedFellow Academy" />
         <div className="vb-banner">
@@ -87,7 +133,7 @@ function Board({ board, onRename, onDoctor, onResize, onToggle, onDelete, saving
         <div className="vb-legend">
           <span><i style={{ background: YELLOW }} /> Available</span>
           <span><i style={{ background: GREEN }} /> Enrolled</span>
-          <span className="vb-hint">Click a seat to change it</span>
+          <span className="vb-hint">Click a seat to change it, then Save</span>
         </div>
       </div>
 
@@ -131,44 +177,58 @@ function Board({ board, onRename, onDoctor, onResize, onToggle, onDelete, saving
 const VacancyBoardPage = () => {
   const queryClient = useQueryClient();
   const [activeId, setActiveId] = useState(null);
-  const [saving, setSaving] = useState(false);
+  const [drafts, setDrafts] = useState({});          // { [boardId]: edited copy of the board }
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['vacancy-boards'],
     queryFn: () => vacancyAPI.list().then((r) => r.data.boards),
-    refetchInterval: 30000, // pick up other people's clicks
+    refetchInterval: 30000, // pick up other people's saved changes (never overwrites your draft)
   });
   const boards = useMemo(() => data || [], [data]);
   const active = boards.find((b) => b.id === activeId) || boards[0];
 
+  const dirtyIds = useMemo(
+    () => boards.filter((b) => drafts[b.id] && !sameBoard(withStats(drafts[b.id]), withStats(b))).map((b) => b.id),
+    [boards, drafts]
+  );
+  const viewOf = (b) => (drafts[b.id] ? withStats({ ...b, ...drafts[b.id] }) : b);
+
+  // warn before closing/reloading the tab with unsaved edits
+  useEffect(() => {
+    if (!dirtyIds.length) return undefined;
+    const warn = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirtyIds.length]);
+
+  const edit = (board, patch) => setDrafts((d) => {
+    const current = d[board.id] ? { ...board, ...d[board.id] } : { ...board };
+    let next = { ...current, ...patch };
+    if (patch.total_seats != null) next.enrolled_seats = next.enrolled_seats.filter((n) => n <= patch.total_seats);
+    next = withStats(next);
+    const picked = Object.fromEntries(FIELDS.map((k) => [k, next[k]]));
+    const copy = { ...d };
+    if (sameBoard(withStats({ ...board, ...picked }), withStats(board))) delete copy[board.id]; else copy[board.id] = picked;
+    return copy;
+  });
+  const toggleSeat = (board, n) => {
+    const cur = viewOf(board);
+    const set = new Set(cur.enrolled_seats);
+    if (set.has(n)) set.delete(n); else set.add(n);
+    edit(board, { enrolled_seats: [...set] });
+  };
+  const dropDraft = (id) => setDrafts((d) => { const c = { ...d }; delete c[id]; return c; });
+
   const replaceBoard = (updated) => queryClient.setQueryData(['vacancy-boards'], (old) =>
     (old || []).map((b) => (b.id === updated.id ? updated : b)));
 
-  const toggle = useMutation({
-    mutationFn: ({ id, seat }) => vacancyAPI.toggleSeat(id, seat).then((r) => r.data),
-    onMutate: async ({ id, seat }) => {
-      await queryClient.cancelQueries({ queryKey: ['vacancy-boards'] });
-      const prev = queryClient.getQueryData(['vacancy-boards']);
-      queryClient.setQueryData(['vacancy-boards'], (old) => (old || []).map((b) => {
-        if (b.id !== id) return b;
-        const set = new Set(b.enrolled_seats);
-        if (set.has(seat)) set.delete(seat); else set.add(seat);
-        const enrolled = set.size;
-        return { ...b, enrolled_seats: [...set].sort((x, y) => x - y), enrolled, available: b.total_seats - enrolled,
-          percent: Math.round((enrolled / b.total_seats) * 100) };
-      }));
-      return { prev };
-    },
-    onError: (e, _v, ctx) => { queryClient.setQueryData(['vacancy-boards'], ctx?.prev); message.error(errText(e, 'Could not update the seat')); },
-    onSuccess: replaceBoard,
-  });
-
-  const patch = useMutation({
-    mutationFn: ({ id, body }) => vacancyAPI.update(id, body).then((r) => r.data),
-    onMutate: () => setSaving(true),
-    onSettled: () => setSaving(false),
-    onSuccess: replaceBoard,
-    onError: (e) => message.error(errText(e, 'Could not save')),
+  const save = useMutation({
+    mutationFn: ({ id, draft }) => vacancyAPI.update(id, {
+      course_name: draft.course_name, doctor_name: draft.doctor_name || '',
+      total_seats: draft.total_seats, enrolled_seats: draft.enrolled_seats,
+    }).then((r) => r.data),
+    onSuccess: (updated) => { replaceBoard(updated); dropDraft(updated.id); message.success('Saved'); },
+    onError: (e) => message.error(errText(e, 'Could not save — your changes are still here, try again')),
   });
 
   const create = useMutation({
@@ -181,6 +241,7 @@ const VacancyBoardPage = () => {
     mutationFn: (id) => vacancyAPI.remove(id),
     onSuccess: (_r, id) => {
       queryClient.setQueryData(['vacancy-boards'], (old) => (old || []).filter((b) => b.id !== id));
+      dropDraft(id);
       setActiveId(null);
       message.success('Board deleted');
     },
@@ -207,16 +268,19 @@ const VacancyBoardPage = () => {
             onChange={(k) => setActiveId(Number(k))}
             items={boards.map((b) => {
               const name = b.course_name.length > 32 ? `${b.course_name.slice(0, 30)}…` : b.course_name;
-              return { key: String(b.id), label: b.is_mine ? name : `${name} · ${b.owner_name || 'unassigned'}` };
+              const label = b.is_mine ? name : `${name} · ${b.owner_name || 'unassigned'}`;
+              return { key: String(b.id), label: dirtyIds.includes(b.id) ? <span>{label} <span className="vb-dot" title="Unsaved changes" /></span> : label };
             })}
             tabBarExtraContent={<Button size="small" icon={<PlusOutlined />} loading={create.isPending} onClick={() => create.mutate()}>New board</Button>}
           />
           <Board
-            board={active} saving={saving}
-            onRename={(name) => patch.mutate({ id: active.id, body: { course_name: name } })}
-            onDoctor={(name) => patch.mutate({ id: active.id, body: { doctor_name: name } })}
-            onResize={(n) => patch.mutate({ id: active.id, body: { total_seats: n } })}
-            onToggle={(seat) => toggle.mutate({ id: active.id, seat })}
+            board={viewOf(active)} dirty={dirtyIds.includes(active.id)} saving={save.isPending}
+            onRename={(name) => edit(active, { course_name: name })}
+            onDoctor={(name) => edit(active, { doctor_name: name })}
+            onResize={(n) => edit(active, { total_seats: n })}
+            onToggle={(seat) => toggleSeat(active, seat)}
+            onSave={() => save.mutate({ id: active.id, draft: viewOf(active) })}
+            onDiscard={() => dropDraft(active.id)}
             onDelete={() => remove.mutate(active.id)}
           />
         </>
@@ -261,6 +325,13 @@ const CSS = `
 .vb-seat:focus-visible { outline: 3px solid ${NAVY}; outline-offset: 2px; }
 .vb-seat.is-enrolled { background: linear-gradient(180deg, #22c55e, ${GREEN}); color:#fff; }
 .vb-seat.is-available { background: linear-gradient(180deg, #fde047, ${YELLOW}); color:#713f12; }
+.vb-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:10px 14px; margin-bottom:14px; border-radius:12px;
+  background:#f1f5f9; border:1px solid transparent; position:sticky; top:0; z-index:5; }
+.vb-actions.is-dirty { background:#fffbeb; border-color:#fcd34d; }
+.vb-unsaved { font-weight:700; color:#92400e; display:inline-flex; align-items:center; gap:8px; margin-right:6px; }
+.vb-unsaved i { width:10px; height:10px; border-radius:50%; background:#f59e0b; display:inline-block; }
+.vb-saved { color:#15803d; font-weight:600; }
+.vb-dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#f59e0b; vertical-align:middle; }
 .vb-toolbar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:16px; color:#475569; }
 .vb-meta { margin-left:auto; font-size:13px; color:#94a3b8; }
 `;
