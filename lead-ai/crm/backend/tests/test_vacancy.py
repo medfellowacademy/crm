@@ -47,7 +47,7 @@ class FakeQuery:
     def execute(self):
         rows = self.db.tables.setdefault(self.table, [])
         if self.op == "insert":
-            row = {"id": len(rows) + 1, "enrolled_seats": [], **self.payload}
+            row = {"id": max([r["id"] for r in rows] + [0]) + 1, "enrolled_seats": [], **self.payload}
             rows.append(row)
             return type("R", (), {"data": [row]})
         if self.op == "update":
@@ -66,30 +66,78 @@ class FakeClient:
     def table(self, name): return FakeQuery(self, name)
 
 
+ASHA = {"role": "Counselor", "full_name": "Asha", "email": "asha@x.in"}
+RAVI = {"role": "Counselor", "full_name": "Ravi", "email": "ravi@x.in"}
+ADMIN = {"role": "Super Admin", "full_name": "Boss", "email": "boss@x.in"}
+
+
 @pytest.fixture()
 def client(monkeypatch):
-    tables = {"vacancy_boards": [{"id": 1, "course_name": "Laparoscopy", "total_seats": 30, "enrolled_seats": [1, 2]}]}
+    tables = {"vacancy_boards": [
+        {"id": 1, "course_name": "Asha's Laparoscopy", "total_seats": 30, "enrolled_seats": [1, 2], "owner_email": "asha@x.in", "owner_name": "Asha"},
+        {"id": 2, "course_name": "Ravi's Cardiology", "total_seats": 20, "enrolled_seats": [], "owner_email": "ravi@x.in", "owner_name": "Ravi"},
+        {"id": 3, "course_name": "Old shared board", "total_seats": 30, "enrolled_seats": [], "owner_email": None, "owner_name": None},
+    ]}
     monkeypatch.setattr(vr.supabase_data, "client", FakeClient(tables), raising=False)
     app = FastAPI()
     app.include_router(vr.router)
-    user = {"role": "Manager", "full_name": "Mgr", "email": "m@x.in"}
-    app.dependency_overrides[get_current_user] = lambda: user
-    app.dependency_overrides[rbac.current_user] = lambda: user
+    holder = {"user": ASHA}
+    app.dependency_overrides[get_current_user] = lambda: holder["user"]
+    app.dependency_overrides[rbac.current_user] = lambda: holder["user"]
     c = TestClient(app)
-    c.tables, c.user = tables, user
+    c.tables = tables
+    c.as_user = lambda u: holder.update(user=u)
     return c
 
 
-def test_list_shapes_boards_with_stats(client):
+def test_each_user_sees_only_their_own_boards(client):
+    names = [b["course_name"] for b in client.get("/api/vacancy-boards").json()["boards"]]
+    assert names == ["Asha's Laparoscopy"]
+    client.as_user(RAVI)
+    assert [b["course_name"] for b in client.get("/api/vacancy-boards").json()["boards"]] == ["Ravi's Cardiology"]
+
+
+def test_board_shape_has_stats_and_ownership(client):
     b = client.get("/api/vacancy-boards").json()["boards"][0]
-    assert b["course_name"] == "Laparoscopy" and b["enrolled"] == 2 and b["available"] == 28 and b["percent"] == 7
+    assert b["enrolled"] == 2 and b["available"] == 28 and b["percent"] == 7 and b["is_mine"] is True
+
+
+def test_super_admin_sees_everything_including_unowned_boards(client):
+    client.as_user(ADMIN)
+    boards = client.get("/api/vacancy-boards").json()["boards"]
+    assert {b["id"] for b in boards} == {1, 2, 3}
+    assert {b["id"]: b["is_mine"] for b in boards} == {1: False, 2: False, 3: False}
+
+
+def test_cannot_touch_someone_elses_board(client):
+    client.as_user(RAVI)
+    assert client.post("/api/vacancy-boards/1/seats/5/toggle").status_code == 404
+    assert client.patch("/api/vacancy-boards/1", json={"course_name": "hijacked"}).status_code == 404
+    assert client.delete("/api/vacancy-boards/1").status_code == 404
+    assert client.post("/api/vacancy-boards/3/seats/5/toggle").status_code == 404   # unowned board too
+    assert client.tables["vacancy_boards"][0]["enrolled_seats"] == [1, 2]
+    assert client.tables["vacancy_boards"][0]["course_name"] == "Asha's Laparoscopy"
+
+
+def test_super_admin_can_manage_any_board(client):
+    client.as_user(ADMIN)
+    assert client.post("/api/vacancy-boards/2/seats/1/toggle").json()["enrolled_seats"] == [1]
+    assert client.delete("/api/vacancy-boards/3").status_code == 200
+
+
+def test_any_user_can_create_their_own_board(client):
+    client.as_user(RAVI)
+    b = client.post("/api/vacancy-boards", json={"course_name": "Cardiology batch 2", "total_seats": 25}).json()
+    assert b["total_seats"] == 25 and b["is_mine"] is True and b["owner_name"] == "Ravi"
+    assert len(client.get("/api/vacancy-boards").json()["boards"]) == 2
+    client.as_user(ASHA)
+    assert all(x["course_name"] != "Cardiology batch 2" for x in client.get("/api/vacancy-boards").json()["boards"])
 
 
 def test_click_toggles_a_seat_and_records_who(client):
     b = client.post("/api/vacancy-boards/1/seats/5/toggle").json()
-    assert b["enrolled_seats"] == [1, 2, 5] and b["updated_by"] == "Mgr"
-    b = client.post("/api/vacancy-boards/1/seats/5/toggle").json()
-    assert b["enrolled_seats"] == [1, 2]
+    assert b["enrolled_seats"] == [1, 2, 5] and b["updated_by"] == "Asha"
+    assert client.post("/api/vacancy-boards/1/seats/5/toggle").json()["enrolled_seats"] == [1, 2]
 
 
 def test_toggle_bad_seat_and_unknown_board(client):
@@ -108,13 +156,17 @@ def test_blank_name_rejected(client):
     assert client.patch("/api/vacancy-boards/1", json={"course_name": "   "}).status_code == 422
 
 
-def test_create_and_delete(client):
-    b = client.post("/api/vacancy-boards", json={"course_name": "Cardiology", "total_seats": 20}).json()
-    assert b["total_seats"] == 20 and b["enrolled"] == 0
-    assert client.delete(f"/api/vacancy-boards/{b['id']}").status_code == 200
-    assert len(client.get("/api/vacancy-boards").json()["boards"]) == 1
+def test_delete_own_board(client):
+    assert client.delete("/api/vacancy-boards/1").status_code == 200
+    assert client.get("/api/vacancy-boards").json()["boards"] == []
 
 
 def test_seat_count_limits(client):
     assert client.post("/api/vacancy-boards", json={"course_name": "X", "total_seats": 0}).status_code == 422
     assert client.post("/api/vacancy-boards", json={"course_name": "X", "total_seats": 501}).status_code == 422
+
+
+def test_account_without_email_cannot_create(client):
+    client.as_user({"role": "Counselor", "full_name": "NoMail"})
+    assert client.post("/api/vacancy-boards", json={"course_name": "X"}).status_code == 400
+    assert client.get("/api/vacancy-boards").json()["boards"] == []

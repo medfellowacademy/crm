@@ -46,7 +46,7 @@ function EditableTitle({ value, onSave }) {
   );
 }
 
-function Board({ board, canManage, onRename, onResize, onToggle, onDelete, saving }) {
+function Board({ board, onRename, onResize, onToggle, onDelete, saving }) {
   const seats = useMemo(() => new Set(board.enrolled_seats), [board.enrolled_seats]);
   const numbers = useMemo(() => Array.from({ length: board.total_seats }, (_, i) => i + 1), [board.total_seats]);
 
@@ -114,11 +114,10 @@ function Board({ board, canManage, onRename, onResize, onToggle, onDelete, savin
           }}
           onPressEnter={(e) => e.target.blur()} />
         {board.updated_by && <span className="vb-meta">Last changed by {board.updated_by}</span>}
-        {canManage && (
-          <Popconfirm title="Delete this board?" description="This can't be undone." okText="Delete" okButtonProps={{ danger: true }} onConfirm={onDelete}>
-            <Button danger icon={<DeleteOutlined />} size="small">Delete board</Button>
-          </Popconfirm>
-        )}
+        {!board.is_mine && <span className="vb-meta" style={{ marginLeft: 0 }}>Owner: {board.owner_name || 'unassigned'}</span>}
+        <Popconfirm title="Delete this board?" description="This can't be undone." okText="Delete" okButtonProps={{ danger: true }} onConfirm={onDelete}>
+          <Button danger icon={<DeleteOutlined />} size="small">Delete board</Button>
+        </Popconfirm>
       </div>
     </div>
   );
@@ -126,11 +125,6 @@ function Board({ board, canManage, onRename, onResize, onToggle, onDelete, savin
 
 const VacancyBoardPage = () => {
   const queryClient = useQueryClient();
-  const role = useMemo(() => {
-    try { return JSON.parse(localStorage.getItem('user') || '{}')?.role; } catch { return undefined; }
-  }, []);
-  const canManage = ['Super Admin', 'Manager'].includes(role);
-
   const [activeId, setActiveId] = useState(null);
   const [saving, setSaving] = useState(false);
 
@@ -197,8 +191,8 @@ const VacancyBoardPage = () => {
     <div className="vb-page">
       <style>{CSS}</style>
       {boards.length === 0 ? (
-        <Empty description="No vacancy boards yet">
-          {canManage && <Button type="primary" icon={<PlusOutlined />} onClick={() => create.mutate()}>Create a board</Button>}
+        <Empty description="You don't have a vacancy board yet">
+          <Button type="primary" icon={<PlusOutlined />} loading={create.isPending} onClick={() => create.mutate()}>Create my board</Button>
         </Empty>
       ) : (
         <>
@@ -206,11 +200,14 @@ const VacancyBoardPage = () => {
             type="card"
             activeKey={String(active.id)}
             onChange={(k) => setActiveId(Number(k))}
-            items={boards.map((b) => ({ key: String(b.id), label: b.course_name.length > 32 ? `${b.course_name.slice(0, 30)}…` : b.course_name }))}
-            tabBarExtraContent={canManage ? <Button size="small" icon={<PlusOutlined />} loading={create.isPending} onClick={() => create.mutate()}>New board</Button> : null}
+            items={boards.map((b) => {
+              const name = b.course_name.length > 32 ? `${b.course_name.slice(0, 30)}…` : b.course_name;
+              return { key: String(b.id), label: b.is_mine ? name : `${name} · ${b.owner_name || 'unassigned'}` };
+            })}
+            tabBarExtraContent={<Button size="small" icon={<PlusOutlined />} loading={create.isPending} onClick={() => create.mutate()}>New board</Button>}
           />
           <Board
-            board={active} canManage={canManage} saving={saving}
+            board={active} saving={saving}
             onRename={(name) => patch.mutate({ id: active.id, body: { course_name: name } })}
             onResize={(n) => patch.mutate({ id: active.id, body: { total_seats: n } })}
             onToggle={(seat) => toggle.mutate({ id: active.id, seat })}
