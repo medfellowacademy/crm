@@ -40,7 +40,7 @@ function EditableTitle({ value, onSave }) {
     <Tooltip title="Click to edit the course name">
       <div onClick={() => setEditing(true)} style={{ cursor: 'text', display: 'inline-flex', alignItems: 'center', gap: 10 }}>
         <span className="vb-title">{value}</span>
-        <EditOutlined style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16 }} />
+        <EditOutlined style={{ color: '#64748b', fontSize: 16 }} />
       </div>
     </Tooltip>
   );
@@ -52,9 +52,9 @@ function Board({ board, canManage, onRename, onResize, onToggle, onDelete, savin
 
   return (
     <div>
-      <div className="vb-banner">
-        <div className="vb-banner-left"><EditableTitle value={board.course_name} onSave={onRename} /></div>
-        <div className="vb-banner-right">
+      <div className="vb-top">
+        <img className="vb-logo" src="/medfellow-logo.png" alt="MedFellow Academy" />
+        <div className="vb-banner">
           <div className="vb-big">ENROLLMENT</div>
           <div className="vb-big vb-yellow">VACANCY LIST</div>
         </div>
@@ -65,6 +65,7 @@ function Board({ board, canManage, onRename, onResize, onToggle, onDelete, savin
       </div>
 
       <div className="vb-stats">
+        <div className="vb-course"><EditableTitle value={board.course_name} onSave={onRename} /></div>
         <div className="vb-stat" style={{ borderColor: GREEN }}>
           <div className="vb-stat-num" style={{ color: GREEN }}>{board.enrolled}</div>
           <div className="vb-stat-label" style={{ color: GREEN }}>ENROLLED</div>
@@ -223,16 +224,18 @@ const VacancyBoardPage = () => {
 
 const CSS = `
 .vb-page { max-width: 1100px; margin: 0 auto; }
-.vb-banner { display:flex; align-items:center; gap:24px; flex-wrap:wrap; justify-content:space-between;
-  background: linear-gradient(135deg, ${NAVY}, #1d5fc4); border-radius: 18px 18px 18px 44px; padding: 22px 32px; color:#fff; }
-.vb-banner-left { flex: 1 1 360px; min-width: 0; }
-.vb-title { font-size: clamp(22px, 3.2vw, 34px); font-weight: 700; line-height: 1.15; }
-.vb-banner-right { border-left: 2px solid rgba(255,255,255,0.35); padding-left: 24px; }
+.vb-top { display:flex; align-items:center; gap:20px; flex-wrap:wrap; }
+.vb-logo { height: 84px; width:auto; mix-blend-mode: multiply; flex: 0 0 auto; }
+.vb-banner { flex: 1 1 360px; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center;
+  background: linear-gradient(135deg, ${NAVY}, #1d5fc4); border-radius: 18px 18px 18px 44px; padding: 16px 32px; color:#fff; }
+.vb-title { font-size: clamp(20px, 2.6vw, 30px); font-weight: 800; line-height: 1.2; color:${NAVY}; }
 .vb-big { font-size: clamp(24px, 3.4vw, 38px); font-weight: 800; letter-spacing: .5px; line-height: 1.1; }
 .vb-yellow { color: ${YELLOW}; }
 .vb-tagline { display:flex; justify-content:center; align-items:center; gap:16px; flex-wrap:wrap; margin: 16px 0 20px; color:${NAVY}; font-weight:600; }
 .vb-tagline i { width:1px; height:18px; background:#94a3b8; }
-.vb-stats { display:flex; justify-content:center; gap:24px; margin-bottom: 18px; }
+.vb-stats { display:flex; justify-content:center; align-items:center; gap:24px; margin-bottom: 18px; flex-wrap:wrap; }
+.vb-course { flex: 1 1 280px; max-width: 520px; text-align:right; }
+@media (max-width: 760px) { .vb-course { text-align:center; max-width:none; } }
 .vb-stat { min-width: 150px; text-align:center; border:2px solid; border-radius:14px; padding: 10px 24px; background:#fff; box-shadow: 0 4px 14px rgba(0,0,0,.06); }
 .vb-stat-num { font-size: 52px; font-weight: 800; line-height: 1; }
 .vb-stat-label { font-size: 18px; font-weight: 800; letter-spacing:.5px; }
