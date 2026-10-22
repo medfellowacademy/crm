@@ -236,6 +236,7 @@ const COMPANY_OPTIONS = ['MED', 'Others'];
 // (users.ui_preferences.leads_columns) so it follows them across devices.
 // 'lead_info' and 'actions' are structural and always shown.
 const LEAD_COLUMN_OPTIONS = [
+  { key: 'email', label: 'Email', group: 'Contact' },
   { key: 'country', label: 'Country', group: 'Contact' },
   { key: 'course', label: 'Course', group: 'Interest' },
   { key: 'source', label: 'Source', group: 'Interest' },
@@ -251,7 +252,8 @@ const LEAD_COLUMN_OPTIONS = [
 ];
 const LEAD_COLUMN_GROUPS = ['Contact', 'Interest', 'Ownership', 'Scoring', 'Dates'];
 const MANDATORY_LEAD_COLUMNS = ['lead_info', 'actions'];
-const DEFAULT_VISIBLE_LEAD_COLUMNS = LEAD_COLUMN_OPTIONS.map((c) => c.key); // everything — today's behaviour
+// Everything except Email, which is opt-in so existing layouts don't change.
+const DEFAULT_VISIBLE_LEAD_COLUMNS = LEAD_COLUMN_OPTIONS.map((c) => c.key).filter((k) => k !== 'email');
 const LEAD_COLUMNS_PREF_KEY = 'leads_columns';
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1272,6 +1274,16 @@ const LeadsPageEnhanced = () => {
           </div>
         );
       },
+    },
+    {
+      title: 'Email',
+      dataIndex: 'email',
+      key: 'email',
+      width: 220,
+      ellipsis: true,
+      render: (email) => email
+        ? <a href={`mailto:${email}`} onClick={(e) => e.stopPropagation()} style={{ fontSize: 12 }}>{email}</a>
+        : <Text type="secondary">—</Text>,
     },
     {
       title: 'Country',
