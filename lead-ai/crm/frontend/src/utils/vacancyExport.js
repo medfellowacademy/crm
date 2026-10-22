@@ -10,6 +10,7 @@ const FONT = "Inter, 'Segoe UI', Arial, sans-serif";
 
 const W = 1600;
 const COLS = 10;
+const M = 60; // side margin shared by logo, banner, capacity bar, seat panel and footer
 
 function path(ctx, x, y, w, h, [tl, tr, br, bl]) {
   ctx.beginPath();
@@ -63,14 +64,29 @@ export async function renderBoardCanvas(board, logoSrc = '/medfellow-logo.png') 
   const available = Number(board.available) || 0;
   const percent = Number(board.percent) || 0;
 
+  // header row (course + doctor name beside the two boxes): measured first because
+  // a long name makes it taller than the boxes and everything below must move down
+  const textMax = 640, boxW = 250, boxGap = 26, groupGap = 48, boxTop = 262, boxH = 164;
+  const probe = document.createElement('canvas').getContext('2d');
+  probe.font = `800 40px ${FONT}`;
+  const courseLines = wrap(probe, board.course_name, textMax);
+  const courseW = Math.max(0, ...courseLines.map((l) => probe.measureText(l).width));
+  probe.font = `600 27px ${FONT}`;
+  const doctorLines = board.doctor_name ? wrap(probe, board.doctor_name, textMax) : [];
+  const doctorW = Math.max(0, ...doctorLines.map((l) => probe.measureText(l).width));
+  const textW = Math.max(courseW, doctorW);
+  const blockH = courseLines.length * 48 + (doctorLines.length ? 14 + doctorLines.length * 34 : 0);
+  const rowH = Math.max(boxH, blockH + 12);
+  const dy = rowH - boxH; // how much taller the header row is than the boxes
+
   const rows = Math.max(1, Math.ceil(total / COLS));
   const gap = 14;
-  const panelX = 60, panelW = W - 120, pad = 28;
+  const panelX = M, panelW = W - 2 * M, pad = 28;
   const seatW = (panelW - pad * 2 - gap * (COLS - 1)) / COLS;
   const seatH = 84;
-  const panelTop = 565;
+  const panelTop = 590 + dy;
   const panelH = pad * 2 + rows * seatH + (rows - 1) * gap;
-  const H = panelTop + panelH + 80;
+  const H = panelTop + panelH + 84;
 
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
@@ -84,13 +100,12 @@ export async function renderBoardCanvas(board, logoSrc = '/medfellow-logo.png') 
 
   // logo
   const logo = await loadImage(logoSrc);
-  if (logo) {
-    const lh = 112, lw = lh * (logo.naturalWidth / logo.naturalHeight);
-    ctx.drawImage(logo, 48, 38, lw, lh);
-  }
+  const lh = 112;
+  const lw = logo ? lh * (logo.naturalWidth / logo.naturalHeight) : 340;
+  if (logo) ctx.drawImage(logo, M, 38, lw, lh);
 
-  // banner
-  const bx = 470, by = 42, bw = W - bx - 50, bh = 124;
+  // banner (fills the rest of the row, ends exactly on the right margin)
+  const bx = M + lw + 36, by = 42, bw = W - M - bx, bh = 124;
   const bannerFill = ctx.createLinearGradient(bx, by, bx + bw, by + bh);
   bannerFill.addColorStop(0, NAVY); bannerFill.addColorStop(1, '#1d5fc4');
   shadow(ctx, 18, 6, 'rgba(11,61,145,0.28)');
@@ -102,52 +117,53 @@ export async function renderBoardCanvas(board, logoSrc = '/medfellow-logo.png') 
 
   // tagline
   ctx.fillStyle = NAVY; ctx.font = `600 25px ${FONT}`;
-  ctx.fillText('Limited Seats    |    High Demand    |    Be a Part of MedFellow', W / 2, 218);
+  ctx.fillText('Limited Seats    |    High Demand    |    Be a Part of MedFellow', W / 2, 220);
 
-  // course + doctor (right-aligned, vertically centred on the stat boxes)
-  const textRight = 770, textMax = 640;
+  // course + doctor, then the two boxes, centred horizontally as ONE group so the
+  // spacing on the left and right is equal whatever the course name length
   ctx.textAlign = 'right';
-  ctx.font = `800 40px ${FONT}`;
-  const courseLines = wrap(ctx, board.course_name, textMax);
-  ctx.font = `600 27px ${FONT}`;
-  const doctorLines = board.doctor_name ? wrap(ctx, board.doctor_name, textMax) : [];
-  const blockH = courseLines.length * 48 + (doctorLines.length ? 12 + doctorLines.length * 34 : 0);
-  let ty = 335 - blockH / 2 + 38;
+  const boxesW = boxW * 2 + boxGap;
+  const groupX = (W - (textW + groupGap + boxesW)) / 2;
+  const textRight = groupX + textW;
+  const boxesX = textRight + groupGap;
+  const boxY = boxTop + dy / 2;               // boxes sit in the middle of the row
+
+  let ty = boxTop + rowH / 2 - blockH / 2 + 36;
   ctx.fillStyle = NAVY; ctx.font = `800 40px ${FONT}`;
   courseLines.forEach((l) => { ctx.fillText(l, textRight, ty); ty += 48; });
-  ty += doctorLines.length ? -4 : 0;
+  ty += doctorLines.length ? 2 : 0;
   ctx.fillStyle = '#475569'; ctx.font = `600 27px ${FONT}`;
   doctorLines.forEach((l) => { ctx.fillText(l, textRight, ty + 12); ty += 34; });
 
   // stat boxes
   const stat = (x, num, label, colour, numColour) => {
     shadow(ctx, 16, 5, 'rgba(15,23,42,0.10)');
-    ctx.fillStyle = '#fff'; round(ctx, x, 252, 250, 170, 22); ctx.fill();
+    ctx.fillStyle = '#fff'; round(ctx, x, boxY, boxW, boxH, 22); ctx.fill();
     noShadow(ctx);
-    ctx.lineWidth = 4; ctx.strokeStyle = colour; round(ctx, x, 252, 250, 170, 22); ctx.stroke();
+    ctx.lineWidth = 4; ctx.strokeStyle = colour; round(ctx, x, boxY, boxW, boxH, 22); ctx.stroke();
     ctx.textAlign = 'center';
-    ctx.fillStyle = numColour; ctx.font = `800 88px ${FONT}`; ctx.fillText(String(num), x + 125, 350);
-    ctx.font = `800 30px ${FONT}`; ctx.fillText(label, x + 125, 399);
+    ctx.fillStyle = numColour; ctx.font = `800 88px ${FONT}`; ctx.fillText(String(num), x + boxW / 2, boxY + 96);
+    ctx.font = `800 30px ${FONT}`; ctx.fillText(label, x + boxW / 2, boxY + 142);
   };
-  stat(810, enrolled, 'ENROLLED', GREEN, GREEN);
-  stat(1085, available, 'AVAILABLE', '#eab308', AMBER);
+  stat(boxesX, enrolled, 'ENROLLED', GREEN, GREEN);
+  stat(boxesX + boxW + boxGap, available, 'AVAILABLE', '#eab308', AMBER);
 
   // capacity
   ctx.textAlign = 'left'; ctx.fillStyle = NAVY; ctx.font = `700 27px ${FONT}`;
-  ctx.fillText('Capacity filled', 80, 478);
-  ctx.textAlign = 'right'; ctx.fillText(`${percent}%`, W - 80, 478);
-  ctx.fillStyle = '#e5e7eb'; round(ctx, 80, 494, W - 160, 16, 8); ctx.fill();
+  ctx.fillText('Capacity filled', M, 478 + dy);
+  ctx.textAlign = 'right'; ctx.fillText(`${percent}%`, W - M, 478 + dy);
+  ctx.fillStyle = '#e5e7eb'; round(ctx, M, 494 + dy, W - 2 * M, 16, 8); ctx.fill();
   if (percent > 0) {
-    const fill = ctx.createLinearGradient(80, 0, W - 80, 0);
+    const fill = ctx.createLinearGradient(M, 0, W - M, 0);
     fill.addColorStop(0, '#22c55e'); fill.addColorStop(1, GREEN);
-    ctx.fillStyle = fill; round(ctx, 80, 494, Math.max(16, (W - 160) * Math.min(1, percent / 100)), 16, 8); ctx.fill();
+    ctx.fillStyle = fill; round(ctx, M, 494 + dy, Math.max(16, (W - 2 * M) * Math.min(1, percent / 100)), 16, 8); ctx.fill();
   }
   // legend
   ctx.textAlign = 'left'; ctx.font = `600 24px ${FONT}`;
-  ctx.fillStyle = YELLOW; round(ctx, 80, 531, 24, 24, 6); ctx.fill();
-  ctx.fillStyle = NAVY; ctx.fillText('Available', 114, 551);
-  ctx.fillStyle = GREEN; round(ctx, 290, 531, 24, 24, 6); ctx.fill();
-  ctx.fillStyle = NAVY; ctx.fillText('Enrolled', 324, 551);
+  ctx.fillStyle = YELLOW; round(ctx, M, 535 + dy, 24, 24, 6); ctx.fill();
+  ctx.fillStyle = NAVY; ctx.fillText('Available', M + 34, 555 + dy);
+  ctx.fillStyle = GREEN; round(ctx, M + 210, 535 + dy, 24, 24, 6); ctx.fill();
+  ctx.fillStyle = NAVY; ctx.fillText('Enrolled', M + 244, 555 + dy);
 
   // seats panel
   shadow(ctx, 22, 8, 'rgba(15,23,42,0.10)');
@@ -171,8 +187,8 @@ export async function renderBoardCanvas(board, logoSrc = '/medfellow-logo.png') 
 
   // footer
   ctx.textAlign = 'right'; ctx.fillStyle = '#94a3b8'; ctx.font = `500 22px ${FONT}`;
-  ctx.fillText(`As on ${today()}`, W - 60, H - 28);
-  ctx.textAlign = 'left'; ctx.fillText('MedFellow Academy', 60, H - 28);
+  ctx.fillText(`As on ${today()}`, W - M, H - 30);
+  ctx.textAlign = 'left'; ctx.fillText('MedFellow Academy', M, H - 30);
   return canvas;
 }
 
