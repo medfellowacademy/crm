@@ -22,6 +22,7 @@ is dependency-free (no app imports) so anything can use it.
 import contextvars
 import json
 import threading
+import time
 from contextlib import contextmanager
 from typing import Callable, Optional
 
@@ -138,13 +139,44 @@ def own_blocked(role_is_admin: bool, user: dict, flag: str) -> bool:
 # --- guarded Supabase client ------------------------------------------------------
 
 # Postgres functions that aggregate over every lead (they would count ownerless
-# ones). While the guard is active they are refused so the callers fall back to
-# their table scans, which ARE guarded.
+# ones). While the guard is active they are called with `p_exclude_unassigned =
+# true`, which the updated database functions understand (see migrations/
+# 20261022_lead_aggregate_rpcs_exclude_unassigned.sql.NOT_APPLIED). Until that SQL
+# has been run the call fails with "function not found"; we then refuse the
+# shortcut so callers fall back to their table scans, which ARE guarded, and
+# re-check after a minute — so running the SQL later just starts working.
 _LEAD_AGGREGATE_RPCS = {"dashboard_rollup", "lead_filter_options", "lead_status_counts", "get_crm_analytics_snapshot"}
+_RPC_RECHECK_SECONDS = 60
 
 
 class GuardedRpcUnavailable(RuntimeError):
     pass
+
+
+def _function_missing(exc: Exception) -> bool:
+    text = str(exc)
+    return "PGRST202" in text or "Could not find the function" in text
+
+
+class _GuardedRpc:
+    """Runs an aggregate RPC with the exclude-unassigned flag, or refuses."""
+    def __init__(self, owner, fn, params):
+        self._owner, self._fn, self._params = owner, fn, dict(params or {})
+
+    def execute(self):
+        o, fn = self._owner, self._fn
+        since = o._rpc_unsupported.get(fn)
+        if since is not None and time.monotonic() - since < _RPC_RECHECK_SECONDS:
+            raise GuardedRpcUnavailable(f"{fn} does not support p_exclude_unassigned yet")
+        try:
+            result = o._c.rpc(fn, {**self._params, "p_exclude_unassigned": True}).execute()
+        except Exception as e:
+            if _function_missing(e):
+                o._rpc_unsupported[fn] = time.monotonic()
+                raise GuardedRpcUnavailable(f"{fn} does not support p_exclude_unassigned yet") from e
+            raise
+        o._rpc_unsupported.pop(fn, None)
+        return result
 
 
 class _GuardedLeads:
@@ -171,6 +203,7 @@ class _GuardedLeads:
 class GuardedClient:
     def __init__(self, client):
         self._c = client
+        self._rpc_unsupported: dict = {}
 
     def table(self, name):
         t = self._c.table(name)
@@ -180,7 +213,8 @@ class GuardedClient:
 
     def rpc(self, fn, *a, **k):
         if hide_unassigned_active() and fn in _LEAD_AGGREGATE_RPCS:
-            raise GuardedRpcUnavailable(f"{fn} is disabled while unassigned leads are hidden")
+            params = a[0] if a else k.get("params")
+            return _GuardedRpc(self, fn, params)
         return self._c.rpc(fn, *a, **k)
 
     def __getattr__(self, name):

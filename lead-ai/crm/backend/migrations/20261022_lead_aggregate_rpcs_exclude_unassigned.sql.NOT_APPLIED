@@ -1,0 +1,52 @@
+-- OPTIONAL, NOT APPLIED. Run once in the Supabase SQL editor (then the app picks it
+-- up by itself within about a minute — no redeploy needed).
+--
+-- Adds an optional `p_exclude_unassigned boolean default false` to the four
+-- lead-aggregate functions. When true, ownerless leads (assigned_to NULL or '')
+-- are left out of every count, so users restricted from unassigned leads get the
+-- fast database shortcuts instead of a slow full scan. Behaviour is unchanged for
+-- everyone else (the flag defaults to false). Each function is rebuilt from its
+-- own current definition, and the old signature is dropped in the same
+-- transaction, so there is no gap and no ambiguous overload.
+do $mig$
+declare
+  d text;
+  derived text := '(select * from public.leads where not p_exclude_unassigned or coalesce(assigned_to,'''') <> '''') leads';
+begin
+  -- 1) dashboard_rollup(p_assigned_to text[]) -> (p_assigned_to text[], p_exclude_unassigned boolean)
+  select pg_get_functiondef('public.dashboard_rollup(text[])'::regprocedure) into d;
+  d := replace(d, 'dashboard_rollup(p_assigned_to text[] DEFAULT NULL::text[])',
+                  'dashboard_rollup(p_assigned_to text[] DEFAULT NULL::text[], p_exclude_unassigned boolean DEFAULT false)');
+  d := replace(d, 'from public.leads', 'from ' || derived);
+  if position('p_exclude_unassigned' in d) = 0 or position(derived in d) = 0 then raise exception 'dashboard_rollup rewrite failed'; end if;
+  execute d;
+  drop function public.dashboard_rollup(text[]);
+
+  -- 2) lead_status_counts()
+  select pg_get_functiondef('public.lead_status_counts()'::regprocedure) into d;
+  d := replace(d, 'lead_status_counts()', 'lead_status_counts(p_exclude_unassigned boolean DEFAULT false)');
+  d := replace(d, 'from public.leads', 'from ' || derived);
+  if position('p_exclude_unassigned' in d) = 0 or position(derived in d) = 0 then raise exception 'lead_status_counts rewrite failed'; end if;
+  execute d;
+  drop function public.lead_status_counts();
+
+  -- 3) lead_filter_options()
+  select pg_get_functiondef('public.lead_filter_options()'::regprocedure) into d;
+  d := replace(d, 'lead_filter_options()', 'lead_filter_options(p_exclude_unassigned boolean DEFAULT false)');
+  d := replace(d, 'from public.leads', 'from ' || derived);
+  if position('p_exclude_unassigned' in d) = 0 or position(derived in d) = 0 then raise exception 'lead_filter_options rewrite failed'; end if;
+  execute d;
+  drop function public.lead_filter_options();
+
+  -- 4) get_crm_analytics_snapshot() — about fifteen `FROM leads` queries
+  select pg_get_functiondef('public.get_crm_analytics_snapshot()'::regprocedure) into d;
+  d := replace(d, 'get_crm_analytics_snapshot()', 'get_crm_analytics_snapshot(p_exclude_unassigned boolean DEFAULT false)');
+  d := replace(d, 'FROM leads', 'FROM ' || derived);
+  if position('p_exclude_unassigned' in d) = 0 or position(derived in d) = 0 then raise exception 'get_crm_analytics_snapshot rewrite failed'; end if;
+  execute d;
+  drop function public.get_crm_analytics_snapshot();
+end
+$mig$;
+
+-- To check it worked afterwards (the two numbers should differ by the count of unassigned leads):
+--   select (public.lead_status_counts()) , (public.lead_status_counts(true));

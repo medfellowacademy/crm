@@ -34,12 +34,30 @@ class Rec:
     def neq(self, *a, **k): return self._rec("neq", *a)
 
 
+class RpcCall:
+    def __init__(self, raw, fn, params): self.raw, self.fn, self.params = raw, fn, params
+
+    def execute(self):
+        self.raw.executed.append((self.fn, self.params))
+        if self.raw.old_database and "p_exclude_unassigned" in (self.params or {}):
+            raise RuntimeError("{'code': 'PGRST202', 'message': 'Could not find the function public.%s'}" % self.fn)
+        return type("R", (), {"data": {"total": 1}})
+
+
 class RawClient:
+    old_database = False
+
     def __init__(self):
-        self.log, self.rpcs = [], []
+        self.log, self.rpcs, self.params, self.executed = [], [], [], []
 
     def table(self, name): return Rec(self.log, name)
-    def rpc(self, fn, *a, **k): self.rpcs.append(fn); return "rpc-ok"
+
+    def rpc(self, fn, params=None, **k):
+        self.rpcs.append(fn)
+        self.params.append(params)
+        return "rpc-ok" if not self.executed_mode else RpcCall(self, fn, params)
+
+    executed_mode = False
 
 
 def guarded():
@@ -121,15 +139,16 @@ class TestGuardedClient:
         c.table("leads").select("*")  # back to guarded afterwards
         assert any(n == "neq" for _, n, _ in raw.log)
 
-    def test_lead_aggregate_rpcs_refused_so_callers_fall_back_to_guarded_scans(self):
+    def test_unrestricted_callers_use_the_aggregate_rpcs_untouched(self):
+        c, raw = guarded()
+        vis.set_request_user({})
+        assert c.rpc("dashboard_rollup", {"p_assigned_to": ["A"]}) == "rpc-ok"
+        assert raw.rpcs == ["dashboard_rollup"] and raw.params == [{"p_assigned_to": ["A"]}]
+
+    def test_other_rpcs_are_never_touched(self):
         c, raw = guarded()
         vis.set_request_user(restricted())
-        for fn in ("dashboard_rollup", "lead_filter_options", "lead_status_counts", "get_crm_analytics_snapshot"):
-            with pytest.raises(vis.GuardedRpcUnavailable):
-                c.rpc(fn)
         assert c.rpc("something_else") == "rpc-ok"
-        vis.set_request_user({})
-        assert c.rpc("dashboard_rollup") == "rpc-ok"
 
     def test_other_client_attributes_pass_through(self):
         raw = RawClient()
@@ -229,3 +248,64 @@ class TestEndToEnd:
         vis.set_request_user({})                                  # the next, unrestricted caller still gets both
         assert [l["id"] for l in report_data.get_report_leads(client, None)] == [1, 2]
         report_data._cache.clear()
+
+
+class TestAggregateRpcsForRestrictedUsers:
+    """Restricted callers get the fast RPCs with p_exclude_unassigned=true once the
+    database has been updated; until then they fall back to guarded scans."""
+
+    def make(self, old_database):
+        raw = RawClient()
+        raw.executed_mode, raw.old_database = True, old_database
+        return vis.GuardedClient(raw), raw
+
+    def test_updated_database_gets_the_flag_and_returns_data(self):
+        c, raw = self.make(old_database=False)
+        vis.set_request_user(restricted())
+        res = c.rpc("dashboard_rollup", {"p_assigned_to": ["A"]}).execute()
+        assert res.data == {"total": 1}
+        assert raw.executed == [("dashboard_rollup", {"p_assigned_to": ["A"], "p_exclude_unassigned": True})]
+
+    def test_no_params_rpcs_work_too(self):
+        c, raw = self.make(old_database=False)
+        vis.set_request_user(restricted())
+        c.rpc("lead_status_counts").execute()
+        assert raw.executed == [("lead_status_counts", {"p_exclude_unassigned": True})]
+
+    def test_database_not_updated_yet_refuses_so_callers_fall_back_to_guarded_scans(self):
+        c, raw = self.make(old_database=True)
+        vis.set_request_user(restricted())
+        with pytest.raises(vis.GuardedRpcUnavailable):
+            c.rpc("lead_status_counts").execute()
+
+    def test_not_updated_is_remembered_so_it_does_not_retry_every_request(self):
+        c, raw = self.make(old_database=True)
+        vis.set_request_user(restricted())
+        for _ in range(3):
+            with pytest.raises(vis.GuardedRpcUnavailable):
+                c.rpc("lead_status_counts").execute()
+        assert len(raw.executed) == 1
+
+    def test_picks_up_the_database_update_after_a_minute_without_a_redeploy(self, monkeypatch):
+        c, raw = self.make(old_database=True)
+        vis.set_request_user(restricted())
+        clock = {"t": 1000.0}
+        monkeypatch.setattr(vis.time, "monotonic", lambda: clock["t"])
+        with pytest.raises(vis.GuardedRpcUnavailable):
+            c.rpc("lead_status_counts").execute()
+        raw.old_database = False                       # the SQL gets run in Supabase
+        clock["t"] += vis._RPC_RECHECK_SECONDS + 1
+        assert c.rpc("lead_status_counts").execute().data == {"total": 1}
+
+    def test_other_errors_are_not_swallowed_as_unsupported(self):
+        c, raw = self.make(old_database=False)
+        vis.set_request_user(restricted())
+        orig = raw.rpc
+
+        class Boom:
+            def execute(self): raise RuntimeError("connection reset")
+        raw.rpc = lambda fn, params=None, **k: Boom()
+        with pytest.raises(RuntimeError, match="connection reset"):
+            c.rpc("lead_status_counts").execute()
+        raw.rpc = orig
+        assert "lead_status_counts" not in c._rpc_unsupported
