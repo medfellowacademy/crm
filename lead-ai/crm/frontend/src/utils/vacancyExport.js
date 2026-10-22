@@ -55,7 +55,6 @@ function loadImage(src) {
 }
 
 const slug = (s) => String(s || 'vacancy-board').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'vacancy-board';
-const today = () => new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 
 export async function renderBoardCanvas(board, logoSrc = '/medfellow-logo.png') {
   const total = Number(board.total_seats) || 0;
@@ -186,9 +185,8 @@ export async function renderBoardCanvas(board, logoSrc = '/medfellow-logo.png') 
   }
 
   // footer
-  ctx.textAlign = 'right'; ctx.fillStyle = '#94a3b8'; ctx.font = `500 22px ${FONT}`;
-  ctx.fillText(`As on ${today()}`, W - M, H - 30);
-  ctx.textAlign = 'left'; ctx.fillText('MedFellow Academy', M, H - 30);
+  ctx.textAlign = 'center'; ctx.fillStyle = '#94a3b8'; ctx.font = `500 22px ${FONT}`;
+  ctx.fillText('MedFellow Academy', W / 2, H - 30);
   return canvas;
 }
 
