@@ -24,7 +24,7 @@ export const financeFor = (lead) => {
 
   const emiPaid = emis
     .filter(e => e.status === 'paid')
-    .reduce((s, e) => s + (Number(e.amount) || 0), 0);
+    .reduce((s, e) => s + (Number(e.paid_amount ?? e.amount) || 0), 0);
 
   // An EMI counts as overdue if it's still unpaid and its due date has
   // passed — regardless of whether it was ever manually marked "overdue",

@@ -53,6 +53,13 @@ def _num(v) -> float:
         return 0.0
 
 
+def paid_amount(emi: dict) -> float:
+    """What was actually received for an EMI: `paid_amount` when recorded
+    (it can differ from the scheduled `amount`), else the scheduled amount."""
+    pa = emi.get("paid_amount")
+    return _num(pa) if pa is not None and pa != "" else _num(emi.get("amount"))
+
+
 def emis_of(lead: dict) -> list:
     return [e for e in _parse(lead.get("emi_details"), []) if isinstance(e, dict)]
 
@@ -70,7 +77,7 @@ def finance_for(lead: dict, today: date) -> dict:
     total = _num(lead.get("actual_revenue"))
     reg = _num(lead.get("registration_fees"))
     emis = emis_of(lead)
-    emi_paid = sum(_num(e.get("amount")) for e in emis if e.get("status") == "paid")
+    emi_paid = sum(paid_amount(e) for e in emis if e.get("status") == "paid")
     overdue = sum(_num(e.get("amount")) for e in emis if is_overdue(e, today))
     collected = reg + emi_paid
     balance = max(0.0, total - collected)
@@ -112,12 +119,12 @@ def payment_events(lead: dict) -> list:
         events.append({"date": _enroll_day(lead), "amount": _num(lead.get("registration_fees")),
                        "kind": "registration", "approx": True})
     for e in emis_of(lead):
-        if e.get("status") == "paid" and _num(e.get("amount")) > 0:
+        if e.get("status") == "paid" and paid_amount(e) > 0:
             paid_day = _day(e.get("paid_date"))
             due_day = _day(e.get("date"))
             when = paid_day or due_day
             if when:
-                events.append({"date": when, "amount": _num(e.get("amount")), "kind": "emi", "approx": not paid_day})
+                events.append({"date": when, "amount": paid_amount(e), "kind": "emi", "approx": not paid_day})
     return events
 
 
@@ -244,7 +251,8 @@ def data_quality(leads: list) -> dict:
     }
 
 
-def mark_emi_paid(emis: list, index: int, paid_on: str, method: Optional[str], by: Optional[str]) -> list:
+def mark_emi_paid(emis: list, index: int, paid_on: str, method: Optional[str], by: Optional[str],
+                  amount: Optional[float] = None) -> list:
     """New EMI list with `index` marked paid. Raises ValueError when the index
     is out of range or the EMI is already paid (so a double click can't
     double-record a collection)."""
@@ -254,8 +262,12 @@ def mark_emi_paid(emis: list, index: int, paid_on: str, method: Optional[str], b
         raise ValueError("EMI is already marked paid")
     if not _to_date(paid_on):
         raise ValueError("Invalid paid date")
+    if amount is not None and _num(amount) < 0:
+        raise ValueError("Amount cannot be negative")
     out = [dict(e) for e in emis]
     out[index].update({"status": "paid", "paid_date": _day(paid_on)})
+    if amount is not None:
+        out[index]["paid_amount"] = _num(amount)
     if method:
         out[index]["method"] = method
     if by:
@@ -281,6 +293,65 @@ def emi_notifications(leads: list, today: date) -> list:
             notes.append({"kind": "emi_due", "lead": lead, "count": len(soon),
                           "amount": sum(_num(e.get("amount")) for e in soon), "days": first})
     return notes
+
+
+def _emi_status(emi: dict, today: date) -> str:
+    if emi.get("status") == "paid":
+        return "paid"
+    return "overdue" if is_overdue(emi, today) else "pending"
+
+
+def emi_rows(leads: list, month: str, today: date) -> list:
+    """Every EMI scheduled (due) in `month`: scheduled value vs what was actually
+    received, status, and payment details. Soonest due first."""
+    out = []
+    for lead in leads or []:
+        for i, e in enumerate(emis_of(lead)):
+            d = _day(e.get("date"))
+            if not d or _month(d) != month:
+                continue
+            status = _emi_status(e, today)
+            out.append({
+                "lead_id": lead.get("lead_id"), "name": lead.get("full_name"), "phone": lead.get("phone"),
+                "counselor": lead.get("assigned_to"), "course": lead.get("course_interested"),
+                "emi_index": i, "emi_count": len(emis_of(lead)), "due_date": d,
+                "scheduled": _num(e.get("amount")),
+                "received": paid_amount(e) if status == "paid" else 0.0,
+                "status": status, "paid_date": _day(e.get("paid_date")), "method": e.get("method"),
+            })
+    out.sort(key=lambda r: (r["due_date"], r["name"] or ""))
+    return out
+
+
+def emi_month_summary(rows: list) -> dict:
+    scheduled = sum(r["scheduled"] for r in rows)
+    received = sum(r["received"] for r in rows)
+    by = {k: [r for r in rows if r["status"] == k] for k in ("paid", "pending", "overdue")}
+    return {
+        "count": len(rows), "scheduled": round(scheduled, 2), "received": round(received, 2),
+        "outstanding": round(sum(r["scheduled"] for r in rows if r["status"] != "paid"), 2),
+        "shortfall": round(sum(max(0.0, r["scheduled"] - r["received"]) for r in by["paid"]), 2),
+        "paid_count": len(by["paid"]), "pending_count": len(by["pending"]), "overdue_count": len(by["overdue"]),
+        "overdue_amount": round(sum(r["scheduled"] for r in by["overdue"]), 2),
+        "collection_rate": round(received / scheduled * 100, 1) if scheduled else 0.0,
+    }
+
+
+def emi_trend(leads: list, end_month: str, months: int = 12) -> list:
+    """Per DUE month: scheduled EMI value vs actually received on those EMIs."""
+    wanted = [_shift_month(end_month, -(months - 1) + i) for i in range(months)]
+    scheduled, received = defaultdict(float), defaultdict(float)
+    for lead in leads or []:
+        for e in emis_of(lead):
+            d = _day(e.get("date"))
+            if not d:
+                continue
+            m = _month(d)
+            scheduled[m] += _num(e.get("amount"))
+            if e.get("status") == "paid":
+                received[m] += paid_amount(e)
+    return [{"month": m, "scheduled": round(scheduled[m], 2), "received": round(received[m], 2),
+             "rate": round(received[m] / scheduled[m] * 100, 1) if scheduled[m] else 0.0} for m in wanted]
 
 
 def to_csv_rows(leads: list, today: date) -> list:

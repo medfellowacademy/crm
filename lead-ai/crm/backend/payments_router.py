@@ -131,8 +131,42 @@ def get_overdue_worklist(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail="Failed to load overdue EMIs")
 
 
+@router.get("/emis", dependencies=[_VIEW])
+def get_emis_by_month(
+    month: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}$", description="Due month, defaults to the current month"),
+    current_user: dict = Depends(get_current_user),
+):
+    """EMIs due in a month — scheduled value vs actually received — plus a
+    12-month trend, and each lead's latest payment comment."""
+    try:
+        today = pa.today_ist()
+        month = month or today.strftime("%Y-%m")
+        leads = scoped_enrolled(rbac.lead_scope_names(current_user))
+        rows = pa.emi_rows(leads, month, today)
+        ids = sorted({r["lead_id"] for r in rows if r.get("lead_id")})
+        latest: dict = {}
+        counts: dict = {}
+        for i in range(0, len(ids), 100):
+            found = (
+                supabase_data.client.table("payment_followups").select("lead_id,note,created_by,created_at")
+                .in_("lead_id", ids[i:i + 100]).order("created_at", desc=True).execute().data or []
+            )
+            for f in found:
+                latest.setdefault(f["lead_id"], f)
+                counts[f["lead_id"]] = counts.get(f["lead_id"], 0) + 1
+        for r in rows:
+            r["last_comment"] = latest.get(r.get("lead_id"))
+            r["comment_count"] = counts.get(r.get("lead_id"), 0)
+        return {"month": month, "summary": pa.emi_month_summary(rows), "rows": rows,
+                "trend": pa.emi_trend(leads, month, 12)}
+    except Exception as e:
+        logger.error(f"get_emis_by_month error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load EMIs")
+
+
 class PayEmi(BaseModel):
     paid_on: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    amount: Optional[float] = Field(None, ge=0, description="Actual amount received; defaults to the scheduled EMI")
     method: Optional[str] = Field(None, max_length=40)
     note: Optional[str] = Field(None, max_length=500)
 
@@ -143,10 +177,11 @@ def mark_emi_paid(lead_id: str, emi_index: int, body: PayEmi, current_user: dict
     who = rbac.user_identity(current_user) or current_user.get("email")
     try:
         emis = pa.emis_of(lead)
-        updated = pa.mark_emi_paid(emis, emi_index, body.paid_on, body.method, who)
+        updated = pa.mark_emi_paid(emis, emi_index, body.paid_on, body.method, who, body.amount)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    amount = pa._num(updated[emi_index].get("amount"))
+    amount = pa.paid_amount(updated[emi_index])
+    scheduled = pa._num(updated[emi_index].get("amount"))
     try:
         supabase_data.client.table("leads").update({"emi_details": updated}).eq("lead_id", lead_id).execute()
         supabase_data.client.table("payment_events").insert({
@@ -155,8 +190,9 @@ def mark_emi_paid(lead_id: str, emi_index: int, body: PayEmi, current_user: dict
         }).execute()
         supabase_data.client.table("activities").insert({
             "lead_id": lead.get("id"), "activity_type": "payment",
-            "description": f"EMI {emi_index + 1} marked paid: ₹{amount:,.0f} on {body.paid_on}"
-                           + (f" via {body.method}" if body.method else ""),
+            "description": f"EMI {emi_index + 1} marked paid: ₹{amount:,.0f}"
+                           + (f" (scheduled ₹{scheduled:,.0f})" if amount != scheduled else "")
+                           + f" on {body.paid_on}" + (f" via {body.method}" if body.method else ""),
             "created_by": who,
         }).execute()
     except Exception as e:

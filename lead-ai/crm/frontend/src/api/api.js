@@ -212,6 +212,7 @@ export const employeePerformanceAPI = {
 export const paymentsAPI = {
   overview: (params) => api.get('/api/payments/enrolled', { params }),
   overdue: () => api.get('/api/payments/overdue'),
+  emis: (params) => api.get('/api/payments/emis', { params }),
   markEmiPaid: (leadId, index, data) => api.post(`/api/payments/${leadId}/emis/${index}/pay`, data),
   addFollowup: (leadId, data) => api.post(`/api/payments/${leadId}/followups`, data),
   history: (leadId) => api.get(`/api/payments/${leadId}/followups`),

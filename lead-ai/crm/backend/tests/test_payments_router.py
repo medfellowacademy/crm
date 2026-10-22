@@ -138,3 +138,37 @@ def test_followup_saved_and_history_returned(client):
 
 def test_followup_requires_note(client):
     assert client.post("/api/payments/L1/followups", json={"note": ""}).status_code == 422
+
+
+def test_mark_paid_records_actual_amount_in_schedule_ledger_and_activity(client):
+    r = client.post("/api/payments/L1/emis/0/pay", json={"paid_on": "2026-10-20", "amount": 4000})
+    assert r.status_code == 200
+    assert client.tables["leads"][0]["emi_details"][0]["paid_amount"] == 4000
+    assert client.tables["payment_events"][0]["amount"] == 4000
+    assert "scheduled" in client.tables["activities"][0]["description"]
+
+
+def test_negative_actual_amount_rejected(client):
+    assert client.post("/api/payments/L1/emis/0/pay", json={"paid_on": "2026-10-20", "amount": -1}).status_code == 422
+
+
+def test_emis_by_month_with_latest_comment(client):
+    client.tables["payment_followups"] = [
+        {"lead_id": "L1", "note": "first", "created_at": "2026-10-01", "created_by": "x"},
+    ]
+    d = client.get("/api/payments/emis?month=2026-01").json()
+    assert d["month"] == "2026-01" and d["summary"]["count"] == 2 and len(d["trend"]) == 12
+    l1 = next(r for r in d["rows"] if r["lead_id"] == "L1")
+    assert l1["comment_count"] == 1 and l1["last_comment"]["note"] == "first"
+    assert next(r for r in d["rows"] if r["lead_id"] == "L2")["last_comment"] is None
+
+
+def test_emis_by_month_is_scoped_for_counselors(client):
+    client.user.update({"role": "Counselor", "full_name": "Asha"})
+    pr._cache.clear()
+    assert [r["lead_id"] for r in client.get("/api/payments/emis?month=2026-01").json()["rows"]] == ["L1"]
+
+
+def test_comment_without_emi_is_allowed(client):
+    assert client.post("/api/payments/L1/followups", json={"note": "Parent asked to shift fee date"}).status_code == 200
+    assert client.get("/api/payments/L1/followups").json()["followups"][0]["emi_index"] is None

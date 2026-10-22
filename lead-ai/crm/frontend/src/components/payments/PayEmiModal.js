@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Modal, Form, DatePicker, Select, Input, message } from 'antd';
+import { Modal, Form, DatePicker, Select, Input, InputNumber, message } from 'antd';
 import { useMutation } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import { paymentsAPI } from '../../api/api';
@@ -13,12 +13,14 @@ export default function PayEmiModal({ target, onClose, onDone }) {
   const [form] = Form.useForm();
 
   useEffect(() => {
-    if (target) form.setFieldsValue({ paid_on: dayjs(), method: undefined, note: '' });
+    if (target) form.setFieldsValue({ paid_on: dayjs(), amount: Number(target.amount) || 0, method: undefined, note: '' });
   }, [target, form]);
 
   const pay = useMutation({
     mutationFn: (v) => paymentsAPI.markEmiPaid(target.leadId, target.index, {
       paid_on: v.paid_on.format('YYYY-MM-DD'),
+      // only send an amount when it differs from the scheduled EMI
+      amount: Number(v.amount) !== Number(target.amount) ? Number(v.amount) : undefined,
       method: v.method || undefined,
       note: v.note || undefined,
     }),
@@ -49,6 +51,12 @@ export default function PayEmiModal({ target, onClose, onDone }) {
       <Form form={form} layout="vertical">
         <Form.Item name="paid_on" label="Date received" rules={[{ required: true, message: 'Pick the date' }]}>
           <DatePicker style={{ width: '100%' }} format="DD MMM YYYY" disabledDate={(d) => d.isAfter(dayjs(), 'day')} />
+        </Form.Item>
+        <Form.Item name="amount" label="Amount actually received"
+          extra="Change this if the payment was more or less than the scheduled EMI."
+          rules={[{ required: true, message: 'Enter the amount' }]}>
+          <InputNumber min={0} style={{ width: '100%' }} prefix="₹"
+            formatter={(v) => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')} parser={(v) => v.replace(/,/g, '')} />
         </Form.Item>
         <Form.Item name="method" label="Payment method">
           <Select allowClear placeholder="Optional" options={PAYMENT_METHODS.map((m) => ({ value: m, label: m }))} />

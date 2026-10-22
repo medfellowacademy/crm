@@ -18,6 +18,8 @@ import { leadsAPI, uploadAPI, paymentsAPI } from '../api/api';
 import PayEmiModal from '../components/payments/PayEmiModal';
 import CollectionsTab from '../components/payments/CollectionsTab';
 import OverdueTab from '../components/payments/OverdueTab';
+import EmiMonthTab from '../components/payments/EmiMonthTab';
+import { PaymentActivity } from '../components/payments/PaymentComments';
 import EnrollmentModal from '../components/leads/EnrollmentModal';
 import { useAuth } from '../context/AuthContext';
 import { fmt, safeParse, financeFor, PAYMENT_STATUS_CONFIG } from '../utils/finance';
@@ -40,36 +42,6 @@ const EmiStatus = ({ status }) => {
   }[status] || { color: 'default', label: status || '—' };
   return <Badge status={cfg.color} text={cfg.label} />;
 };
-
-// ── Payment log: audit ledger + follow-ups for one lead (loaded on demand) ───
-const PaymentLog = ({ leadId }) => {
-  const { data, isLoading } = useQuery({
-    queryKey: ['payment-history', leadId],
-    queryFn: () => paymentsAPI.history(leadId).then(r => r.data),
-  });
-  if (isLoading) return <Spin size="small" />;
-  const payments = data?.payments || [];
-  const followups = data?.followups || [];
-  if (!payments.length && !followups.length) return <Text type="secondary" style={{ fontSize: 12 }}>Nothing recorded yet.</Text>;
-  return (
-    <div style={{ fontSize: 12 }}>
-      {payments.map(p => (
-        <div key={`p${p.id}`} style={{ padding: '3px 0', borderBottom: '1px solid #e5e7eb' }}>
-          <b>{fmt(p.amount)}</b> EMI {Number(p.emi_index) + 1} paid {dayjs(p.paid_on).format('DD MMM YYYY')}
-          {p.method ? ` via ${p.method}` : ''} <Text type="secondary">· {p.recorded_by}</Text>
-          {p.note ? <div style={{ color: '#6b7280' }}>{p.note}</div> : null}
-        </div>
-      ))}
-      {followups.map(f => (
-        <div key={`f${f.id}`} style={{ padding: '3px 0', borderBottom: '1px solid #e5e7eb' }}>
-          <MessageIcon /> {f.note}
-          <div><Text type="secondary">{f.created_by} · {dayjs(f.created_at).format('DD MMM')}{f.promised_date ? ` · promised ${dayjs(f.promised_date).format('DD MMM')}` : ''}</Text></div>
-        </div>
-      ))}
-    </div>
-  );
-};
-const MessageIcon = () => <span style={{ color: '#9ca3af' }}>›</span>;
 
 // ── Expanded Row ─────────────────────────────────────────────────────────────
 const ExpandedRow = ({ lead, onUpload, uploading, onMarkPaid }) => {
@@ -169,9 +141,9 @@ const ExpandedRow = ({ lead, onUpload, uploading, onMarkPaid }) => {
           }
           <div style={{ marginTop: 12 }}>
             <Button size="small" type="link" style={{ padding: 0 }} onClick={() => setShowLog(v => !v)}>
-              {showLog ? 'Hide' : 'Show'} payment log &amp; follow-ups
+              {showLog ? 'Hide' : 'Show'} payment comments &amp; log
             </Button>
-            {showLog && <div style={{ marginTop: 6 }}><PaymentLog leadId={lead.lead_id} /></div>}
+            {showLog && <div style={{ marginTop: 6 }}><PaymentActivity leadId={lead.lead_id} compact /></div>}
           </div>
         </Col>
 
@@ -284,6 +256,7 @@ const PaymentsPage = () => {
   const refreshAll = () => {
     queryClient.invalidateQueries({ queryKey: ['payments-overview'] });
     queryClient.invalidateQueries({ queryKey: ['payments-overdue'] });
+    queryClient.invalidateQueries({ queryKey: ['payments-emis'] });
     queryClient.invalidateQueries({ queryKey: ['payment-history'] });
     queryClient.invalidateQueries({ queryKey: ['enrolled-leads'] });
     queryClient.invalidateQueries({ queryKey: ['leads'] });
@@ -637,6 +610,7 @@ const PaymentsPage = () => {
         destroyInactiveTabPane
         items={[
           { key: 'payments', label: 'Enrolled & Payments', children: paymentsTab },
+          { key: 'emis', label: 'EMIs by month', children: <EmiMonthTab onChanged={refreshAll} /> },
           { key: 'collections', label: 'Collections', children: <CollectionsTab data={overview} /> },
           { key: 'overdue', label: `Overdue${overview?.summary?.overdue_leads ? ` (${overview.summary.overdue_leads})` : ''}`, children: <OverdueTab onChanged={refreshAll} /> },
         ]}

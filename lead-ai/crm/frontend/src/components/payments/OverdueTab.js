@@ -17,12 +17,12 @@ function FollowupModal({ target, onClose, onDone }) {
       note: v.note, emi_index: target.emi_index,
       promised_date: v.promised_date ? v.promised_date.format('YYYY-MM-DD') : undefined,
     }),
-    onSuccess: () => { message.success('Follow-up logged'); onDone?.(); onClose(); },
+    onSuccess: () => { message.success('Comment added'); onDone?.(); onClose(); },
     onError: (e) => message.error(e?.response?.data?.detail || 'Could not save the follow-up'),
   });
   return (
     <Modal
-      open={!!target} title={target ? `Log follow-up — ${target.name}` : ''} okText="Save"
+      open={!!target} title={target ? `Payment comment — ${target.name}` : ''} okText="Save"
       confirmLoading={save.isPending} onCancel={onClose} destroyOnClose
       onOk={() => form.validateFields().then((v) => save.mutate(v))}
     >
@@ -50,6 +50,7 @@ export default function OverdueTab({ onChanged }) {
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ['payments-overdue'] });
+    queryClient.invalidateQueries({ queryKey: ['payment-history'] });
     onChanged?.();
   };
 
@@ -79,7 +80,7 @@ export default function OverdueTab({ onChanged }) {
             { title: 'Overdue', dataIndex: 'days_overdue', sorter: (a, b) => a.days_overdue - b.days_overdue, defaultSortOrder: 'descend',
               render: (d) => <Tag color={ageColor(d)}>{d} day{d !== 1 ? 's' : ''}</Tag> },
             { title: 'Amount', dataIndex: 'amount', align: 'right', render: (v) => <Text strong style={{ color: '#cf1322' }}>{fmt(v)}</Text> },
-            { title: 'Last follow-up', key: 'last', width: 240, render: (_, r) => {
+            { title: 'Last comment', key: 'last', width: 240, render: (_, r) => {
               const f = r.last_followup;
               if (!f) return <Text type="secondary">None yet</Text>;
               return (
@@ -92,7 +93,7 @@ export default function OverdueTab({ onChanged }) {
             { title: '', key: 'actions', render: (_, r) => (
               <Space size={4} wrap>
                 {r.phone && <Button size="small" icon={<PhoneOutlined />} href={`tel:${r.phone}`} />}
-                <Button size="small" icon={<MessageOutlined />} onClick={() => setFollow(r)}>Log</Button>
+                <Button size="small" icon={<MessageOutlined />} onClick={() => setFollow(r)}>Comment</Button>
                 <Button size="small" type="primary" icon={<CheckOutlined />}
                   onClick={() => setPay({ leadId: r.lead_id, index: r.emi_index, name: r.name, amount: r.amount, dueDate: r.due_date })}>
                   Mark paid

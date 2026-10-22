@@ -183,3 +183,62 @@ class TestEmiNotifications:
 def test_csv_rows_header_and_values():
     rows = pa.to_csv_rows([lead(total=100000, reg=20000)], TODAY)
     assert rows[0][0] == "Lead ID" and rows[1][4:] == [100000.0, 20000.0, 80000.0, 0.0, "partial"]
+
+
+class TestActualAmountReceived:
+    def test_paid_amount_defaults_to_scheduled_and_can_differ(self):
+        assert pa.paid_amount(emi("2026-09-01", 1000, "paid")) == 1000
+        assert pa.paid_amount(emi("2026-09-01", 1000, "paid", paid_amount=700)) == 700
+        assert pa.paid_amount(emi("2026-09-01", 1000, "paid", paid_amount=0)) == 0
+
+    def test_collected_and_balance_use_what_was_actually_received(self):
+        f = pa.finance_for(lead(total=100000, reg=20000, emis=[emi("2026-09-01", 30000, "paid", paid_amount=25000)]), TODAY)
+        assert f["collected"] == 45000 and f["balance"] == 55000
+
+    def test_mark_paid_stores_actual_amount_only_when_given(self):
+        out = pa.mark_emi_paid([emi("2026-10-01", 1000)], 0, "2026-10-22", None, None, 800)
+        assert out[0]["paid_amount"] == 800
+        assert "paid_amount" not in pa.mark_emi_paid([emi("2026-10-01", 1000)], 0, "2026-10-22", None, None)[0]
+        with pytest.raises(ValueError, match="negative"):
+            pa.mark_emi_paid([emi("2026-10-01", 1000)], 0, "2026-10-22", None, None, -5)
+
+    def test_payment_event_uses_actual_amount(self):
+        ev = pa.payment_events(lead(reg=0, emis=[emi("2026-08-01", 1000, "paid", paid_date="2026-08-03", paid_amount=600)]))
+        assert ev[0]["amount"] == 600
+
+
+class TestEmiMonthReport:
+    LEADS = [
+        lead(lead_id="L1", name="A", emis=[emi("2026-10-05", 10000, "paid", paid_date="2026-10-06", paid_amount=9000, method="UPI"),
+                                           emi("2026-11-05", 10000)]),
+        lead(lead_id="L2", name="B", emis=[emi("2026-10-01", 5000), emi("2026-10-28", 7000)]),
+    ]
+
+    def test_rows_for_the_due_month_with_status_and_amounts(self):
+        rows = pa.emi_rows(self.LEADS, "2026-10", TODAY)
+        assert [(r["name"], r["status"], r["scheduled"], r["received"]) for r in rows] == [
+            ("B", "overdue", 5000, 0), ("A", "paid", 10000, 9000), ("B", "pending", 7000, 0)]
+        paid = next(r for r in rows if r["status"] == "paid")
+        assert paid["method"] == "UPI" and paid["paid_date"] == "2026-10-06" and paid["emi_count"] == 2
+
+    def test_other_months_excluded(self):
+        assert all(r["due_date"].startswith("2026-10") for r in pa.emi_rows(self.LEADS, "2026-10", TODAY))
+        assert len(pa.emi_rows(self.LEADS, "2026-11", TODAY)) == 1
+
+    def test_summary_scheduled_vs_received_and_shortfall(self):
+        s = pa.emi_month_summary(pa.emi_rows(self.LEADS, "2026-10", TODAY))
+        assert s["scheduled"] == 22000 and s["received"] == 9000
+        assert s["shortfall"] == 1000          # paid 9000 against a scheduled 10000
+        assert s["outstanding"] == 12000       # 5000 overdue + 7000 pending
+        assert (s["paid_count"], s["pending_count"], s["overdue_count"]) == (1, 1, 1)
+        assert s["overdue_amount"] == 5000 and s["collection_rate"] == 40.9
+
+    def test_empty_month(self):
+        s = pa.emi_month_summary([])
+        assert s["count"] == 0 and s["collection_rate"] == 0.0
+
+    def test_trend_by_due_month(self):
+        t = {r["month"]: r for r in pa.emi_trend(self.LEADS, "2026-11", 3)}
+        assert t["2026-10"]["scheduled"] == 22000 and t["2026-10"]["received"] == 9000
+        assert t["2026-11"]["scheduled"] == 10000 and t["2026-11"]["received"] == 0
+        assert t["2026-09"]["scheduled"] == 0 and t["2026-09"]["rate"] == 0.0
