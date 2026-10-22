@@ -148,5 +148,6 @@ def set_restrictions(user_id: int, body: RestrictionsUpdate, actor: dict = Depen
         except Exception as e:
             logger.error(f"set_restrictions error: {e}")
             raise HTTPException(status_code=500, detail="Failed to save the restrictions")
+        vis.clear_user_cache()  # take effect on the next request, not after the 10s cache
         _audit(actor, target, f"{actor.get('full_name') or actor.get('email')} {'; '.join(changes)} for {target.get('full_name') or target.get('email')}")
     return _describe(_target(user_id), actor)

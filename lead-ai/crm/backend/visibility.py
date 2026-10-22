@@ -21,8 +21,11 @@ is dependency-free (no app imports) so anything can use it.
 
 import contextvars
 import json
+import threading
 from contextlib import contextmanager
-from typing import Optional
+from typing import Callable, Optional
+
+from cachetools import TTLCache
 
 HIDE_UNASSIGNED = "hide_unassigned_leads"
 HIDE_ATTENDANCE = "hide_team_attendance"
@@ -55,6 +58,36 @@ def set_request_user(user: Optional[dict]) -> None:
     """Called once per authenticated request; scopes the unassigned-lead guard
     to that request (each request has its own context)."""
     _hide_unassigned.set(is_restricted(user, HIDE_UNASSIGNED))
+
+
+def set_hide_unassigned(value: bool) -> None:
+    _hide_unassigned.set(bool(value))
+
+
+# Every authenticated request passes the app-wide token check, which looks the
+# caller's switch up here (10s cache) so the guard is on for ALL routes no
+# matter which login helper they use later. Cleared whenever a switch changes.
+_email_cache: TTLCache = TTLCache(maxsize=2000, ttl=10)
+_email_lock = threading.Lock()
+
+
+def hide_unassigned_for_email(email: Optional[str], loader: Callable[[str], Optional[dict]]) -> bool:
+    key = (email or "").strip().lower()
+    if not key:
+        return False
+    with _email_lock:
+        if key in _email_cache:
+            return _email_cache[key]
+    row = loader(key)  # outside the lock: a slow DB call must not block other users
+    value = is_restricted(row, HIDE_UNASSIGNED) if row else False
+    with _email_lock:
+        _email_cache[key] = value
+    return value
+
+
+def clear_user_cache() -> None:
+    with _email_lock:
+        _email_cache.clear()
 
 
 def hide_unassigned_active() -> bool:

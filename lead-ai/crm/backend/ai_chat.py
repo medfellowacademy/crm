@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from logger_config import logger
 from auth import decode_access_token
 from supabase_data_layer import supabase_data
+import visibility
 from ai_assistant import ai_assistant
 
 router = APIRouter(prefix="/api/ai-chat", tags=["ai-chat"])
@@ -32,6 +33,12 @@ def _current_user_email(request: Request) -> str:
     if auth_header.startswith("Bearer "):
         token_data = decode_access_token(auth_header.split(" ", 1)[1])
         if token_data and token_data.email:
+            # this module authenticates on its own, so switch on the per-user
+            # visibility guard (visibility.GuardedClient) for this request here
+            try:
+                visibility.set_request_user(supabase_data.get_user_by_email(token_data.email, raise_on_error=True))
+            except Exception:  # fail closed: never run unguarded because a lookup failed
+                raise HTTPException(status_code=503, detail="Couldn't verify your account just now — please retry.")
             return token_data.email
     raise HTTPException(status_code=401, detail="Not authenticated")
 

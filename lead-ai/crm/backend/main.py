@@ -447,6 +447,7 @@ _PUBLIC_PATHS = {
 }
 
 from fastapi import Request
+from starlette.concurrency import run_in_threadpool
 
 async def _verify_token(request: Request) -> None:
     """
@@ -470,7 +471,22 @@ async def _verify_token(request: Request) -> None:
         )
 
     token = auth_header.split(" ", 1)[1]
-    decode_access_token(token)  # raises 401 if expired / invalid
+    token_data = decode_access_token(token)  # raises 401 if expired / invalid
+
+    # Every route passes through here, whichever login helper it uses later, so
+    # this is where the per-user "hide unassigned leads" guard is switched on for
+    # the whole request (get_current_user / _get_request_user re-assert it from a
+    # fresh user row). Fails closed: if the lookup breaks we refuse, not skip.
+    if token_data and getattr(token_data, "email", None):
+        try:
+            hide = await run_in_threadpool(
+                visibility.hide_unassigned_for_email, token_data.email,
+                lambda e: supabase_data.get_user_by_email(e, raise_on_error=True),
+            )
+        except Exception as e:
+            logger.error("_verify_token restriction lookup failed - failing closed: {}", e)
+            raise HTTPException(status_code=503, detail="Couldn't verify your account just now — please retry.")
+        visibility.set_hide_unassigned(hide)
 
 
 def _get_request_user(request: Request) -> dict | None:
@@ -510,6 +526,9 @@ def _get_request_user(request: Request) -> dict | None:
     if role not in rbac.ALL_ROLES:
         raise HTTPException(status_code=403, detail="Your account role is not recognised.")
     user["role"] = role
+    # scope the unassigned-leads guard (visibility.GuardedClient) to this request;
+    # endpoints that take a bare `request` never pass through get_current_user
+    visibility.set_request_user(user)
     return user
 
 
