@@ -16,6 +16,7 @@ from pydantic import BaseModel
 # Import Supabase data layer
 from supabase_data_layer import supabase_data
 from logger_config import logger
+import visibility
 
 # Security configuration — fail fast if the secret is missing or left as the default.
 _raw_secret = os.getenv("JWT_SECRET_KEY", "")
@@ -173,6 +174,8 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # scope the unassigned-leads guard (visibility.GuardedClient) to this request
+    visibility.set_request_user(user)
     return user
 
 

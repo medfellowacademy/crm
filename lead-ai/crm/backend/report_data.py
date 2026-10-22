@@ -17,6 +17,7 @@ from typing import Optional
 
 from cachetools import TTLCache
 
+import visibility
 from enrollment_dates import load_enroll_dates
 from employee_performance import norm
 
@@ -64,9 +65,10 @@ def get_report_leads(client, names: Optional[list] = None) -> list:
     with _lock:  # single-flight: concurrent first requests share one fetch
         leads = _cache.get("all")
         if leads is None:
-            leads = load_enroll_dates(client, _fetch_all(client))
+            with visibility.unguarded():  # shared by every user; filtered per caller below
+                leads = load_enroll_dates(client, _fetch_all(client))
             _cache["all"] = leads
     if names is None:
-        return leads
+        return visibility.drop_unassigned_if_active(leads)
     allowed = {norm(n) for n in names}
     return [l for l in leads if norm(l.get("assigned_to")) in allowed]

@@ -209,6 +209,12 @@ export const employeePerformanceAPI = {
 };
 
 // Consolidated Reports — monthly growth, sales, revenue, breakdowns
+export const restrictionsAPI = {
+  me: () => api.get('/api/restrictions/me'),
+  get: (userId) => api.get(`/api/users/${userId}/restrictions`),
+  set: (userId, data) => api.put(`/api/users/${userId}/restrictions`, data),
+};
+
 export const vacancyAPI = {
   list: () => api.get('/api/vacancy-boards'),
   create: (data) => api.post('/api/vacancy-boards', data),

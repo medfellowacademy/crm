@@ -135,7 +135,9 @@ from preferences_router import router as preferences_router
 from reengagement_router import router as reengagement_router
 from employee_performance_router import router as employee_performance_router
 from payments_router import router as payments_router
+import visibility
 from vacancy_router import router as vacancy_router
+from restrictions_router import router as restrictions_router
 from consolidated_reports_router import router as consolidated_reports_router
 
 # Password hashing
@@ -722,6 +724,7 @@ app.include_router(reengagement_router)
 app.include_router(employee_performance_router)
 app.include_router(payments_router)
 app.include_router(vacancy_router)
+app.include_router(restrictions_router)
 app.include_router(consolidated_reports_router)
 
 logger.info("🚀 FastAPI application initialized with logging and error handling")
@@ -3918,10 +3921,20 @@ def get_lead_update_activity(
                 return []
 
         _batches = [all_db_ids[i:i + 100] for i in range(0, len(all_db_ids), 100)]
+        # Worker threads don't inherit the request's context, so hand each one a
+        # copy — otherwise the unassigned-leads guard would silently not apply.
+        import contextvars as _cv
+        _ctxs = [_cv.copy_context() for _ in _batches]
         with ThreadPoolExecutor(max_workers=6) as pool:
-            for leads_chunk in pool.map(_lead_batch, _batches):
+            for leads_chunk in pool.map(lambda c, b: c.run(_lead_batch, b), _ctxs, _batches):
                 for lead in leads_chunk:
                     lead_info[int(lead["id"])] = lead
+
+        # A user restricted from unassigned leads must not see activity/notes
+        # about leads they can't open (those leads are absent from lead_info).
+        if visibility.hide_unassigned_active():
+            activities = [a for a in activities if a.get("lead_id") is None or int(a["lead_id"]) in lead_info]
+            notes = [n for n in notes if n.get("lead_id") is None or int(n["lead_id"]) in lead_info]
 
         def day_key(ts: str) -> str:
             """Return YYYY-MM-DD from an ISO timestamp."""
@@ -4647,7 +4660,11 @@ def get_users(actor: dict = Depends(require_permission(P.VIEW_USERS))):
         if names is not None:
             allow = {rbac.norm_name(n) for n in names}
             users = [u for u in users if rbac.norm_name(u.get("full_name")) in allow]
-        return sanitize_users(users)
+        out = sanitize_users(users)
+        if rbac.get_role(actor) != rbac.ROLE_SUPER_ADMIN:
+            # who restricted whom is for Super Admins only
+            out = [{k: v for k, v in u.items() if k != "restrictions"} for u in out]
+        return out
     except Exception as e:
         logger.error(f"Error fetching users: {e}")
         return []

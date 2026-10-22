@@ -6,6 +6,7 @@ Handles cloud database connection and Supabase-specific features
 import os
 from typing import Optional
 from supabase import create_client, Client
+from visibility import GuardedClient
 from dotenv import load_dotenv
 from logger_config import logger
 
@@ -22,7 +23,8 @@ class SupabaseManager:
         
         if self.url and self.key:
             try:
-                self.client = create_client(self.url, self.key)
+                # GuardedClient hides ownerless leads from users restricted by a Super Admin
+                self.client = GuardedClient(create_client(self.url, self.key))
                 logger.info("✅ Supabase client initialized", extra={"system": "supabase"})
             except Exception as e:
                 logger.error(f"❌ Supabase initialization failed: {e}", extra={"system": "supabase"})

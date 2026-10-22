@@ -21,6 +21,7 @@ from rbac import require_permission, P
 from supabase_data_layer import supabase_data
 from logger_config import logger
 from cache import invalidate_cache, LEAD_CACHE, STATS_CACHE
+import visibility
 from enrollment_dates import load_enroll_dates
 from employee_performance import norm
 import payments_analytics as pa
@@ -40,19 +41,20 @@ def _fetch_enrolled() -> list:
     with _lock:
         rows = _cache.get("enrolled")
         if rows is None:
-            rows, offset = [], 0
-            while True:
-                batch = (
-                    supabase_data.client.table("leads").select("*").eq("status", "Enrolled")
-                    .order("id").range(offset, offset + 999).execute().data or []
-                )
-                rows.extend(batch)
-                if len(batch) < 1000:
-                    break
-                offset += 1000
-            rows = load_enroll_dates(supabase_data.client, rows)
+            with visibility.unguarded():  # shared by every user; filtered per caller below
+                rows, offset = [], 0
+                while True:
+                    batch = (
+                        supabase_data.client.table("leads").select("*").eq("status", "Enrolled")
+                        .order("id").range(offset, offset + 999).execute().data or []
+                    )
+                    rows.extend(batch)
+                    if len(batch) < 1000:
+                        break
+                    offset += 1000
+                rows = load_enroll_dates(supabase_data.client, rows)
             _cache["enrolled"] = rows
-        return rows
+    return visibility.drop_unassigned_if_active(rows)
 
 
 def _clear() -> None:

@@ -48,6 +48,7 @@ import {
 } from '@ant-design/icons';
 import { leadsAPI, usersAPI } from '../api/api';
 import { DEPARTMENT_OPTIONS, DEPARTMENTS } from '../config/departments';
+import RestrictionsPanel from '../components/users/RestrictionsPanel';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -333,6 +334,11 @@ const UsersPage = () => {
           <div>
             <div>
               <Text strong style={{ fontSize: 14 }}>{record.full_name}</Text>
+              {record.restrictions && Object.values(record.restrictions).some(Boolean) && (
+                <Tooltip title="Has access restrictions — open Edit to see them">
+                  <Tag color="volcano" icon={<LockOutlined />} style={{ marginLeft: 8 }}>Restricted</Tag>
+                </Tooltip>
+              )}
             </div>
             <Text type="secondary" style={{ fontSize: 12 }}>
               ID: {record.id}
@@ -875,6 +881,8 @@ const UsersPage = () => {
             </Select>
           </Form.Item>
         </Form>
+
+        {editingUser && <RestrictionsPanel key={editingUser.id} user={editingUser} />}
       </Drawer>
 
       {/* User Leads Modal */}

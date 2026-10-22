@@ -9,6 +9,7 @@ import hashlib
 import json
 import time
 import threading
+import visibility
 from cachetools import TTLCache as _TTLCache, LRUCache as _LRUCache
 from logger_config import logger
 
@@ -19,36 +20,51 @@ def _locked(base):
     re-entrant lock, and reads of a missing/expired key fall through to the
     normal KeyError/default behaviour."""
     class Locked(base):
+        # Keys are namespaced by the caller's visibility partition so results
+        # computed for a user who may see unassigned leads are never served to
+        # one who may not (and vice versa).
         def __init__(self, *a, **kw):
             super().__init__(*a, **kw)
             self._lock = threading.RLock()
 
+        @staticmethod
+        def _k(key):
+            return (visibility.cache_partition(), key)
+
         def __contains__(self, key):
             with self._lock:
-                return super().__contains__(key)
+                return super().__contains__(self._k(key))
 
         def __getitem__(self, key):
             with self._lock:
-                return super().__getitem__(key)
+                return super().__getitem__(self._k(key))
 
         def __setitem__(self, key, value, *a, **kw):
             with self._lock:
-                return super().__setitem__(key, value, *a, **kw)
+                return super().__setitem__(self._k(key), value, *a, **kw)
 
         def __delitem__(self, key, *a, **kw):
             with self._lock:
-                return super().__delitem__(key, *a, **kw)
+                hit = False
+                for part in ("h", "-"):
+                    try:
+                        super().__delitem__((part, key), *a, **kw)
+                        hit = True
+                    except KeyError:
+                        pass
+                if not hit:
+                    raise KeyError(key)
 
         def get(self, key, default=None):
             with self._lock:
                 try:
-                    return super().__getitem__(key)
+                    return super().__getitem__(self._k(key))
                 except KeyError:
                     return default
 
         def keys(self):
             with self._lock:
-                return list(super().keys())
+                return list(dict.fromkeys(k[1] for k in super().keys()))
 
         def clear(self):
             with self._lock:

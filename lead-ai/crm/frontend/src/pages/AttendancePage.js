@@ -11,7 +11,7 @@ import {
   DeleteOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { attendanceAPI, usersAPI } from '../api/api';
+import { attendanceAPI, usersAPI, restrictionsAPI } from '../api/api';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -1498,19 +1498,39 @@ export default function AttendancePage() {
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
   const isAdmin     = currentUser.role === 'Super Admin';
 
+  // Switches an administrator has placed on this account (enforced server-side;
+  // this just hides what would only error out).
+  const { data: flags = [] } = useQuery({
+    queryKey: ['restrictions-me'],
+    queryFn: () => restrictionsAPI.me().then(r => r.data.flags),
+    staleTime: 60 * 1000,
+  });
+  const noTeamAttendance = flags.includes('hide_team_attendance');
+  const noPayroll        = flags.includes('hide_payroll');
+
   // Everyone gets their own check-in / history. Team Attendance, Reports,
   // Salary Slips and Advances are Super Admin only.
   const items = [
     { key: 'self', label: <Space><ClockCircleOutlined />My Attendance</Space>, children: <SelfAttendance /> },
   ];
   if (isAdmin) {
-    items.push(
-      { key: 'team',     label: <Space><TeamOutlined />Team Attendance</Space>,   children: <TeamAttendance /> },
-      { key: 'reports',  label: <Space><FileTextOutlined />Reports</Space>,        children: <AttendanceReport /> },
-      { key: 'slips',    label: <Space><DollarOutlined />Salary Slips</Space>,     children: <SalarySlips /> },
-      { key: 'advances', label: <Space><DollarOutlined />Advances</Space>,         children: <AdvancesPanel /> },
-    );
+    if (!noTeamAttendance) {
+      items.push(
+        { key: 'team',    label: <Space><TeamOutlined />Team Attendance</Space>, children: <TeamAttendance /> },
+        { key: 'reports', label: <Space><FileTextOutlined />Reports</Space>,      children: <AttendanceReport /> },
+      );
+    }
+    if (!noPayroll) {
+      items.push(
+        { key: 'slips',    label: <Space><DollarOutlined />Salary Slips</Space>, children: <SalarySlips /> },
+        { key: 'advances', label: <Space><DollarOutlined />Advances</Space>,     children: <AdvancesPanel /> },
+      );
+    }
   }
+  const hiddenNote = [
+    noTeamAttendance && (isAdmin ? 'team attendance and reports' : 'attendance history and reports'),
+    noPayroll && (isAdmin ? 'salary slips and advances' : 'salary information'),
+  ].filter(Boolean).join(' and ');
 
   return (
     <div>
@@ -1520,6 +1540,10 @@ export default function AttendancePage() {
         </Title>
         <Text type="secondary">Check in/out at the office and view reports.</Text>
       </div>
+      {hiddenNote && (
+        <Alert type="info" showIcon style={{ marginBottom: 16 }}
+          message={`Access to ${hiddenNote} has been restricted by an administrator.`} />
+      )}
       <Tabs items={items} />
     </div>
   );

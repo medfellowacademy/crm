@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from logger_config import logger
 from auth import decode_access_token
 from supabase_data_layer import supabase_data
+import visibility as vis
 
 router = APIRouter(prefix="/api/attendance", tags=["attendance"])
 
@@ -29,6 +30,21 @@ router = APIRouter(prefix="/api/attendance", tags=["attendance"])
 # slips, advances, festival management). Every other role can only ever see
 # and act on their OWN attendance.
 ADMIN_ROLES = ("Super Admin",)
+
+
+def _is_admin(c: dict) -> bool:
+    return c["role"] in ADMIN_ROLES
+
+
+def _view_all(c: dict, flag: str) -> bool:
+    """Everyone's records: an admin, unless a Super Admin restricted them."""
+    return vis.view_all(_is_admin(c), c, flag)
+
+
+def _deny_if_own_blocked(c: dict, flag: str) -> None:
+    """A restricted non-admin loses even their own records in that area."""
+    if vis.own_blocked(_is_admin(c), c, flag):
+        raise HTTPException(status_code=403, detail="Your access to this has been restricted by an administrator")
 
 # Office location (Hyderabad) and geofence radius. GPS drift indoors can
 # easily be 50-100m, so this is deliberately generous rather than razor-thin.
@@ -66,7 +82,7 @@ def _current_user(request: Request) -> dict:
                 raise HTTPException(status_code=503, detail="Service temporarily unavailable — please retry")
             if user:
                 return {"email": token_data.email, "full_name": user.get("full_name") or token_data.email,
-                        "role": token_data.role}
+                        "role": token_data.role, "restrictions": vis.restrictions_of(user)}
     raise HTTPException(status_code=401, detail="Not authenticated")
 
 
@@ -191,6 +207,7 @@ async def today_status(request: Request):
 @router.get("/history")
 async def get_history(request: Request, days: int = 30):
     user = _current_user(request)
+    _deny_if_own_blocked(user, vis.HIDE_ATTENDANCE)
     cutoff = (_today_ist() - timedelta(days=days)).isoformat()
     try:
         resp = (
@@ -212,7 +229,7 @@ async def get_team_attendance(request: Request, date: Optional[str] = None):
     """Admin/Manager view: everyone's attendance for a given day (default today),
     including counselors who haven't checked in at all."""
     user = _current_user(request)
-    if user["role"] not in ADMIN_ROLES:
+    if not _view_all(user, vis.HIDE_ATTENDANCE):
         raise HTTPException(status_code=403, detail="Admin or Manager role required")
 
     target_date = date or _today_ist().isoformat()
@@ -252,7 +269,8 @@ async def monthly_report(
 ):
     """Attendance records for a date range or month, for a specific user or all users."""
     current = _current_user(request)
-    is_admin = current["role"] in ADMIN_ROLES
+    _deny_if_own_blocked(current, vis.HIDE_ATTENDANCE)
+    is_admin = _view_all(current, vis.HIDE_ATTENDANCE)
 
     if not is_admin:
         user_email = current["email"]
@@ -300,7 +318,7 @@ class AdminMarkPayload(BaseModel):
 async def admin_mark_attendance(payload: AdminMarkPayload, request: Request):
     """Admin override: upsert an attendance record for any user on any date."""
     current = _current_user(request)
-    if current["role"] not in ADMIN_ROLES:
+    if not _view_all(current, vis.HIDE_ATTENDANCE):
         raise HTTPException(status_code=403, detail="Admin role required")
 
     VALID_STATUSES = {"present", "late", "left_early", "late_and_left_early", "absent"}
@@ -382,7 +400,7 @@ async def list_festivals(
 async def add_festival(payload: FestivalPayload, request: Request):
     """Add (or rename) a festival/holiday date. Admin only."""
     current = _current_user(request)
-    if current["role"] not in ADMIN_ROLES:
+    if not _view_all(current, vis.HIDE_ATTENDANCE):
         raise HTTPException(status_code=403, detail="Admin role required")
 
     name = (payload.name or "").strip()
@@ -419,7 +437,7 @@ async def add_festival(payload: FestivalPayload, request: Request):
 async def delete_festival(festival_id: int, request: Request):
     """Remove a festival/holiday date. Admin only."""
     current = _current_user(request)
-    if current["role"] not in ADMIN_ROLES:
+    if not _view_all(current, vis.HIDE_ATTENDANCE):
         raise HTTPException(status_code=403, detail="Admin role required")
     try:
         supabase_data.client.table("attendance_festivals").delete().eq("id", festival_id).execute()
@@ -451,7 +469,8 @@ async def export_attendance_csv(
 ):
     """Download attendance report as CSV for a date range or month."""
     current = _current_user(request)
-    is_admin = current["role"] in ADMIN_ROLES
+    _deny_if_own_blocked(current, vis.HIDE_ATTENDANCE)
+    is_admin = _view_all(current, vis.HIDE_ATTENDANCE)
 
     if not is_admin:
         user_email = current["email"]
@@ -578,7 +597,7 @@ class SalarySlipPayload(BaseModel):
 @router.post("/salary-slips")
 async def save_salary_slip(payload: SalarySlipPayload, request: Request):
     current = _current_user(request)
-    if current["role"] not in ADMIN_ROLES:
+    if not _view_all(current, vis.HIDE_PAYROLL):
         raise HTTPException(status_code=403, detail="Admin role required to save salary slips")
     try:
         data = payload.dict()
@@ -598,7 +617,8 @@ async def list_salary_slips(
     user_email: Optional[str] = None,
 ):
     current = _current_user(request)
-    is_admin = current["role"] in ADMIN_ROLES
+    _deny_if_own_blocked(current, vis.HIDE_PAYROLL)
+    is_admin = _view_all(current, vis.HIDE_PAYROLL)
     if not is_admin:
         user_email = current["email"]
     try:
@@ -618,7 +638,7 @@ async def list_salary_slips(
 async def delete_salary_slip(slip_id: int, request: Request):
     """Delete a saved salary slip. Admin only."""
     current = _current_user(request)
-    if current["role"] not in ADMIN_ROLES:
+    if not _view_all(current, vis.HIDE_PAYROLL):
         raise HTTPException(status_code=403, detail="Admin role required to delete salary slips")
     try:
         existing = (supabase_data.client.table("salary_slips")
@@ -651,7 +671,8 @@ async def get_leave_balance(request: Request, user_email: str, month: str):
     """Return leave balance record for a specific employee + month.
     If none exists, derive opening_balance from the previous month's closing."""
     current = _current_user(request)
-    is_admin = current["role"] in ADMIN_ROLES
+    _deny_if_own_blocked(current, vis.HIDE_PAYROLL)
+    is_admin = _view_all(current, vis.HIDE_PAYROLL)
     if not is_admin and current["email"] != user_email:
         raise HTTPException(status_code=403, detail="Access denied")
     try:
@@ -693,7 +714,7 @@ async def get_leave_balance(request: Request, user_email: str, month: str):
 @router.post("/leave-balance")
 async def save_leave_balance(payload: LeaveBalancePayload, request: Request):
     current = _current_user(request)
-    if current["role"] not in ADMIN_ROLES:
+    if not _view_all(current, vis.HIDE_PAYROLL):
         raise HTTPException(status_code=403, detail="Admin role required")
     try:
         opening  = float(payload.opening_balance)
@@ -755,7 +776,8 @@ class AdvancePayload(BaseModel):
 async def list_advances(request: Request, user_email: Optional[str] = None,
                         status: Optional[str] = None):
     current = _current_user(request)
-    is_admin = current["role"] in ADMIN_ROLES
+    _deny_if_own_blocked(current, vis.HIDE_PAYROLL)
+    is_admin = _view_all(current, vis.HIDE_PAYROLL)
     if not is_admin:
         user_email = current["email"]
     try:
@@ -774,7 +796,7 @@ async def list_advances(request: Request, user_email: Optional[str] = None,
 @router.post("/advances")
 async def create_advance(payload: AdvancePayload, request: Request):
     current = _current_user(request)
-    if current["role"] not in ADMIN_ROLES:
+    if not _view_all(current, vis.HIDE_PAYROLL):
         raise HTTPException(status_code=403, detail="Admin role required")
     try:
         record = {
@@ -799,7 +821,7 @@ async def create_advance(payload: AdvancePayload, request: Request):
 async def update_advance(advance_id: int, request: Request):
     """Mark an advance as deducted (called when saving the salary slip)."""
     current = _current_user(request)
-    if current["role"] not in ADMIN_ROLES:
+    if not _view_all(current, vis.HIDE_PAYROLL):
         raise HTTPException(status_code=403, detail="Admin role required")
     try:
         resp = (supabase_data.client.table("salary_advances")
