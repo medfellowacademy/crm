@@ -135,6 +135,7 @@ from preferences_router import router as preferences_router
 from reengagement_router import router as reengagement_router
 from employee_performance_router import router as employee_performance_router
 from payments_router import router as payments_router
+from vacancy_router import router as vacancy_router
 from consolidated_reports_router import router as consolidated_reports_router
 
 # Password hashing
@@ -720,6 +721,7 @@ app.include_router(preferences_router)
 app.include_router(reengagement_router)
 app.include_router(employee_performance_router)
 app.include_router(payments_router)
+app.include_router(vacancy_router)
 app.include_router(consolidated_reports_router)
 
 logger.info("🚀 FastAPI application initialized with logging and error handling")

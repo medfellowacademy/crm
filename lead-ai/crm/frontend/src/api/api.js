@@ -209,6 +209,14 @@ export const employeePerformanceAPI = {
 };
 
 // Consolidated Reports — monthly growth, sales, revenue, breakdowns
+export const vacancyAPI = {
+  list: () => api.get('/api/vacancy-boards'),
+  create: (data) => api.post('/api/vacancy-boards', data),
+  update: (id, data) => api.patch(`/api/vacancy-boards/${id}`, data),
+  toggleSeat: (id, seat) => api.post(`/api/vacancy-boards/${id}/seats/${seat}/toggle`),
+  remove: (id) => api.delete(`/api/vacancy-boards/${id}`),
+};
+
 export const paymentsAPI = {
   overview: (params) => api.get('/api/payments/enrolled', { params }),
   overdue: () => api.get('/api/payments/overdue'),
