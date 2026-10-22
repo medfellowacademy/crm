@@ -42,7 +42,8 @@ def _shape(row: dict, user: dict) -> dict:
     total = int(row.get("total_seats") or 0)
     seats = vacancy.clean_seats(row.get("enrolled_seats"), total)
     return {
-        "id": row["id"], "course_name": row.get("course_name") or "", "total_seats": total,
+        "id": row["id"], "course_name": row.get("course_name") or "", "doctor_name": row.get("doctor_name") or "",
+        "total_seats": total,
         "enrolled_seats": seats, **vacancy.stats(total, seats),
         "owner_name": row.get("owner_name"), "is_mine": (row.get("owner_email") or "").lower() == _email(user),
         "updated_by": row.get("updated_by"), "updated_at": row.get("updated_at"),
@@ -82,6 +83,7 @@ def list_boards(current_user: dict = Depends(get_current_user)):
 
 class BoardCreate(BaseModel):
     course_name: str = Field("New Course", min_length=1, max_length=200)
+    doctor_name: Optional[str] = Field(None, max_length=200)
     total_seats: int = Field(30, ge=1, le=500)
 
 
@@ -91,7 +93,8 @@ def create_board(body: BoardCreate, current_user: dict = Depends(get_current_use
         raise HTTPException(status_code=400, detail="Your account has no email, so a board can't be created")
     try:
         res = supabase_data.client.table("vacancy_boards").insert({
-            "course_name": body.course_name.strip(), "total_seats": body.total_seats, "enrolled_seats": [],
+            "course_name": body.course_name.strip(), "doctor_name": (body.doctor_name or "").strip() or None,
+            "total_seats": body.total_seats, "enrolled_seats": [],
             "owner_email": _email(current_user), "owner_name": _who(current_user),
             "created_by": _who(current_user), "updated_by": _who(current_user),
         }).execute()
@@ -103,6 +106,7 @@ def create_board(body: BoardCreate, current_user: dict = Depends(get_current_use
 
 class BoardUpdate(BaseModel):
     course_name: Optional[str] = Field(None, min_length=1, max_length=200)
+    doctor_name: Optional[str] = Field(None, max_length=200)  # send "" to clear it
     total_seats: Optional[int] = Field(None, ge=1, le=500)
 
 
@@ -114,6 +118,8 @@ def update_board(board_id: int, body: BoardUpdate, current_user: dict = Depends(
         patch["course_name"] = body.course_name.strip()
         if not patch["course_name"]:
             raise HTTPException(status_code=422, detail="Course name cannot be empty")
+    if "doctor_name" in body.model_fields_set:
+        patch["doctor_name"] = (body.doctor_name or "").strip() or None
     if body.total_seats is not None:
         patch["total_seats"] = body.total_seats
         # shrinking the board drops seats that no longer exist

@@ -10,7 +10,7 @@ const NAVY = '#0b3d91';
 
 const errText = (e, fallback) => e?.response?.data?.detail || fallback;
 
-function EditableTitle({ value, onSave }) {
+function EditableTitle({ value, onSave, placeholder = 'Click to edit', className = 'vb-title', allowEmpty = false, fontSize = 24 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   const inputRef = useRef(null);
@@ -21,32 +21,32 @@ function EditableTitle({ value, onSave }) {
   const commit = () => {
     const v = draft.trim();
     setEditing(false);
-    if (v && v !== value) onSave(v);
+    if ((v || allowEmpty) && v !== value) onSave(v);
     else setDraft(value);
   };
 
   if (editing) {
     return (
       <Input
-        ref={inputRef} value={draft} maxLength={200} size="large"
+        ref={inputRef} value={draft} maxLength={200} size="large" placeholder={placeholder}
         onChange={(e) => setDraft(e.target.value)} onPressEnter={commit} onBlur={commit}
         onKeyDown={(e) => { if (e.key === 'Escape') { setDraft(value); setEditing(false); } }}
         suffix={<CheckOutlined onMouseDown={(e) => e.preventDefault()} onClick={commit} style={{ cursor: 'pointer', color: GREEN }} />}
-        style={{ fontSize: 24, fontWeight: 700, maxWidth: 640 }}
+        style={{ fontSize, fontWeight: 700, maxWidth: 640 }}
       />
     );
   }
   return (
-    <Tooltip title="Click to edit the course name">
+    <Tooltip title={placeholder}>
       <div onClick={() => setEditing(true)} style={{ cursor: 'text', display: 'inline-flex', alignItems: 'center', gap: 10 }}>
-        <span className="vb-title">{value}</span>
-        <EditOutlined style={{ color: '#64748b', fontSize: 16 }} />
+        <span className={value ? className : `${className} vb-placeholder`}>{value || placeholder}</span>
+        <EditOutlined style={{ color: '#64748b', fontSize: 14 }} />
       </div>
     </Tooltip>
   );
 }
 
-function Board({ board, onRename, onResize, onToggle, onDelete, saving }) {
+function Board({ board, onRename, onDoctor, onResize, onToggle, onDelete, saving }) {
   const seats = useMemo(() => new Set(board.enrolled_seats), [board.enrolled_seats]);
   const numbers = useMemo(() => Array.from({ length: board.total_seats }, (_, i) => i + 1), [board.total_seats]);
 
@@ -65,7 +65,12 @@ function Board({ board, onRename, onResize, onToggle, onDelete, saving }) {
       </div>
 
       <div className="vb-stats">
-        <div className="vb-course"><EditableTitle value={board.course_name} onSave={onRename} /></div>
+        <div className="vb-course">
+          <EditableTitle value={board.course_name} onSave={onRename} placeholder="Click to edit the course name" />
+          <div>
+            <EditableTitle value={board.doctor_name} onSave={onDoctor} placeholder="Add doctor name" className="vb-doctor" allowEmpty fontSize={18} />
+          </div>
+        </div>
         <div className="vb-stat" style={{ borderColor: GREEN }}>
           <div className="vb-stat-num" style={{ color: GREEN }}>{board.enrolled}</div>
           <div className="vb-stat-label" style={{ color: GREEN }}>ENROLLED</div>
@@ -209,6 +214,7 @@ const VacancyBoardPage = () => {
           <Board
             board={active} saving={saving}
             onRename={(name) => patch.mutate({ id: active.id, body: { course_name: name } })}
+            onDoctor={(name) => patch.mutate({ id: active.id, body: { doctor_name: name } })}
             onResize={(n) => patch.mutate({ id: active.id, body: { total_seats: n } })}
             onToggle={(seat) => toggle.mutate({ id: active.id, seat })}
             onDelete={() => remove.mutate(active.id)}
@@ -228,6 +234,8 @@ const CSS = `
 .vb-title { font-size: clamp(20px, 2.6vw, 30px); font-weight: 800; line-height: 1.2; color:${NAVY}; }
 .vb-big { font-size: clamp(24px, 3.4vw, 38px); font-weight: 800; letter-spacing: .5px; line-height: 1.1; }
 .vb-yellow { color: ${YELLOW}; }
+.vb-doctor { font-size: clamp(15px, 1.8vw, 19px); font-weight: 600; color:#475569; }
+.vb-placeholder { color:#94a3b8; font-weight:500; font-style:italic; }
 .vb-tagline { display:flex; justify-content:center; align-items:center; gap:16px; flex-wrap:wrap; margin: 16px 0 20px; color:${NAVY}; font-weight:600; }
 .vb-tagline i { width:1px; height:18px; background:#94a3b8; }
 .vb-stats { display:flex; justify-content:center; align-items:center; gap:24px; margin-bottom: 18px; flex-wrap:wrap; }

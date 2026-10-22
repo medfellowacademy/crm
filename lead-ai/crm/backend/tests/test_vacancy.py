@@ -170,3 +170,18 @@ def test_account_without_email_cannot_create(client):
     client.as_user({"role": "Counselor", "full_name": "NoMail"})
     assert client.post("/api/vacancy-boards", json={"course_name": "X"}).status_code == 400
     assert client.get("/api/vacancy-boards").json()["boards"] == []
+
+
+def test_doctor_name_set_trimmed_and_cleared(client):
+    assert client.get("/api/vacancy-boards").json()["boards"][0]["doctor_name"] == ""
+    b = client.patch("/api/vacancy-boards/1", json={"doctor_name": "  Dr. Meera Rao  "}).json()
+    assert b["doctor_name"] == "Dr. Meera Rao" and b["course_name"] == "Asha's Laparoscopy"
+    assert client.patch("/api/vacancy-boards/1", json={"course_name": "Renamed"}).json()["doctor_name"] == "Dr. Meera Rao"  # untouched
+    assert client.patch("/api/vacancy-boards/1", json={"doctor_name": ""}).json()["doctor_name"] == ""
+
+
+def test_doctor_name_on_create_and_not_editable_by_others(client):
+    b = client.post("/api/vacancy-boards", json={"course_name": "X", "doctor_name": "Dr. Sen"}).json()
+    assert b["doctor_name"] == "Dr. Sen"
+    client.as_user(RAVI)
+    assert client.patch(f"/api/vacancy-boards/{b['id']}", json={"doctor_name": "hijack"}).status_code == 404
