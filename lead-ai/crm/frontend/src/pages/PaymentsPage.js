@@ -242,6 +242,7 @@ const PaymentsPage = () => {
   const [editLead,        setEditLead]        = useState(null);
   const [payTarget,       setPayTarget]       = useState(null);
   const [tab,             setTab]             = useState('payments');
+  const [qualityFilter,   setQualityFilter]   = useState(null); // 'fee' | 'date'
 
   // Server-side overview: enrolled leads (scoped to the caller), summary,
   // collections, aging and due-soon in ONE small request. The date range
@@ -280,6 +281,8 @@ const PaymentsPage = () => {
     if (filterCounselor && l.assigned_to !== filterCounselor) return false;
     if (filterCourse    && l.course_interested !== filterCourse) return false;
     if (filterStatus    && financeFor(l).paymentStatus !== filterStatus) return false;
+    if (qualityFilter === 'fee'  && Number(l.actual_revenue) > 0) return false;
+    if (qualityFilter === 'date' && (l.enroll_date || l.enrolled_at)) return false;
     return true;
   });
 
@@ -292,6 +295,16 @@ const PaymentsPage = () => {
   const totalOverdue   = finances.reduce((s, f) => s + f.overdueAmount, 0);
   const overdueCount   = finances.filter(f => f.overdueAmount > 0).length;
   const collectionRate = totalRevenue > 0 ? Math.round((totalCollected / totalRevenue) * 1000) / 10 : 0;
+
+  // From the data-quality banner: jump to the table filtered to the affected leads.
+  // Leads with no enrollment date are excluded server-side whenever a date range
+  // is set, so showing them also clears the range.
+  const showIncomplete = (kind) => {
+    if (kind === 'date') setDateRange([null, null]);
+    setSearchText(''); setFilterCounselor(null); setFilterCourse(null); setFilterStatus(null);
+    setQualityFilter(kind);
+    setTab('payments');
+  };
 
   const counselors = [...new Set(leads.map(l => l.assigned_to).filter(Boolean))];
   const courses    = [...new Set(leads.map(l => l.course_interested).filter(Boolean))];
@@ -510,6 +523,15 @@ const PaymentsPage = () => {
 
   const paymentsTab = (
     <>
+      {qualityFilter && (
+        <Alert
+          type="info" showIcon style={{ marginBottom: 12 }}
+          message={qualityFilter === 'fee'
+            ? `Showing ${filtered.length} enrolled lead(s) with no total fee — click "Edit Payment" to add it.`
+            : `Showing ${filtered.length} enrolled lead(s) with no enrollment date — click "Edit Payment" to add it.`}
+          action={<Button size="small" onClick={() => setQualityFilter(null)}>Show all</Button>}
+        />
+      )}
       <Card style={{ marginBottom: 20, borderRadius: 12 }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12 }}>
           <Input placeholder="Search name / phone / email…" value={searchText}
@@ -578,11 +600,27 @@ const PaymentsPage = () => {
         <Alert
           type="warning" showIcon closable style={{ marginBottom: 16 }}
           message="Some enrollments have incomplete data"
-          description={[
-            dq.missing_fee > 0 && `${dq.missing_fee} enrolled lead(s) have no total fee, so their revenue and balance read as zero.`,
-            dq.undated_enrollments > 0 && `${dq.undated_enrollments} have no enrollment date and are hidden whenever an enrolled-date range is set.`,
-            'Use "Edit Payment" on those rows to fill them in.',
-          ].filter(Boolean).join(' ')}
+          description={(
+            <div>
+              {dq.missing_fee > 0 && (
+                <div>
+                  {dq.missing_fee} enrolled lead(s) have no total fee, so their revenue and balance read as zero.{' '}
+                  <Button type="link" size="small" style={{ padding: 0 }} onClick={() => showIncomplete('fee')}>
+                    Show these {dq.missing_fee}
+                  </Button>
+                </div>
+              )}
+              {dq.undated_enrollments > 0 && (
+                <div>
+                  {dq.undated_enrollments} have no enrollment date and are hidden whenever an enrolled-date range is set.{' '}
+                  <Button type="link" size="small" style={{ padding: 0 }} onClick={() => showIncomplete('date')}>
+                    Show these {dq.undated_enrollments}
+                  </Button>
+                </div>
+              )}
+              <div style={{ marginTop: 4 }}>Use "Edit Payment" on those rows to fill them in.</div>
+            </div>
+          )}
         />
       )}
 
