@@ -30,7 +30,7 @@ export const financeFor = (lead) => {
   // passed — regardless of whether it was ever manually marked "overdue",
   // so this stays accurate even if nobody updates the status field.
   const overdueEmis = emis.filter(e =>
-    e.status !== 'paid' && e.date && dayjs(e.date).isBefore(today)
+    e.status !== 'paid' && e.status !== 'cancelled' && e.date && dayjs(e.date).isBefore(today)
   );
   const overdueAmount = overdueEmis.reduce((s, e) => s + (Number(e.amount) || 0), 0);
 

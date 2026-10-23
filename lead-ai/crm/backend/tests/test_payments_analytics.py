@@ -242,3 +242,48 @@ class TestEmiMonthReport:
         assert t["2026-10"]["scheduled"] == 22000 and t["2026-10"]["received"] == 9000
         assert t["2026-11"]["scheduled"] == 10000 and t["2026-11"]["received"] == 0
         assert t["2026-09"]["scheduled"] == 0 and t["2026-09"]["rate"] == 0.0
+
+
+class TestDroppedStudents:
+    EMIS = [emi("2026-08-01", 10000, "paid", paid_date="2026-08-02"), emi("2026-09-01", 10000), emi("2026-12-01", 10000)]
+
+    def test_drop_cancels_only_unpaid_instalments_and_keeps_them_on_record(self):
+        out, n, amt = pa.drop_emis(self.EMIS, "2026-10-10")
+        assert (n, amt) == (2, 20000.0)
+        assert [e["status"] for e in out] == ["paid", "cancelled", "cancelled"]
+        assert out[1]["cancelled_on"] == "2026-10-10" and out[1]["cancelled_reason"] == "drop"
+        assert self.EMIS[1]["status"] == "pending"            # input not mutated
+
+    def test_cancelled_instalments_are_not_overdue_owed_or_scheduled(self):
+        l = lead(emis=pa.drop_emis(self.EMIS, "2026-10-10")[0])
+        assert pa.overdue_emis([l], TODAY) == []
+        assert pa.finance_for(l, TODAY)["overdue"] == 0
+        assert pa.due_soon([l], TODAY, 90) == []
+        assert pa.emi_notifications([l], TODAY) == []
+        assert pa.emi_rows([l], "2026-09", TODAY) == []
+        assert {r["month"]: r["scheduled"] for r in pa.emi_trend([l], "2026-12", 6)}["2026-12"] == 0
+        assert {r["month"]: r["expected"] for r in pa.collections_by_month([l], "2026-12", 6)}["2026-12"] == 0
+
+    def test_paid_money_is_still_counted_after_a_drop(self):
+        l = lead(reg=20000, emis=pa.drop_emis(self.EMIS, "2026-10-10")[0])
+        assert pa.finance_for(l, TODAY)["collected"] == 30000   # registration + the one paid EMI
+
+    def test_cancelled_instalment_cannot_be_marked_paid(self):
+        out = pa.drop_emis(self.EMIS, "2026-10-10")[0]
+        with pytest.raises(ValueError, match="cancelled"):
+            pa.mark_emi_paid(out, 1, "2026-10-12", None, None)
+
+    def test_open_emi_summary_is_what_a_drop_would_cancel(self):
+        assert pa.open_emi_summary(self.EMIS) == {"count": 2, "amount": 20000.0}
+        assert pa.open_emi_summary(pa.drop_emis(self.EMIS, "2026-10-10")[0]) == {"count": 0, "amount": 0.0}
+
+    def test_restore_brings_back_only_what_the_drop_cancelled(self):
+        mixed = [emi("2026-08-01", 5, "paid"), emi("2026-09-01", 5, "cancelled")]          # cancelled for some other reason
+        dropped = pa.drop_emis(self.EMIS, "2026-10-10")[0] + mixed
+        restored = pa.restore_emis(dropped)
+        assert [e["status"] for e in restored] == ["paid", "pending", "pending", "paid", "cancelled"]
+        assert "cancelled_on" not in restored[1]
+
+    def test_dropping_a_student_with_nothing_unpaid(self):
+        out, n, amt = pa.drop_emis([emi("2026-08-01", 10, "paid")], "2026-10-10")
+        assert (n, amt) == (0, 0.0) and out[0]["status"] == "paid"

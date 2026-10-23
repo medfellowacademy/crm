@@ -22,6 +22,8 @@ class FakeQuery:
     def range(self, a, b): self._range = (a, b); return self
     def insert(self, row): self.op, self.payload = "insert", row; return self
     def update(self, row): self.op, self.payload = "update", row; return self
+    def or_(self, *a, **k): return self
+    def delete(self): self.op = "delete"; return self
 
     def _match(self, row):
         for kind, col, val in self.filters:
@@ -34,6 +36,9 @@ class FakeQuery:
         if self.op == "insert":
             rows.append(dict(self.payload, id=len(rows) + 1))
             return type("R", (), {"data": [self.payload]})
+        if self.op == "delete":
+            self.db.tables[self.table] = [r for r in rows if not self._match(r)]
+            return type("R", (), {"data": []})
         if self.op == "update":
             for r in rows:
                 if self._match(r):
@@ -172,3 +177,94 @@ def test_emis_by_month_is_scoped_for_counselors(client):
 def test_comment_without_emi_is_allowed(client):
     assert client.post("/api/payments/L1/followups", json={"note": "Parent asked to shift fee date"}).status_code == 200
     assert client.get("/api/payments/L1/followups").json()["followups"][0]["emi_index"] is None
+
+
+DROP = {"reason": "Financial reasons", "note": "Could not continue", "refund_amount": 0}
+
+
+def paid_up_lead(client, lead_id="L1"):
+    l = next(x for x in client.tables["leads"] if x["lead_id"] == lead_id)
+    l["emi_details"] = [{"date": "2026-08-01", "amount": 5000, "status": "paid", "paid_date": "2026-08-02"},
+                        {"date": "2026-12-01", "amount": 7000, "status": "pending"}]
+    return l
+
+
+def test_drop_sets_status_cancels_pending_emis_records_it_and_logs_it(client):
+    lead = paid_up_lead(client)
+    r = client.post("/api/payments/L1/drop", json={**DROP, "refund_amount": 1000})
+    assert r.status_code == 200 and r.json() == {"ok": True, "cancelled_emis": 1, "cancelled_amount": 7000.0}
+    assert lead["status"] == "Dropped" and lead["follow_up_date"] is None
+    assert [e["status"] for e in lead["emi_details"]] == ["paid", "cancelled"]
+    rec = client.tables["payment_drops"][0]
+    assert rec["reason"] == "Financial reasons" and rec["refund_amount"] == 1000 and rec["collected_at_drop"] == 25000
+    assert rec["cancelled_emis"] == 1 and rec["recorded_by"]
+    assert "Enrolled → Dropped" in client.tables["activities"][0]["description"]
+
+
+def test_dropped_student_disappears_from_the_enrolled_and_overdue_views(client):
+    paid_up_lead(client)
+    client.tables["leads"][0]["emi_details"][1]["date"] = "2026-01-01"          # make the pending EMI overdue
+    assert "L1" in {i["lead_id"] for i in client.get("/api/payments/overdue").json()["items"]}
+    client.post("/api/payments/L1/drop", json=DROP)
+    assert "L1" not in {i["lead_id"] for i in client.get("/api/payments/overdue").json()["items"]}
+
+
+def test_cannot_drop_twice_or_drop_someone_not_enrolled(client):
+    paid_up_lead(client)
+    assert client.post("/api/payments/L1/drop", json=DROP).status_code == 200
+    again = client.post("/api/payments/L1/drop", json=DROP)
+    assert again.status_code == 400 and "enrolled" in again.json()["detail"]
+    assert len(client.tables["payment_drops"]) == 1
+
+
+def test_refund_cannot_exceed_what_was_collected(client):
+    paid_up_lead(client)       # 20000 registration + 5000 paid EMI = 25000 collected
+    r = client.post("/api/payments/L1/drop", json={**DROP, "refund_amount": 25001})
+    assert r.status_code == 400 and "25,000" in r.json()["detail"]
+    assert client.tables["leads"][0]["status"] == "Enrolled" and "payment_drops" not in client.tables
+    assert client.post("/api/payments/L1/drop", json={**DROP, "refund_amount": 25000}).status_code == 200
+
+
+def test_drop_validation(client):
+    assert client.post("/api/payments/L1/drop", json={"reason": ""}).status_code == 422
+    assert client.post("/api/payments/L1/drop", json={**DROP, "refund_amount": -1}).status_code == 422
+    assert client.post("/api/payments/L1/drop", json={**DROP, "dropped_on": "2999-01-01"}).status_code == 400
+    assert client.post("/api/payments/NOPE/drop", json=DROP).status_code == 404
+
+
+def test_counselor_can_only_drop_their_own_students(client):
+    client.user.update({"role": "Counselor", "full_name": "Asha"})
+    pr._cache.clear()
+    assert client.post("/api/payments/L2/drop", json=DROP).status_code == 404
+    assert client.tables["leads"][1]["status"] == "Enrolled"
+    assert client.post("/api/payments/L1/drop", json=DROP).status_code == 200
+
+
+def test_restore_undoes_a_drop(client):
+    lead = paid_up_lead(client)
+    client.post("/api/payments/L1/drop", json=DROP)
+    r = client.post("/api/payments/L1/restore")
+    assert r.status_code == 200
+    assert lead["status"] == "Enrolled" and [e["status"] for e in lead["emi_details"]] == ["paid", "pending"]
+    assert client.tables["payment_drops"][0]["restored_at"]
+    assert client.post("/api/payments/L1/restore").status_code == 400          # not dropped any more
+
+
+def test_dropped_list_shows_collected_refunded_and_kept(client):
+    paid_up_lead(client)
+    client.post("/api/payments/L1/drop", json={**DROP, "refund_amount": 5000})
+    d = client.get("/api/payments/dropped").json()
+    row = d["items"][0]
+    assert (row["lead_id"], row["collected"], row["refund"], row["retained"]) == ("L1", 25000.0, 5000.0, 20000.0)
+    assert row["reason"] == "Financial reasons" and row["cancelled_emis"] == 1 and row["recorded"] is True
+    assert d["totals"] == {"count": 1, "collected": 25000.0, "refunded": 5000.0, "retained": 20000.0}
+
+
+def test_dropped_list_is_scoped_and_skips_students_who_never_paid(client):
+    paid_up_lead(client)
+    client.tables["leads"].append({"id": 9, "lead_id": "L9", "full_name": "Never paid", "assigned_to": "Asha",
+                                   "status": "Dropped", "registration_fees": 0, "enrolled_at": None})
+    client.post("/api/payments/L1/drop", json=DROP)
+    assert [i["lead_id"] for i in client.get("/api/payments/dropped").json()["items"]] == ["L1"]
+    client.user.update({"role": "Counselor", "full_name": "Ravi"})
+    assert client.get("/api/payments/dropped").json()["items"] == []

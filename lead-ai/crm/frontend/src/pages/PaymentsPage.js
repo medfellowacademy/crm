@@ -19,6 +19,8 @@ import PayEmiModal from '../components/payments/PayEmiModal';
 import CollectionsTab from '../components/payments/CollectionsTab';
 import OverdueTab from '../components/payments/OverdueTab';
 import EmiMonthTab from '../components/payments/EmiMonthTab';
+import DropStudentModal from '../components/payments/DropStudentModal';
+import DroppedTab from '../components/payments/DroppedTab';
 import { PaymentActivity } from '../components/payments/PaymentComments';
 import EnrollmentModal from '../components/leads/EnrollmentModal';
 import { useAuth } from '../context/AuthContext';
@@ -39,6 +41,7 @@ const EmiStatus = ({ status }) => {
     paid:    { color: 'success',    label: 'Paid'    },
     pending: { color: 'processing', label: 'Pending' },
     overdue: { color: 'error',      label: 'Overdue' },
+    cancelled: { color: 'default',  label: 'Cancelled (dropped)' },
   }[status] || { color: 'default', label: status || '—' };
   return <Badge status={cfg.color} text={cfg.label} />;
 };
@@ -111,7 +114,7 @@ const ExpandedRow = ({ lead, onUpload, uploading, onMarkPaid }) => {
           {emis.length === 0
             ? <Text type="secondary">No EMIs — full payment</Text>
             : emis.map((emi, i) => {
-              const isOverdue = emi.status !== 'paid' && emi.date && dayjs(emi.date).isBefore(today);
+              const isOverdue = emi.status !== 'paid' && emi.status !== 'cancelled' && emi.date && dayjs(emi.date).isBefore(today);
               return (
                 <div key={i} style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -126,7 +129,7 @@ const ExpandedRow = ({ lead, onUpload, uploading, onMarkPaid }) => {
                   {isOverdue
                     ? <Badge status="error" text={<Text type="danger" style={{ fontSize: 12 }}>Overdue</Text>} />
                     : <EmiStatus status={emi.status} />}
-                  {emi.status !== 'paid' && (
+                  {emi.status !== 'paid' && emi.status !== 'cancelled' && (
                     <Button size="small" type="link" icon={<CheckOutlined />} style={{ padding: 0 }}
                       onClick={() => onMarkPaid({ leadId: lead.lead_id, index: i, name: lead.full_name, amount: emi.amount, dueDate: emi.date })}>
                       Mark paid
@@ -240,6 +243,7 @@ const PaymentsPage = () => {
   const [dateRange,       setDateRange]       = useState([null, null]);
   const [uploading,       setUploading]       = useState(null);
   const [editLead,        setEditLead]        = useState(null);
+  const [dropLead,        setDropLead]        = useState(null);
   const [payTarget,       setPayTarget]       = useState(null);
   const [tab,             setTab]             = useState('payments');
   const [qualityFilter,   setQualityFilter]   = useState(null); // 'fee' | 'date'
@@ -258,6 +262,7 @@ const PaymentsPage = () => {
     queryClient.invalidateQueries({ queryKey: ['payments-overview'] });
     queryClient.invalidateQueries({ queryKey: ['payments-overdue'] });
     queryClient.invalidateQueries({ queryKey: ['payments-emis'] });
+    queryClient.invalidateQueries({ queryKey: ['payments-dropped'] });
     queryClient.invalidateQueries({ queryKey: ['payment-history'] });
     queryClient.invalidateQueries({ queryKey: ['enrolled-leads'] });
     queryClient.invalidateQueries({ queryKey: ['leads'] });
@@ -500,9 +505,14 @@ const PaymentsPage = () => {
       title: '',
       key: 'actions',
       render: (_, r) => (
-        <Button size="small" type="link" onClick={() => setEditLead(r)}>
-          Edit Payment
-        </Button>
+        <Space size={0} wrap>
+          <Button size="small" type="link" onClick={() => setEditLead(r)}>
+            Edit Payment
+          </Button>
+          <Button size="small" type="link" danger onClick={() => setDropLead(r)}>
+            Mark dropped
+          </Button>
+        </Space>
       ),
     },
   ];
@@ -650,11 +660,13 @@ const PaymentsPage = () => {
           { key: 'payments', label: 'Enrolled & Payments', children: paymentsTab },
           { key: 'emis', label: 'EMIs by month', children: <EmiMonthTab onChanged={refreshAll} /> },
           { key: 'collections', label: 'Collections', children: <CollectionsTab data={overview} /> },
+          { key: 'dropped', label: 'Dropped', children: <DroppedTab onChanged={refreshAll} /> },
           { key: 'overdue', label: `Overdue${overview?.summary?.overdue_leads ? ` (${overview.summary.overdue_leads})` : ''}`, children: <OverdueTab onChanged={refreshAll} /> },
         ]}
       />
 
       <PayEmiModal target={payTarget} onClose={() => setPayTarget(null)} onDone={refreshAll} />
+      <DropStudentModal lead={dropLead} onClose={() => setDropLead(null)} onDone={refreshAll} />
 
       {/* Edit Payment Modal */}
       <EnrollmentModal

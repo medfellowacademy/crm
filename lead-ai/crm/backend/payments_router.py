@@ -9,6 +9,7 @@ small fetch), an overdue-EMI worklist, "mark EMI paid" with an audit ledger
 """
 
 import threading
+from datetime import datetime, timezone
 from typing import Optional
 
 from cachetools import TTLCache
@@ -237,3 +238,139 @@ def list_followups(lead_id: str, current_user: dict = Depends(get_current_user))
         .order("recorded_at", desc=True).limit(50).execute().data or []
     )
     return {"followups": rows, "payments": ledger}
+
+
+# ───────────────────────────── dropped students ─────────────────────────────
+
+class DropBody(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=80)
+    note: Optional[str] = Field(None, max_length=500)
+    dropped_on: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$", description="Defaults to today")
+    refund_amount: float = Field(0, ge=0, description="Money returned to the student, if any")
+
+
+def _activity(lead: dict, description: str, who: str) -> None:
+    try:
+        supabase_data.client.table("activities").insert({
+            "lead_id": lead.get("id"), "activity_type": "field_update", "description": description, "created_by": who,
+        }).execute()
+    except Exception as e:  # the audit trail must not undo the change
+        logger.error(f"drop/restore activity failed: {e}")
+
+
+@router.post("/{lead_id}/drop", dependencies=[_EDIT])
+def drop_student(lead_id: str, body: DropBody, current_user: dict = Depends(get_current_user)):
+    """The student dropped out: set the lead's status to Dropped, cancel their
+    remaining (unpaid) instalments so they stop showing as owed/overdue, and
+    record why, when and how much (if anything) was refunded."""
+    lead = _get_lead(lead_id, current_user)
+    if lead.get("status") != "Enrolled":
+        raise HTTPException(status_code=400, detail="Only enrolled students can be marked as dropped")
+    today = pa.today_ist()
+    dropped_on = body.dropped_on or today.isoformat()
+    if dropped_on > today.isoformat():
+        raise HTTPException(status_code=400, detail="The drop date can't be in the future")
+    collected = pa.finance_for(lead, today)["collected"]
+    if body.refund_amount > collected + 0.005:
+        raise HTTPException(status_code=400, detail=f"The refund can't be more than the ₹{collected:,.0f} collected")
+
+    who = rbac.user_identity(current_user) or current_user.get("email")
+    new_emis, cancelled_n, cancelled_amt = pa.drop_emis(pa.emis_of(lead), dropped_on)
+    client = supabase_data.client
+    try:
+        rec = client.table("payment_drops").insert({
+            "lead_id": lead_id, "lead_db_id": lead.get("id"), "dropped_on": dropped_on, "reason": body.reason.strip(),
+            "note": (body.note or "").strip() or None, "refund_amount": body.refund_amount,
+            "collected_at_drop": collected, "cancelled_emis": cancelled_n, "cancelled_amount": cancelled_amt,
+            "recorded_by": who,
+        }).execute()
+        try:
+            client.table("leads").update({"status": "Dropped", "emi_details": new_emis, "follow_up_date": None}) \
+                .eq("lead_id", lead_id).execute()
+        except Exception:
+            try:
+                client.table("payment_drops").delete().eq("lead_id", lead_id).eq("id", rec.data[0]["id"]).execute()
+            except Exception:
+                pass
+            raise
+    except Exception as e:
+        logger.error(f"drop_student error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to mark the student as dropped")
+
+    _activity(lead, f"Status: Enrolled → Dropped | Reason: {body.reason.strip()}"
+                    + (f" | Refund: ₹{body.refund_amount:,.0f}" if body.refund_amount else "")
+                    + (f" | {cancelled_n} pending EMI(s) cancelled (₹{cancelled_amt:,.0f})" if cancelled_n else ""), who)
+    _clear()
+    return {"ok": True, "cancelled_emis": cancelled_n, "cancelled_amount": cancelled_amt}
+
+
+@router.post("/{lead_id}/restore", dependencies=[_EDIT])
+def restore_student(lead_id: str, current_user: dict = Depends(get_current_user)):
+    """Undo a drop (e.g. marked by mistake, or the student came back): status
+    returns to Enrolled and the instalments the drop cancelled become pending again."""
+    lead = _get_lead(lead_id, current_user)
+    if lead.get("status") != "Dropped":
+        raise HTTPException(status_code=400, detail="This student isn't marked as dropped")
+    who = rbac.user_identity(current_user) or current_user.get("email")
+    client = supabase_data.client
+    try:
+        client.table("leads").update({"status": "Enrolled", "emi_details": pa.restore_emis(pa.emis_of(lead))}) \
+            .eq("lead_id", lead_id).execute()
+        client.table("payment_drops").update({"restored_at": datetime.now(timezone.utc).isoformat(), "restored_by": who}) \
+            .eq("lead_id", lead_id).execute()
+    except Exception as e:
+        logger.error(f"restore_student error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to restore the student")
+    _activity(lead, "Status: Dropped → Enrolled | Drop undone (instalments restored)", who)
+    _clear()
+    return {"ok": True}
+
+
+@router.get("/dropped", dependencies=[_VIEW])
+def list_dropped(current_user: dict = Depends(get_current_user)):
+    """Students who paid something and then dropped, with what was collected,
+    refunded and kept. (Leads that dropped before ever paying are not listed.)"""
+    try:
+        today = pa.today_ist()
+        rows = (
+            supabase_data.client.table("leads").select("*").eq("status", "Dropped")
+            .or_("enrolled_at.not.is.null,registration_fees.gt.0").order("id").limit(2000).execute().data or []
+        )
+        rows = [r for r in rows if r.get("enrolled_at") or pa._num(r.get("registration_fees")) > 0]
+        scope = rbac.lead_scope_names(current_user)
+        if scope is not None:
+            allowed = {norm(n) for n in scope}
+            rows = [r for r in rows if norm(r.get("assigned_to")) in allowed]
+        records: dict = {}
+        ids = sorted({r["lead_id"] for r in rows if r.get("lead_id")})
+        for i in range(0, len(ids), 100):
+            found = (
+                supabase_data.client.table("payment_drops").select("*").in_("lead_id", ids[i:i + 100])
+                .order("recorded_at", desc=True).execute().data or []
+            )
+            for f in found:
+                records.setdefault(f["lead_id"], f)
+        items = []
+        for r in rows:
+            rec = records.get(r.get("lead_id")) or {}
+            collected = pa.finance_for(r, today)["collected"]
+            refund = pa._num(rec.get("refund_amount"))
+            items.append({
+                "lead_id": r.get("lead_id"), "name": r.get("full_name"), "phone": r.get("phone"),
+                "counselor": r.get("assigned_to"), "course": r.get("course_interested"), "country": r.get("country"),
+                "total_fee": pa._num(r.get("actual_revenue")),
+                "collected": collected, "refund": refund, "retained": round(collected - refund, 2),
+                "dropped_on": rec.get("dropped_on"), "reason": rec.get("reason"), "note": rec.get("note"),
+                "recorded_by": rec.get("recorded_by"), "cancelled_emis": rec.get("cancelled_emis") or 0,
+                "cancelled_amount": pa._num(rec.get("cancelled_amount")), "recorded": bool(rec),
+            })
+        items.sort(key=lambda x: x["dropped_on"] or "", reverse=True)
+        return {
+            "items": items,
+            "totals": {"count": len(items), "collected": round(sum(i["collected"] for i in items), 2),
+                       "refunded": round(sum(i["refund"] for i in items), 2),
+                       "retained": round(sum(i["retained"] for i in items), 2)},
+        }
+    except Exception as e:
+        logger.error(f"list_dropped error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load dropped students")

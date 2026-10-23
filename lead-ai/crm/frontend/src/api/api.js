@@ -230,6 +230,9 @@ export const paymentsAPI = {
   markEmiPaid: (leadId, index, data) => api.post(`/api/payments/${leadId}/emis/${index}/pay`, data),
   addFollowup: (leadId, data) => api.post(`/api/payments/${leadId}/followups`, data),
   history: (leadId) => api.get(`/api/payments/${leadId}/followups`),
+  drop: (leadId, data) => api.post(`/api/payments/${leadId}/drop`, data),
+  restore: (leadId) => api.post(`/api/payments/${leadId}/restore`),
+  dropped: () => api.get('/api/payments/dropped'),
 };
 
 export const consolidatedReportsAPI = {

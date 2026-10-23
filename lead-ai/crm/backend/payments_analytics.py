@@ -68,9 +68,14 @@ def _enroll_day(lead: dict) -> Optional[str]:
     return _day(lead.get("enroll_date") or lead.get("enrolled_at"))
 
 
+def is_open(emi: dict) -> bool:
+    """Still to be collected: not paid and not cancelled (a drop cancels the rest)."""
+    return emi.get("status") not in ("paid", "cancelled")
+
+
 def is_overdue(emi: dict, today: date) -> bool:
     due = _to_date(emi.get("date"))
-    return emi.get("status") != "paid" and due is not None and due < today
+    return is_open(emi) and due is not None and due < today
 
 
 def finance_for(lead: dict, today: date) -> dict:
@@ -154,7 +159,7 @@ def collections_by_month(leads: list, end_month: str, months: int = 12) -> list:
                 expected[m] += ev["amount"]
         for e in emis_of(lead):
             d = _day(e.get("date"))
-            if d:
+            if d and e.get("status") != "cancelled":
                 expected[_month(d)] += _num(e.get("amount"))
     return [{"month": m, "collected": round(collected[m], 2), "expected": round(expected[m], 2),
              "approx_collected": round(approx[m], 2)} for m in wanted]
@@ -198,7 +203,7 @@ def due_soon(leads: list, today: date, days: int = 30) -> list:
     for lead in leads or []:
         for i, e in enumerate(emis_of(lead)):
             due = _to_date(e.get("date"))
-            if e.get("status") != "paid" and due and today <= due <= horizon:
+            if is_open(e) and due and today <= due <= horizon:
                 out.append({
                     "lead_id": lead.get("lead_id"), "name": lead.get("full_name"),
                     "phone": lead.get("phone"), "counselor": lead.get("assigned_to"),
@@ -260,6 +265,8 @@ def mark_emi_paid(emis: list, index: int, paid_on: str, method: Optional[str], b
         raise ValueError("EMI not found")
     if emis[index].get("status") == "paid":
         raise ValueError("EMI is already marked paid")
+    if emis[index].get("status") == "cancelled":
+        raise ValueError("This EMI was cancelled because the student dropped")
     if not _to_date(paid_on):
         raise ValueError("Invalid paid date")
     if amount is not None and _num(amount) < 0:
@@ -286,7 +293,7 @@ def emi_notifications(leads: list, today: date) -> list:
             oldest = max((today - _to_date(e["date"])).days for e in od)
             notes.append({"kind": "emi_overdue", "lead": lead, "count": len(od),
                           "amount": sum(_num(e.get("amount")) for e in od), "days": oldest})
-        soon = [e for e in emis if e.get("status") != "paid" and _to_date(e.get("date"))
+        soon = [e for e in emis if is_open(e) and _to_date(e.get("date"))
                 and today <= _to_date(e["date"]) <= today + timedelta(days=7)]
         if soon:
             first = min((_to_date(e["date"]) - today).days for e in soon)
@@ -308,7 +315,7 @@ def emi_rows(leads: list, month: str, today: date) -> list:
     for lead in leads or []:
         for i, e in enumerate(emis_of(lead)):
             d = _day(e.get("date"))
-            if not d or _month(d) != month:
+            if not d or _month(d) != month or e.get("status") == "cancelled":
                 continue
             status = _emi_status(e, today)
             out.append({
@@ -344,7 +351,7 @@ def emi_trend(leads: list, end_month: str, months: int = 12) -> list:
     for lead in leads or []:
         for e in emis_of(lead):
             d = _day(e.get("date"))
-            if not d:
+            if not d or e.get("status") == "cancelled":
                 continue
             m = _month(d)
             scheduled[m] += _num(e.get("amount"))
@@ -352,6 +359,40 @@ def emi_trend(leads: list, end_month: str, months: int = 12) -> list:
                 received[m] += paid_amount(e)
     return [{"month": m, "scheduled": round(scheduled[m], 2), "received": round(received[m], 2),
              "rate": round(received[m] / scheduled[m] * 100, 1) if scheduled[m] else 0.0} for m in wanted]
+
+
+def open_emi_summary(emis: list) -> dict:
+    """The instalments a drop would cancel: how many, and their total value."""
+    open_ = [e for e in emis if is_open(e)]
+    return {"count": len(open_), "amount": round(sum(_num(e.get("amount")) for e in open_), 2)}
+
+
+def drop_emis(emis: list, dropped_on: str) -> tuple:
+    """(new_emis, cancelled_count, cancelled_amount): every unpaid instalment is
+    kept on record but marked 'cancelled' so it stops counting as owed, overdue
+    or scheduled. Paid instalments are untouched."""
+    out, count, amount = [], 0, 0.0
+    for e in emis:
+        e = dict(e)
+        if is_open(e):
+            count += 1
+            amount += _num(e.get("amount"))
+            e.update({"status": "cancelled", "cancelled_on": _day(dropped_on), "cancelled_reason": "drop"})
+        out.append(e)
+    return out, count, round(amount, 2)
+
+
+def restore_emis(emis: list) -> list:
+    """Undo a drop: instalments cancelled BY the drop go back to pending."""
+    out = []
+    for e in emis:
+        e = dict(e)
+        if e.get("status") == "cancelled" and e.get("cancelled_reason") == "drop":
+            e["status"] = "pending"
+            for k in ("cancelled_on", "cancelled_reason"):
+                e.pop(k, None)
+        out.append(e)
+    return out
 
 
 def to_csv_rows(leads: list, today: date) -> list:
