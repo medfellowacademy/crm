@@ -96,10 +96,13 @@ export default function LeadUpdateActivityPage() {
   // ── Per-person performance (conversion / response time / cadence) ──────────
   // Same endpoint the Team Performance page uses; already hierarchy-scoped
   // server-side, so this only ever returns people the caller may monitor.
-  const { data: perfData } = useQuery({
+  // Only fetched once a person's detail panel is opened: it reads every note and
+  // activity ever written, so running it on page load starved the main table.
+  const { data: perfData, isFetching: perfLoading } = useQuery({
     queryKey: ['counselor-performance-comparison', 'all-time'],
     queryFn: () => counselorsAPI.getPerformanceComparison({}).then(r => r.data),
     staleTime: 5 * 60 * 1000,
+    enabled: !!drawerRow,
   });
   const perfByName = useMemo(() => {
     const m = {};
@@ -578,7 +581,11 @@ export default function LeadUpdateActivityPage() {
             {/* ── Per-person performance (all-time) ── */}
             {(() => {
               const p = perfByName[(drawerRow.user || '').trim().toLowerCase()];
-              if (!p) return null;
+              if (!p) {
+                return perfLoading
+                  ? <Text type="secondary" style={{ display: 'block', marginBottom: 12, fontSize: 12 }}>Loading performance stats…</Text>
+                  : null;
+              }
               const fmt = (v, s = '') => (v == null ? '—' : `${v}${s}`);
               const delta = (v, avg, lowerBetter) => {
                 if (v == null || avg == null) return null;

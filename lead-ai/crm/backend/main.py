@@ -3867,6 +3867,15 @@ def get_lead_update_activity(
         date_from = _from
         date_to   = _to
 
+        # Repeat loads (refresh, revisit, several people on the same range) reuse
+        # the last result for a minute instead of re-reading ~10k rows. The key
+        # carries the caller's visibility scope so one user's view is never served
+        # to another (STATS_CACHE is also partitioned per visibility).
+        _ck = f"lead_update_activity:{rbac.scope_cache_suffix(current_user)}:{date_from}:{date_to}:{(user or '').strip().lower()}"
+        _cached = STATS_CACHE.get(_ck)
+        if _cached is not None:
+            return _cached
+
         # ── Pull activities + notes in the window ────────────────────────────
         # Pages are fetched in parallel (this used to be ~45 sequential round
         # trips for a week of data) and the handler is a plain `def`, so it runs
@@ -4058,11 +4067,15 @@ def get_lead_update_activity(
         rows.sort(key=lambda r: (r["date"], r["user"]), reverse=True)
 
         _scoped_users = len({r["user"] for r in rows}) if _scope_allow is not None else len(buckets)
-        return {"rows": rows, "total_users": _scoped_users, "date_from": date_from[:10], "date_to": date_to[:10]}
+        result = {"rows": rows, "total_users": _scoped_users, "date_from": date_from[:10], "date_to": date_to[:10]}
+        STATS_CACHE[_ck] = result
+        return result
 
     except Exception as e:
+        # Fail loudly: an empty 200 here made the page look like "no activity" (or
+        # spin) when the database had merely timed out. A 503 shows the Retry state.
         logger.error(f"Lead update activity error: {e}", exc_info=True)
-        return {"rows": [], "total_users": 0, "date_from": "", "date_to": ""}
+        raise HTTPException(status_code=503, detail="Couldn't load activity right now — please retry")
 
 
 @app.get("/api/leads/followups/today")
