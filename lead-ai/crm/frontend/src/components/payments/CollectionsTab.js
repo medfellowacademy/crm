@@ -82,6 +82,7 @@ export default function CollectionsTab({ data }) {
               locale={{ emptyText: <Empty description="No EMIs due soon" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
               columns={[
                 { title: 'Lead', dataIndex: 'name' },
+                { title: 'For', dataIndex: 'label', responsive: ['md'] },
                 { title: 'Counselor', dataIndex: 'counselor', responsive: ['md'] },
                 { title: 'Due', dataIndex: 'due_date', render: (d, r) => (
                   <span>{dayjs(d).format('DD MMM')} <Tag color={r.days_until <= 3 ? 'orange' : 'default'}>{r.days_until === 0 ? 'today' : `in ${r.days_until}d`}</Tag></span>

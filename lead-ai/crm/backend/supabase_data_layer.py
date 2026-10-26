@@ -435,6 +435,12 @@ class SupabaseDataLayer:
         # Keep empty lists/dicts (falsy but not None) so JSONB columns can be cleared.
         cleaned_data = {k: v for k, v in data.items() if v is not None}
 
+        # registration_fees is the total RECEIVED registration money; it must always equal the
+        # sum of registration_payments, whichever client saved the lead, or "collected" drifts.
+        if isinstance(cleaned_data.get('registration_payments'), list):
+            cleaned_data['registration_fees'] = round(sum(
+                float(p.get('amount') or 0) for p in cleaned_data['registration_payments'] if isinstance(p, dict)), 2)
+
         # NOTE: emi_details/documents/lms_modules are jsonb columns and must be
         # sent as plain Python lists/dicts, NOT pre-serialized with json.dumps().
         # This used to double-encode them (verified against postgrest 0.17.2:
@@ -939,6 +945,24 @@ class SupabaseDataLayer:
             logger.error(f"Error creating activity: {e}")
             return None
     
+    def _enrolled_revenue(self, assigned_to: Optional[str] = None,
+                          assigned_to_names: Optional[list] = None) -> float:
+        """Total fees of ENROLLED students only. (The database rollup adds up
+        `actual_revenue` across every status, so dropped / junk leads that still
+        carry a fee inflated the dashboard revenue.)"""
+        total, offset = 0.0, 0
+        while True:
+            q = self.client.table('leads').select('actual_revenue').eq('status', 'Enrolled')
+            if assigned_to_names is not None:
+                q = q.in_('assigned_to', assigned_to_names)
+            elif assigned_to:
+                q = q.ilike('assigned_to', assigned_to)
+            batch = q.order('id').range(offset, offset + 999).execute().data or []
+            total += sum(float(r.get('actual_revenue') or 0) for r in batch)
+            if len(batch) < 1000:
+                return round(total, 2)
+            offset += 1000
+
     def get_dashboard_stats(self, assigned_to: Optional[str] = None,
                             assigned_to_names: Optional[list] = None) -> Dict[str, Any]:
         """Get dashboard statistics using count queries so the result is never capped at 1000.
@@ -959,7 +983,7 @@ class SupabaseDataLayer:
                     "hot": _d.get("hot") or 0, "warm": _d.get("warm") or 0,
                     "cold": _d.get("cold") or 0, "junk": _d.get("junk") or 0,
                     "conversions": _conv,
-                    "revenue": round(float(_d.get("revenue") or 0), 2),
+                    "revenue": self._enrolled_revenue(assigned_to, assigned_to_names),
                     "conversion_rate": round((_conv / _total * 100) if _total else 0, 1),
                 }
         except Exception as e:
@@ -993,7 +1017,8 @@ class SupabaseDataLayer:
             cold = sum(1 for l in leads if str(l.get('ai_segment', '')).lower() == 'cold')
             junk = sum(1 for l in leads if str(l.get('ai_segment', '')).lower() == 'junk')
             conversions = sum(1 for l in leads if str(l.get('status', '')).lower() == 'enrolled')
-            revenue = sum(l.get('actual_revenue', 0) or 0 for l in leads)
+            revenue = sum((l.get('actual_revenue', 0) or 0) for l in leads
+                          if str(l.get('status', '')).lower() == 'enrolled')
 
             return {
                 'total': total,

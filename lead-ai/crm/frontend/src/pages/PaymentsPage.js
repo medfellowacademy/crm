@@ -24,7 +24,7 @@ import DroppedTab from '../components/payments/DroppedTab';
 import { PaymentActivity } from '../components/payments/PaymentComments';
 import EnrollmentModal from '../components/leads/EnrollmentModal';
 import { useAuth } from '../context/AuthContext';
-import { fmt, safeParse, financeFor, PAYMENT_STATUS_CONFIG } from '../utils/finance';
+import { fmt, safeParse, financeFor, instalmentLabel, PAYMENT_STATUS_CONFIG } from '../utils/finance';
 
 const { Text, Title } = Typography;
 
@@ -51,7 +51,7 @@ const ExpandedRow = ({ lead, onUpload, uploading, onMarkPaid }) => {
   const [showLog, setShowLog] = useState(false);
   const regPayments = safeParse(lead.registration_payments, []);
   const lmsModules  = safeParse(lead.lms_modules, []);
-  const { total, reg, emis, emiPaid, collected, balance: remaining, pct, overdueAmount } = financeFor(lead);
+  const { total, reg, emis, emiPaid, collected, balance: remaining, pct, overdueAmount, scheduledPending, unscheduled, overScheduled } = financeFor(lead);
   const today = dayjs().startOf('day');
 
   return (
@@ -64,7 +64,7 @@ const ExpandedRow = ({ lead, onUpload, uploading, onMarkPaid }) => {
           <Descriptions size="small" column={1} bordered
             labelStyle={{ width: 160, background: '#f3f4f6' }}>
             <Descriptions.Item label="Total Course Fee">{fmt(total)}</Descriptions.Item>
-            <Descriptions.Item label="Registration / Advance">
+            <Descriptions.Item label="Registration received">
               {fmt(reg)}
               {regPayments.length > 1 && (
                 <span style={{ marginLeft: 8, fontSize: 12, color: '#6b7280' }}>
@@ -72,11 +72,24 @@ const ExpandedRow = ({ lead, onUpload, uploading, onMarkPaid }) => {
                 </span>
               )}
             </Descriptions.Item>
-            <Descriptions.Item label="EMI Collected">{fmt(emiPaid)}</Descriptions.Item>
-            <Descriptions.Item label="Total Collected">
+            <Descriptions.Item label="Instalments received">{fmt(emiPaid)}</Descriptions.Item>
+            <Descriptions.Item label="Total received">
               <Text strong style={{ color: '#2563eb' }}>{fmt(collected)}</Text>
             </Descriptions.Item>
-            <Descriptions.Item label="Balance Due">
+            <Descriptions.Item label="Scheduled to come">{fmt(scheduledPending)}</Descriptions.Item>
+            {unscheduled > 0.5 && (
+              <Descriptions.Item label="Not scheduled">
+                <Text strong style={{ color: '#d97706' }}>{fmt(unscheduled)}</Text>
+                <div style={{ fontSize: 11, color: '#6b7280' }}>in no instalment, so no due date — use Edit Payment</div>
+              </Descriptions.Item>
+            )}
+            {overScheduled > 0.5 && (
+              <Descriptions.Item label="Over-scheduled">
+                <Text strong style={{ color: '#dc2626' }}>{fmt(overScheduled)}</Text>
+                <div style={{ fontSize: 11, color: '#6b7280' }}>received + scheduled is more than the fee</div>
+              </Descriptions.Item>
+            )}
+            <Descriptions.Item label="Remaining to collect">
               <Text strong style={{ color: remaining > 0 ? '#dc2626' : '#059669' }}>{fmt(remaining)}</Text>
             </Descriptions.Item>
             {overdueAmount > 0 && (
@@ -110,9 +123,9 @@ const ExpandedRow = ({ lead, onUpload, uploading, onMarkPaid }) => {
 
         {/* EMI Schedule */}
         <Col xs={24} md={8}>
-          <Title level={5} style={{ marginBottom: 12 }}>EMI Schedule ({emis.length})</Title>
+          <Title level={5} style={{ marginBottom: 12 }}>Instalments ({emis.length})</Title>
           {emis.length === 0
-            ? <Text type="secondary">No EMIs — full payment</Text>
+            ? <Text type="secondary">No instalments scheduled</Text>
             : emis.map((emi, i) => {
               const isOverdue = emi.status !== 'paid' && emi.status !== 'cancelled' && emi.date && dayjs(emi.date).isBefore(today);
               return (
@@ -123,15 +136,21 @@ const ExpandedRow = ({ lead, onUpload, uploading, onMarkPaid }) => {
                   borderRadius: 4,
                 }}>
                   <span style={{ fontSize: 13 }}>
-                    {emi.date ? dayjs(emi.date).format('DD MMM YYYY') : `EMI ${i + 1}`}
+                    <b>{instalmentLabel(emis, i)}</b>
+                    <div style={{ fontSize: 12, color: '#6b7280' }}>{emi.date ? dayjs(emi.date).format('DD MMM YYYY') : 'No due date'}</div>
                   </span>
-                  <Text strong style={{ fontSize: 13 }}>{fmt(emi.amount)}</Text>
+                  <Text strong style={{ fontSize: 13 }}>
+                    {fmt(emi.status === 'paid' && emi.paid_amount != null ? emi.paid_amount : emi.amount)}
+                    {emi.status === 'paid' && emi.paid_amount != null && Number(emi.paid_amount) !== Number(emi.amount) && (
+                      <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 400 }}>of {fmt(emi.amount)}</div>
+                    )}
+                  </Text>
                   {isOverdue
                     ? <Badge status="error" text={<Text type="danger" style={{ fontSize: 12 }}>Overdue</Text>} />
                     : <EmiStatus status={emi.status} />}
                   {emi.status !== 'paid' && emi.status !== 'cancelled' && (
                     <Button size="small" type="link" icon={<CheckOutlined />} style={{ padding: 0 }}
-                      onClick={() => onMarkPaid({ leadId: lead.lead_id, index: i, name: lead.full_name, amount: emi.amount, dueDate: emi.date })}>
+                      onClick={() => onMarkPaid({ leadId: lead.lead_id, index: i, name: lead.full_name, amount: emi.amount, dueDate: emi.date, label: instalmentLabel(emis, i) })}>
                       Mark paid
                     </Button>
                   )}
@@ -246,7 +265,7 @@ const PaymentsPage = () => {
   const [dropLead,        setDropLead]        = useState(null);
   const [payTarget,       setPayTarget]       = useState(null);
   const [tab,             setTab]             = useState('payments');
-  const [qualityFilter,   setQualityFilter]   = useState(null); // 'fee' | 'date'
+  const [qualityFilter,   setQualityFilter]   = useState(null); // 'fee' | 'date' | 'unscheduled' | 'over'
 
   // Server-side overview: enrolled leads (scoped to the caller), summary,
   // collections, aging and due-soon in ONE small request. The date range
@@ -288,6 +307,8 @@ const PaymentsPage = () => {
     if (filterStatus    && financeFor(l).paymentStatus !== filterStatus) return false;
     if (qualityFilter === 'fee'  && Number(l.actual_revenue) > 0) return false;
     if (qualityFilter === 'date' && (l.enroll_date || l.enrolled_at)) return false;
+    if (qualityFilter === 'unscheduled' && financeFor(l).unscheduled <= 0.5) return false;
+    if (qualityFilter === 'over' && financeFor(l).overScheduled <= 0.5) return false;
     return true;
   });
 
@@ -298,6 +319,8 @@ const PaymentsPage = () => {
   const totalCollected = finances.reduce((s, f) => s + f.collected, 0);
   const totalBalance   = finances.reduce((s, f) => s + f.balance,   0);
   const totalOverdue   = finances.reduce((s, f) => s + f.overdueAmount, 0);
+  const totalScheduled   = finances.reduce((s, f) => s + f.scheduledPending, 0);
+  const totalUnscheduled = finances.reduce((s, f) => s + f.unscheduled, 0);
   const overdueCount   = finances.filter(f => f.overdueAmount > 0).length;
   const collectionRate = totalRevenue > 0 ? Math.round((totalCollected / totalRevenue) * 1000) / 10 : 0;
 
@@ -415,11 +438,14 @@ const PaymentsPage = () => {
       title: 'Balance Due',
       key: 'balance',
       render: (_, r) => {
-        const { balance, overdueAmount } = financeFor(r);
+        const { balance, overdueAmount, unscheduled } = financeFor(r);
         if (balance <= 0) return <Tag color="green">Cleared</Tag>;
         return (
           <div>
             <Text strong style={{ color: '#dc2626' }}>{fmt(balance)}</Text>
+            {unscheduled > 0.5 && (
+              <div style={{ fontSize: 11, color: '#d97706' }}>{fmt(unscheduled)} not scheduled</div>
+            )}
             {overdueAmount > 0 && (
               <div style={{ fontSize: 11, color: '#dc2626' }}>
                 {fmt(overdueAmount)} overdue
@@ -518,9 +544,10 @@ const PaymentsPage = () => {
   ];
 
   const cards = [
-    { label: 'Total Revenue',   value: fmt(totalRevenue),   sub: `₹${(totalRevenue / 100000).toFixed(1)}L`,   bg: 'linear-gradient(135deg,#10b981,#059669)', Icon: DollarSign },
-    { label: 'Collected',       value: fmt(totalCollected), sub: `${collectionRate}% of fees`,                bg: 'linear-gradient(135deg,#8b5cf6,#7c3aed)', Icon: TrendingUp },
-    { label: 'Balance Pending', value: fmt(totalBalance),   sub: `₹${(totalBalance / 100000).toFixed(1)}L`,   bg: 'linear-gradient(135deg,#f59e0b,#d97706)', Icon: FileText },
+    { label: 'Total Fees (booked)', value: fmt(totalRevenue),   sub: 'fees of the enrolled students',          bg: 'linear-gradient(135deg,#10b981,#059669)', Icon: DollarSign },
+    { label: 'Received',            value: fmt(totalCollected), sub: `${collectionRate}% of fees`,             bg: 'linear-gradient(135deg,#8b5cf6,#7c3aed)', Icon: TrendingUp },
+    { label: 'Remaining to collect', value: fmt(totalBalance),
+      sub: `${fmt(totalScheduled)} scheduled · ${fmt(totalUnscheduled)} not scheduled`,                         bg: 'linear-gradient(135deg,#f59e0b,#d97706)', Icon: FileText },
     {
       label: 'Overdue', value: fmt(totalOverdue),
       sub: overdueCount > 0 ? `${overdueCount} lead${overdueCount > 1 ? 's' : ''}` : 'all on time',
@@ -536,9 +563,12 @@ const PaymentsPage = () => {
       {qualityFilter && (
         <Alert
           type="info" showIcon style={{ marginBottom: 12 }}
-          message={qualityFilter === 'fee'
-            ? `Showing ${filtered.length} enrolled lead(s) with no total fee — click "Edit Payment" to add it.`
-            : `Showing ${filtered.length} enrolled lead(s) with no enrollment date — click "Edit Payment" to add it.`}
+          message={{
+            fee: `Showing ${filtered.length} enrolled lead(s) with no total fee — click "Edit Payment" to add it.`,
+            date: `Showing ${filtered.length} enrolled lead(s) with no enrollment date — click "Edit Payment" to add it.`,
+            unscheduled: `Showing ${filtered.length} student(s) whose fee is not fully in instalments — click "Edit Payment" and schedule the rest.`,
+            over: `Showing ${filtered.length} student(s) whose payments add up to more than the fee — click "Edit Payment" to correct them.`,
+          }[qualityFilter]}
           action={<Button size="small" onClick={() => setQualityFilter(null)}>Show all</Button>}
         />
       )}
@@ -606,7 +636,7 @@ const PaymentsPage = () => {
         <Button icon={<DownloadOutlined />} onClick={exportCsv} disabled={!filtered.length}>Export CSV</Button>
       </div>
 
-      {(dq.missing_fee > 0 || dq.undated_enrollments > 0) && (
+      {(dq.missing_fee > 0 || dq.undated_enrollments > 0 || dq.unscheduled_leads > 0 || dq.over_scheduled_leads > 0) && (
         <Alert
           type="warning" showIcon closable style={{ marginBottom: 16 }}
           message="Some enrollments have incomplete data"
@@ -628,7 +658,23 @@ const PaymentsPage = () => {
                   </Button>
                 </div>
               )}
-              <div style={{ marginTop: 4 }}>Use "Edit Payment" on those rows to fill them in.</div>
+              {dq.unscheduled_leads > 0 && (
+                <div>
+                  {dq.unscheduled_leads} student(s) have part of the fee in no instalment ({fmt(totalUnscheduled)} in all), so it has no due date and is never chased.{' '}
+                  <Button type="link" size="small" style={{ padding: 0 }} onClick={() => showIncomplete('unscheduled')}>
+                    Show these {dq.unscheduled_leads}
+                  </Button>
+                </div>
+              )}
+              {dq.over_scheduled_leads > 0 && (
+                <div>
+                  {dq.over_scheduled_leads} student(s) have more received + scheduled than the fee.{' '}
+                  <Button type="link" size="small" style={{ padding: 0 }} onClick={() => showIncomplete('over')}>
+                    Show these {dq.over_scheduled_leads}
+                  </Button>
+                </div>
+              )}
+              <div style={{ marginTop: 4 }}>Use "Edit Payment" on those rows to fix them.</div>
             </div>
           )}
         />

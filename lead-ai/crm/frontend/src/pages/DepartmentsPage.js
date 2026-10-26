@@ -39,8 +39,8 @@ const DEPT_KPIS = {
     { label: 'Web this week', val: (k) => k.website_leads_this_week, suffix: '' },
   ],
   finance: [
-    { label: 'Total collected', val: (k) => fmtCr(k.total_collected), raw: true },
-    { label: 'This month', val: (k) => fmtCr(k.collected_this_month), raw: true },
+    { label: 'Received so far', val: (k) => fmtCr(k.total_collected), raw: true },
+    { label: 'Received this month', val: (k) => fmtCr(k.collected_this_month), raw: true },
     { label: 'Enrolled', val: (k) => k.enrolled_count, suffix: ' leads' },
   ],
   operations: [

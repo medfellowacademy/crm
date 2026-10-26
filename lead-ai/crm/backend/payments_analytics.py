@@ -60,6 +60,14 @@ def paid_amount(emi: dict) -> float:
     return _num(pa) if pa is not None and pa != "" else _num(emi.get("amount"))
 
 
+def instalment_label(emis: list, index: int) -> str:
+    """'Registration balance' for the part of the registration still to come, else
+    'EMI n' numbered among the EMIs only (mirrors the screens)."""
+    if emis[index].get("kind") == "registration":
+        return "Registration balance"
+    return f"EMI {sum(1 for e in emis[:index + 1] if e.get('kind') != 'registration')}"
+
+
 def emis_of(lead: dict) -> list:
     return [e for e in _parse(lead.get("emi_details"), []) if isinstance(e, dict)]
 
@@ -86,6 +94,12 @@ def finance_for(lead: dict, today: date) -> dict:
     overdue = sum(_num(e.get("amount")) for e in emis if is_overdue(e, today))
     collected = reg + emi_paid
     balance = max(0.0, total - collected)
+    # Instalments still to come (pending / overdue, not cancelled), and whatever part of
+    # the fee is in NO instalment at all: that part has no due date, so nothing ever
+    # chases it. Both are needed for "remaining to collect" to be honest.
+    scheduled_pending = sum(_num(e.get("amount")) for e in emis if is_open(e))
+    unscheduled = max(0.0, total - collected - scheduled_pending) if total > 0 else 0.0
+    over_scheduled = max(0.0, collected + scheduled_pending - total) if total > 0 else 0.0
     if total > 0 and balance <= 0:
         status = "paid"
     elif overdue > 0:
@@ -95,7 +109,9 @@ def finance_for(lead: dict, today: date) -> dict:
     else:
         status = "not_started"
     return {"total": total, "reg": reg, "emi_paid": emi_paid, "collected": collected,
-            "balance": balance, "overdue": overdue, "status": status}
+            "balance": balance, "overdue": overdue, "status": status,
+            "scheduled_pending": round(scheduled_pending, 2), "unscheduled": round(unscheduled, 2),
+            "over_scheduled": round(over_scheduled, 2)}
 
 
 def in_period(lead: dict, date_from: Optional[str], date_to: Optional[str]) -> bool:
@@ -177,7 +193,7 @@ def overdue_emis(leads: list, today: date) -> list:
                     "name": lead.get("full_name"), "phone": lead.get("phone"), "email": lead.get("email"),
                     "counselor": lead.get("assigned_to"), "course": lead.get("course_interested"),
                     "emi_index": i, "due_date": _day(e.get("date")), "amount": _num(e.get("amount")),
-                    "days_overdue": (today - due).days,
+                    "kind": e.get("kind") or "emi", "label": instalment_label(emis_of(lead), i), "days_overdue": (today - due).days,
                 })
     out.sort(key=lambda r: r["days_overdue"], reverse=True)
     return out
@@ -208,7 +224,7 @@ def due_soon(leads: list, today: date, days: int = 30) -> list:
                     "lead_id": lead.get("lead_id"), "name": lead.get("full_name"),
                     "phone": lead.get("phone"), "counselor": lead.get("assigned_to"),
                     "emi_index": i, "due_date": _day(e.get("date")), "amount": _num(e.get("amount")),
-                    "days_until": (due - today).days,
+                    "kind": e.get("kind") or "emi", "label": instalment_label(emis_of(lead), i), "days_until": (due - today).days,
                 })
     out.sort(key=lambda r: r["days_until"])
     return out
@@ -219,14 +235,14 @@ def by_counselor(leads: list, today: date) -> list:
     for lead in leads or []:
         name = (lead.get("assigned_to") or "Unassigned").strip() or "Unassigned"
         f = finance_for(lead, today)
-        s = stats.setdefault(name, {"counselor": name, "enrolled": 0, "total": 0.0,
-                                    "collected": 0.0, "balance": 0.0, "overdue": 0.0})
+        s = stats.setdefault(name, {"counselor": name, "enrolled": 0, "total": 0.0, "collected": 0.0,
+                                    "balance": 0.0, "overdue": 0.0, "unscheduled": 0.0})
         s["enrolled"] += 1
-        for k in ("total", "collected", "balance", "overdue"):
+        for k in ("total", "collected", "balance", "overdue", "unscheduled"):
             s[k] += f[k]
     rows = sorted(stats.values(), key=lambda r: r["collected"], reverse=True)
     for r in rows:
-        for k in ("total", "collected", "balance", "overdue"):
+        for k in ("total", "collected", "balance", "overdue", "unscheduled"):
             r[k] = round(r[k], 2)
         r["collection_rate"] = round(r["collected"] / r["total"] * 100, 1) if r["total"] else 0.0
     return rows
@@ -245,11 +261,20 @@ def summary(leads: list, today: date) -> dict:
         "overdue_leads": sum(1 for f in fin if f["overdue"] > 0),
         "collection_rate": round(collected / total * 100, 1) if total else 0.0,
         "fully_paid": sum(1 for f in fin if f["status"] == "paid"),
+        "scheduled_pending": round(sum(f["scheduled_pending"] for f in fin), 2),
+        "unscheduled": round(sum(f["unscheduled"] for f in fin), 2),
+        "unscheduled_leads": sum(1 for f in fin if f["unscheduled"] > 0.5),
+        "over_scheduled": round(sum(f["over_scheduled"] for f in fin), 2),
+        "over_scheduled_leads": sum(1 for f in fin if f["over_scheduled"] > 0.5),
     }
 
 
-def data_quality(leads: list) -> dict:
+def data_quality(leads: list, today: Optional[date] = None) -> dict:
+    today = today or today_ist()
+    fin = [finance_for(l, today) for l in leads or []]
     return {
+        "unscheduled_leads": sum(1 for f in fin if f["unscheduled"] > 0.5),
+        "over_scheduled_leads": sum(1 for f in fin if f["over_scheduled"] > 0.5),
         "missing_fee": sum(1 for l in leads or [] if _num(l.get("actual_revenue")) <= 0),
         "undated_enrollments": sum(1 for l in leads or [] if not _enroll_day(l)),
         "approx_dated_collections": sum(1 for l in leads or [] for ev in payment_events(l) if ev["approx"]),
@@ -257,28 +282,49 @@ def data_quality(leads: list) -> dict:
 
 
 def mark_emi_paid(emis: list, index: int, paid_on: str, method: Optional[str], by: Optional[str],
-                  amount: Optional[float] = None) -> list:
-    """New EMI list with `index` marked paid. Raises ValueError when the index
-    is out of range or the EMI is already paid (so a double click can't
-    double-record a collection)."""
+                  amount: Optional[float] = None, remaining_due: Optional[str] = None) -> list:
+    """New instalment list with `index` marked paid.
+
+    * Paying LESS than scheduled is a partial payment: this instalment becomes the
+      amount actually received, and the rest is added right after it as a new pending
+      instalment (due `remaining_due`, default the original due date) so it keeps
+      being tracked, chased and counted as owed instead of silently disappearing.
+    * Paying MORE than scheduled records the extra on the instalment (`paid_amount`).
+    Raises ValueError for a bad index, an already paid / cancelled instalment, a bad
+    date, or a zero / negative amount (so a double click can't double-record)."""
     if not isinstance(index, int) or index < 0 or index >= len(emis):
-        raise ValueError("EMI not found")
+        raise ValueError("Instalment not found")
     if emis[index].get("status") == "paid":
-        raise ValueError("EMI is already marked paid")
+        raise ValueError("This instalment is already marked paid")
     if emis[index].get("status") == "cancelled":
-        raise ValueError("This EMI was cancelled because the student dropped")
+        raise ValueError("This instalment was cancelled because the student dropped")
     if not _to_date(paid_on):
         raise ValueError("Invalid paid date")
-    if amount is not None and _num(amount) < 0:
-        raise ValueError("Amount cannot be negative")
+    if amount is not None and _num(amount) <= 0:
+        raise ValueError("The amount received must be more than zero")
+    if remaining_due and not _to_date(remaining_due):
+        raise ValueError("Invalid date for the remaining amount")
+
+    scheduled = _num(emis[index].get("amount"))
     out = [dict(e) for e in emis]
-    out[index].update({"status": "paid", "paid_date": _day(paid_on)})
-    if amount is not None:
-        out[index]["paid_amount"] = _num(amount)
+    row = out[index]
+    row.update({"status": "paid", "paid_date": _day(paid_on)})
     if method:
-        out[index]["method"] = method
+        row["method"] = method
     if by:
-        out[index]["paid_recorded_by"] = by
+        row["paid_recorded_by"] = by
+
+    received = scheduled if amount is None else _num(amount)
+    if received < scheduled - 0.005:
+        row["amount"] = round(received, 2)                      # this instalment is exactly what came in
+        rest = {k: v for k, v in emis[index].items()
+                if k not in ("paid_date", "paid_amount", "method", "paid_recorded_by")}
+        rest.update({"amount": round(scheduled - received, 2), "status": "pending", "split_from_partial": True})
+        if remaining_due:
+            rest["date"] = _day(remaining_due)
+        out.insert(index + 1, rest)
+    elif received > scheduled + 0.005:
+        row["paid_amount"] = round(received, 2)
     return out
 
 
@@ -321,7 +367,7 @@ def emi_rows(leads: list, month: str, today: date) -> list:
             out.append({
                 "lead_id": lead.get("lead_id"), "name": lead.get("full_name"), "phone": lead.get("phone"),
                 "counselor": lead.get("assigned_to"), "course": lead.get("course_interested"),
-                "emi_index": i, "emi_count": len(emis_of(lead)), "due_date": d,
+                "emi_index": i, "emi_count": len(emis_of(lead)), "due_date": d, "kind": e.get("kind") or "emi", "label": instalment_label(emis_of(lead), i),
                 "scheduled": _num(e.get("amount")),
                 "received": paid_amount(e) if status == "paid" else 0.0,
                 "status": status, "paid_date": _day(e.get("paid_date")), "method": e.get("method"),

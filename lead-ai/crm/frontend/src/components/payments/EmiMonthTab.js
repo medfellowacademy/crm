@@ -66,7 +66,7 @@ export default function EmiMonthTab({ onChanged }) {
       <div><div style={{ fontWeight: 600 }}>{r.name}</div><Text type="secondary" style={{ fontSize: 12 }}>{r.phone}</Text></div>
     ) },
     { title: 'Counselor', dataIndex: 'counselor' },
-    { title: 'EMI', key: 'emi', align: 'center', render: (_, r) => `${r.emi_index + 1} of ${r.emi_count}` },
+    { title: 'Instalment', key: 'emi', render: (_, r) => r.label || `EMI ${r.emi_index + 1}` },
     { title: 'Due', dataIndex: 'due_date', sorter: (a, b) => a.due_date.localeCompare(b.due_date), defaultSortOrder: 'ascend',
       render: (d) => dayjs(d).format('DD MMM YYYY') },
     { title: 'Scheduled EMI', dataIndex: 'scheduled', align: 'right', sorter: (a, b) => a.scheduled - b.scheduled, render: fmt },
@@ -96,7 +96,7 @@ export default function EmiMonthTab({ onChanged }) {
     ) },
     { title: '', key: 'actions', render: (_, r) => (r.status === 'paid' ? null : (
       <Button size="small" type="primary" icon={<CheckOutlined />}
-        onClick={() => setPay({ leadId: r.lead_id, index: r.emi_index, name: r.name, amount: r.scheduled, dueDate: r.due_date })}>
+        onClick={() => setPay({ leadId: r.lead_id, index: r.emi_index, name: r.name, amount: r.scheduled, dueDate: r.due_date, label: r.label })}>
         Mark paid
       </Button>
     )) },

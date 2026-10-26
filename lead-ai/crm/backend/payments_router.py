@@ -169,32 +169,42 @@ def get_emis_by_month(
 
 class PayEmi(BaseModel):
     paid_on: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
-    amount: Optional[float] = Field(None, ge=0, description="Actual amount received; defaults to the scheduled EMI")
+    amount: Optional[float] = Field(None, gt=0, description="Amount actually received; defaults to the full scheduled amount")
+    remaining_due_date: Optional[str] = Field(
+        None, pattern=r"^\d{4}-\d{2}-\d{2}$",
+        description="When a part-payment's balance is expected; defaults to the original due date")
     method: Optional[str] = Field(None, max_length=40)
     note: Optional[str] = Field(None, max_length=500)
 
 
 @router.post("/{lead_id}/emis/{emi_index}/pay", dependencies=[_EDIT])
 def mark_emi_paid(lead_id: str, emi_index: int, body: PayEmi, current_user: dict = Depends(get_current_user)):
+    """Record money received against an instalment (an EMI or a registration balance).
+    A part-payment keeps the unpaid rest as a new pending instalment."""
     lead = _get_lead(lead_id, current_user)
     who = rbac.user_identity(current_user) or current_user.get("email")
     try:
         emis = pa.emis_of(lead)
-        updated = pa.mark_emi_paid(emis, emi_index, body.paid_on, body.method, who, body.amount)
+        updated = pa.mark_emi_paid(emis, emi_index, body.paid_on, body.method, who, body.amount, body.remaining_due_date)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     amount = pa.paid_amount(updated[emi_index])
-    scheduled = pa._num(updated[emi_index].get("amount"))
+    split = len(updated) > len(emis)
+    rest = pa._num(updated[emi_index + 1].get("amount")) if split else 0.0
+    rest_date = updated[emi_index + 1].get("date") if split else None
+    kind = "registration" if (updated[emi_index].get("kind") == "registration") else "emi"
+    label = pa.instalment_label(updated, emi_index)
     try:
         supabase_data.client.table("leads").update({"emi_details": updated}).eq("lead_id", lead_id).execute()
         supabase_data.client.table("payment_events").insert({
-            "lead_id": lead_id, "lead_db_id": lead.get("id"), "kind": "emi", "emi_index": emi_index,
+            "lead_id": lead_id, "lead_db_id": lead.get("id"), "kind": kind, "emi_index": emi_index,
             "amount": amount, "method": body.method, "paid_on": body.paid_on, "note": body.note, "recorded_by": who,
         }).execute()
         supabase_data.client.table("activities").insert({
             "lead_id": lead.get("id"), "activity_type": "payment",
-            "description": f"EMI {emi_index + 1} marked paid: ₹{amount:,.0f}"
-                           + (f" (scheduled ₹{scheduled:,.0f})" if amount != scheduled else "")
+            "description": (f"{label} part-paid: ₹{amount:,.0f} received, ₹{rest:,.0f} still to come"
+                            + (f" by {rest_date}" if rest_date else "")
+                            if split else f"{label} marked paid: ₹{amount:,.0f}")
                            + f" on {body.paid_on}" + (f" via {body.method}" if body.method else ""),
             "created_by": who,
         }).execute()
@@ -202,7 +212,7 @@ def mark_emi_paid(lead_id: str, emi_index: int, body: PayEmi, current_user: dict
         logger.error(f"mark_emi_paid error: {e}")
         raise HTTPException(status_code=500, detail="Failed to record the payment")
     _clear()
-    return {"ok": True, "emi_details": updated}
+    return {"ok": True, "emi_details": updated, "partial": split, "remaining": rest, "remaining_due_date": rest_date}
 
 
 class Followup(BaseModel):

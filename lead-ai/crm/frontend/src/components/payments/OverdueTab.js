@@ -75,7 +75,7 @@ export default function OverdueTab({ onChanged }) {
               <div><div style={{ fontWeight: 600 }}>{r.name}</div><Text type="secondary" style={{ fontSize: 12 }}>{r.phone}</Text></div>
             ) },
             { title: 'Counselor', dataIndex: 'counselor' },
-            { title: 'EMI', dataIndex: 'emi_index', align: 'center', render: (i) => `#${i + 1}` },
+            { title: 'Instalment', dataIndex: 'label', render: (l, r) => l || `EMI ${r.emi_index + 1}` },
             { title: 'Due', dataIndex: 'due_date', render: (d) => dayjs(d).format('DD MMM YYYY') },
             { title: 'Overdue', dataIndex: 'days_overdue', sorter: (a, b) => a.days_overdue - b.days_overdue, defaultSortOrder: 'descend',
               render: (d) => <Tag color={ageColor(d)}>{d} day{d !== 1 ? 's' : ''}</Tag> },
@@ -95,7 +95,7 @@ export default function OverdueTab({ onChanged }) {
                 {r.phone && <Button size="small" icon={<PhoneOutlined />} href={`tel:${r.phone}`} />}
                 <Button size="small" icon={<MessageOutlined />} onClick={() => setFollow(r)}>Comment</Button>
                 <Button size="small" type="primary" icon={<CheckOutlined />}
-                  onClick={() => setPay({ leadId: r.lead_id, index: r.emi_index, name: r.name, amount: r.amount, dueDate: r.due_date })}>
+                  onClick={() => setPay({ leadId: r.lead_id, index: r.emi_index, name: r.name, amount: r.amount, dueDate: r.due_date, label: r.label })}>
                   Mark paid
                 </Button>
               </Space>

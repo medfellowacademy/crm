@@ -145,12 +145,41 @@ def test_followup_requires_note(client):
     assert client.post("/api/payments/L1/followups", json={"note": ""}).status_code == 422
 
 
-def test_mark_paid_records_actual_amount_in_schedule_ledger_and_activity(client):
-    r = client.post("/api/payments/L1/emis/0/pay", json={"paid_on": "2026-10-20", "amount": 4000})
+def test_part_payment_records_what_came_in_and_keeps_the_rest_pending(client):
+    r = client.post("/api/payments/L1/emis/0/pay", json={"paid_on": "2026-10-20", "amount": 4000, "remaining_due_date": "2026-11-30"})
     assert r.status_code == 200
-    assert client.tables["leads"][0]["emi_details"][0]["paid_amount"] == 4000
+    body = r.json()
+    assert body["partial"] is True and body["remaining"] == 1000 and body["remaining_due_date"] == "2026-11-30"
+    emis = client.tables["leads"][0]["emi_details"]
+    assert [(e["amount"], e["status"], e["date"]) for e in emis] == [(4000, "paid", "2026-01-01"), (1000.0, "pending", "2026-11-30")]
     assert client.tables["payment_events"][0]["amount"] == 4000
-    assert "scheduled" in client.tables["activities"][0]["description"]
+    assert "part-paid" in client.tables["activities"][0]["description"] and "1,000 still to come" in client.tables["activities"][0]["description"]
+
+
+def test_full_payment_is_not_flagged_as_partial(client):
+    r = client.post("/api/payments/L1/emis/0/pay", json={"paid_on": "2026-10-20"})
+    assert r.json()["partial"] is False and r.json()["remaining"] == 0
+    assert len(client.tables["leads"][0]["emi_details"]) == 1
+
+
+def test_paying_a_registration_balance_is_labelled_and_ledgered_as_registration(client):
+    client.tables["leads"][0]["emi_details"] = [{"date": "2026-11-01", "amount": 8000, "status": "pending", "kind": "registration"}]
+    assert client.post("/api/payments/L1/emis/0/pay", json={"paid_on": "2026-10-20"}).status_code == 200
+    assert client.tables["payment_events"][0]["kind"] == "registration"
+    assert "Registration balance marked paid" in client.tables["activities"][0]["description"]
+
+
+def test_zero_amount_rejected(client):
+    assert client.post("/api/payments/L1/emis/0/pay", json={"paid_on": "2026-10-20", "amount": 0}).status_code == 422
+
+
+def test_overview_reports_scheduled_and_unscheduled_money(client):
+    d = client.get("/api/payments/enrolled").json()
+    s = d["summary"]
+    # fee 100000, registration 20000 collected, one 5000 / 7000 instalment pending
+    assert s["scheduled_pending"] == 12000 and s["unscheduled"] == 2 * 100000 - 2 * 20000 - 12000
+    assert s["balance"] == s["scheduled_pending"] + s["unscheduled"]
+    assert d["data_quality"]["unscheduled_leads"] == 2
 
 
 def test_negative_actual_amount_rejected(client):

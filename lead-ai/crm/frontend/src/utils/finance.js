@@ -38,13 +38,22 @@ export const financeFor = (lead) => {
   const balance    = Math.max(0, total - collected);
   const pct = total > 0 ? Math.round((collected / total) * 100) : 0;
 
+  // Instalments still to come, and the part of the fee that sits in NO instalment: that part
+  // has no due date, so nothing ever chases it. Remaining to collect = both together.
+  const scheduledPending = emis
+    .filter(e => e.status !== 'paid' && e.status !== 'cancelled')
+    .reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const unscheduled   = total > 0 ? Math.max(0, total - collected - scheduledPending) : 0;
+  const overScheduled = total > 0 ? Math.max(0, collected + scheduledPending - total) : 0;
+
   let paymentStatus;
   if (total > 0 && balance <= 0)      paymentStatus = 'paid';
   else if (overdueAmount > 0)         paymentStatus = 'overdue';
   else if (collected > 0)             paymentStatus = 'partial';
   else                                paymentStatus = 'not_started';
 
-  return { total, reg, emis, emiPaid, overdueEmis, overdueAmount, collected, balance, pct, paymentStatus };
+  return { total, reg, emis, emiPaid, overdueEmis, overdueAmount, collected, balance, pct, paymentStatus,
+    scheduledPending, unscheduled, overScheduled };
 };
 
 export const PAYMENT_STATUS_CONFIG = {
@@ -52,4 +61,11 @@ export const PAYMENT_STATUS_CONFIG = {
   overdue:     { label: 'Overdue',     color: 'error'   },
   partial:     { label: 'Partial',     color: 'processing' },
   not_started: { label: 'Not Started', color: 'default' },
+};
+
+// "Registration balance" for the part of the registration still to come, else "EMI n"
+// (numbered among the EMIs only, so a registration balance never shifts the numbering).
+export const instalmentLabel = (emis, index) => {
+  if (emis[index]?.kind === 'registration') return 'Registration balance';
+  return `EMI ${emis.slice(0, index + 1).filter(e => e.kind !== 'registration').length}`;
 };

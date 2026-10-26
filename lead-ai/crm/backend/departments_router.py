@@ -42,25 +42,17 @@ async def get_department_kpis(current_user: dict = Depends(get_current_user)):
         website_q = supabase_data.client.table('leads').select('id', count='exact').ilike('source', '%website%').gte('created_at', week_start).execute()
 
         # ── Finance ─────────────────────────────────────────────────────────────
-        # Sum actual_revenue across all enrolled leads (paginated)
-        collected = 0.0
-        _off = 0
-        while True:
-            _batch = supabase_data.client.table('leads').select('actual_revenue') \
-                .eq('status', 'Enrolled').range(_off, _off + 999).execute()
-            if not _batch.data:
-                break
-            collected += sum(r.get('actual_revenue') or 0 for r in _batch.data)
-            if len(_batch.data) < 1000:
-                break
-            _off += 1000
-
-        # enrolled_at is the exact sale date (set via the enrollment modal); using it
-        # instead of updated_at avoids miscounting leads whose row was merely edited
-        # this month (e.g. LMS status change) but that actually enrolled earlier.
-        month_rev_q = supabase_data.client.table('leads').select('actual_revenue') \
-            .eq('status', 'Enrolled').gte('enrolled_at', month_start).execute()
-        month_collected = sum(r.get('actual_revenue') or 0 for r in (month_rev_q.data or []))
+        # "Collected" is money actually received (registration + EMIs marked paid), worked
+        # out by the same rules as the Payments page. It used to be the total FEES of the
+        # enrolled students, which counts money not yet received.
+        import payments_analytics as _pa
+        from payments_router import _fetch_enrolled
+        _today = _pa.today_ist()
+        _enrolled = _fetch_enrolled()
+        _fin = [_pa.finance_for(l, _today) for l in _enrolled]
+        booked = sum(f["total"] for f in _fin)
+        collected = sum(f["collected"] for f in _fin)
+        month_collected = _pa.collections_by_month(_enrolled, _today.strftime("%Y-%m"), 1)[0]["collected"]
 
         # ── Operations ──────────────────────────────────────────────────────────
         att_q = supabase_data.client.table('attendance').select('status').eq('date', today_str).execute()
@@ -84,6 +76,7 @@ async def get_department_kpis(current_user: dict = Depends(get_current_user)):
                 "new_leads_this_week":     week_q.count    or 0,
             },
             "finance": {
+                "total_booked":        round(booked, 2),
                 "total_collected":     round(collected, 2),
                 "collected_this_month": round(month_collected, 2),
                 "enrolled_count":      enrolled_count,

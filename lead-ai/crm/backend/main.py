@@ -4295,7 +4295,7 @@ async def get_dashboard_stats(request: Request, created_from: Optional[str] = No
             cold = sum(1 for r in rows if str(r.get('ai_segment', '')).lower() == 'cold')
             junk = sum(1 for r in rows if str(r.get('ai_segment', '')).lower() == 'junk')
             enrolled = sum(1 for r in rows if r.get('status') == 'Enrolled')
-            revenue = sum(r.get('actual_revenue') or 0 for r in rows)
+            revenue = sum(r.get('actual_revenue') or 0 for r in rows if r.get('status') == 'Enrolled')
             return {'total': total, 'hot': hot, 'warm': warm, 'cold': cold, 'junk': junk,
                     'enrolled': enrolled, 'revenue': revenue}
 
@@ -4840,7 +4840,7 @@ def revenue_by_country(created_from: Optional[str] = None, created_to: Optional[
     """Get revenue breakdown by country - SUPABASE ONLY"""
 
     try:
-        leads = _fetch_all_leads('country,actual_revenue,expected_revenue',
+        leads = _fetch_all_leads('country,status,actual_revenue,expected_revenue',
                                   date_from=created_from, date_to=created_to)
 
         # Group by country
@@ -4855,7 +4855,8 @@ def revenue_by_country(created_from: Optional[str] = None, created_to: Optional[
                 }
             
             country_stats[country]['total_leads'] += 1
-            country_stats[country]['total_revenue'] += lead.get('actual_revenue', 0) or 0
+            if lead.get('status') == 'Enrolled':   # fees of dropped / junk leads are not revenue
+                country_stats[country]['total_revenue'] += lead.get('actual_revenue', 0) or 0
             country_stats[country]['expected_revenue'] += lead.get('expected_revenue', 0) or 0
         
         # Format results

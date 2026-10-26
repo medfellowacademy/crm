@@ -195,12 +195,42 @@ class TestActualAmountReceived:
         f = pa.finance_for(lead(total=100000, reg=20000, emis=[emi("2026-09-01", 30000, "paid", paid_amount=25000)]), TODAY)
         assert f["collected"] == 45000 and f["balance"] == 55000
 
-    def test_mark_paid_stores_actual_amount_only_when_given(self):
-        out = pa.mark_emi_paid([emi("2026-10-01", 1000)], 0, "2026-10-22", None, None, 800)
-        assert out[0]["paid_amount"] == 800
-        assert "paid_amount" not in pa.mark_emi_paid([emi("2026-10-01", 1000)], 0, "2026-10-22", None, None)[0]
-        with pytest.raises(ValueError, match="negative"):
-            pa.mark_emi_paid([emi("2026-10-01", 1000)], 0, "2026-10-22", None, None, -5)
+    def test_part_payment_keeps_the_unpaid_rest_as_a_new_pending_instalment(self):
+        out = pa.mark_emi_paid([emi("2026-10-01", 1000)], 0, "2026-10-22", "UPI", "Asha", 800)
+        assert [(e["amount"], e["status"]) for e in out] == [(800, "paid"), (200.0, "pending")]
+        assert out[0]["paid_date"] == "2026-10-22" and out[0]["method"] == "UPI"
+        assert out[1]["date"] == "2026-10-01" and "paid_date" not in out[1] and "method" not in out[1]
+        assert out[1]["split_from_partial"] is True
+
+    def test_part_payment_rest_can_get_a_new_due_date_and_keeps_its_kind(self):
+        out = pa.mark_emi_paid([emi("2026-10-01", 1000, kind="registration")], 0, "2026-10-22", None, None, 300, "2026-11-15")
+        assert out[1]["date"] == "2026-11-15" and out[1]["amount"] == 700 and out[1]["kind"] == "registration"
+
+    def test_full_payment_does_not_split_and_stores_no_extra_amount(self):
+        for amt in (None, 1000):
+            out = pa.mark_emi_paid([emi("2026-10-01", 1000)], 0, "2026-10-22", None, None, amt)
+            assert len(out) == 1 and "paid_amount" not in out[0]
+
+    def test_overpayment_is_recorded_on_the_instalment(self):
+        out = pa.mark_emi_paid([emi("2026-10-01", 1000)], 0, "2026-10-22", None, None, 1500)
+        assert len(out) == 1 and out[0]["paid_amount"] == 1500
+
+    @pytest.mark.parametrize("bad", [0, -5])
+    def test_zero_or_negative_amount_rejected(self, bad):
+        with pytest.raises(ValueError, match="more than zero"):
+            pa.mark_emi_paid([emi("2026-10-01", 1000)], 0, "2026-10-22", None, None, bad)
+
+    def test_bad_remaining_date_rejected(self):
+        with pytest.raises(ValueError, match="remaining"):
+            pa.mark_emi_paid([emi("2026-10-01", 1000)], 0, "2026-10-22", None, None, 500, "tomorrow")
+
+    def test_paying_the_rest_later_brings_collected_to_the_full_amount(self):
+        emis = [emi("2026-10-01", 1000)]
+        emis = pa.mark_emi_paid(emis, 0, "2026-10-05", None, None, 400)           # 400 now, 600 to come
+        assert pa.finance_for(lead(total=1000, reg=0, emis=emis), TODAY)["overdue"] == 600   # the rest is overdue, not forgotten
+        emis = pa.mark_emi_paid(emis, 1, "2026-10-20", None, None)                 # the rest arrives
+        f = pa.finance_for(lead(total=1000, reg=0, emis=emis), TODAY)
+        assert (f["collected"], f["balance"], f["overdue"], f["status"]) == (1000, 0, 0, "paid")
 
     def test_payment_event_uses_actual_amount(self):
         ev = pa.payment_events(lead(reg=0, emis=[emi("2026-08-01", 1000, "paid", paid_date="2026-08-03", paid_amount=600)]))
@@ -287,3 +317,62 @@ class TestDroppedStudents:
     def test_dropping_a_student_with_nothing_unpaid(self):
         out, n, amt = pa.drop_emis([emi("2026-08-01", 10, "paid")], "2026-10-10")
         assert (n, amt) == (0, 0.0) and out[0]["status"] == "paid"
+
+
+class TestScheduledVersusUnscheduled:
+    """"Remaining to collect" = money in instalments with a due date + money in none."""
+
+    def test_collected_counts_only_money_received_not_scheduled_emis(self):
+        # the Enrollment-form bug: registration 146,640 received, one 342,160 EMI still pending
+        f = pa.finance_for(lead(total=488800, reg=146640, emis=[emi("2026-10-23", 342160)]), TODAY)
+        assert f["collected"] == 146640 and f["balance"] == 342160
+        assert f["scheduled_pending"] == 342160 and f["unscheduled"] == 0 and f["overdue"] == 0   # due tomorrow, not late yet
+
+    def test_fee_with_no_instalments_is_entirely_unscheduled(self):
+        f = pa.finance_for(lead(total=100000, reg=10000, emis=[]), TODAY)
+        assert f["scheduled_pending"] == 0 and f["unscheduled"] == 90000 and f["balance"] == 90000
+
+    def test_partly_scheduled(self):
+        f = pa.finance_for(lead(total=100000, reg=20000, emis=[emi("2026-12-01", 30000)]), TODAY)
+        assert (f["scheduled_pending"], f["unscheduled"], f["balance"]) == (30000, 50000, 80000)
+
+    def test_over_scheduled(self):
+        f = pa.finance_for(lead(total=100000, reg=20000, emis=[emi("2026-12-01", 90000)]), TODAY)
+        assert f["over_scheduled"] == 10000 and f["unscheduled"] == 0
+
+    def test_fully_scheduled_has_neither(self):
+        f = pa.finance_for(lead(total=100000, reg=20000, emis=[emi("2026-12-01", 80000)]), TODAY)
+        assert f["unscheduled"] == 0 and f["over_scheduled"] == 0
+
+    def test_paid_and_cancelled_instalments_are_not_pending(self):
+        f = pa.finance_for(lead(total=100000, reg=20000, emis=[emi("2026-09-01", 30000, "paid"), emi("2026-12-01", 50000, "cancelled")]), TODAY)
+        assert f["scheduled_pending"] == 0 and f["unscheduled"] == 50000
+
+    def test_a_legacy_short_payment_shows_up_as_unscheduled(self):
+        f = pa.finance_for(lead(total=100000, reg=0, emis=[emi("2026-09-01", 30000, "paid", paid_amount=20000)]), TODAY)
+        assert f["collected"] == 20000 and f["unscheduled"] == 80000
+
+    def test_no_fee_means_no_schedule_check(self):
+        f = pa.finance_for(lead(total=0, reg=0, emis=[emi("2026-12-01", 5000)]), TODAY)
+        assert f["unscheduled"] == 0 and f["over_scheduled"] == 0
+
+    def test_summary_and_data_quality_roll_it_up(self):
+        leads = [lead(total=100000, reg=10000, emis=[], lead_id="A"),
+                 lead(total=100000, reg=20000, emis=[emi("2026-12-01", 90000)], lead_id="B"),
+                 lead(total=100000, reg=20000, emis=[emi("2026-12-01", 80000)], lead_id="C")]
+        s = pa.summary(leads, TODAY)
+        assert s["unscheduled"] == 90000 and s["unscheduled_leads"] == 1
+        assert s["over_scheduled"] == 10000 and s["over_scheduled_leads"] == 1
+        assert s["scheduled_pending"] == 170000
+        assert s["balance"] == s["scheduled_pending"] + s["unscheduled"] - s["over_scheduled"]  # 250000 = 170000 + 90000 - 10000
+        dq = pa.data_quality(leads, TODAY)
+        assert dq["unscheduled_leads"] == 1 and dq["over_scheduled_leads"] == 1
+
+    def test_registration_balance_is_tracked_like_any_instalment(self):
+        reg_balance = emi("2026-11-15", 50000, kind="registration")
+        l = lead(total=100000, reg=50000, emis=[reg_balance])
+        assert pa.finance_for(l, TODAY)["scheduled_pending"] == 50000
+        assert pa.due_soon([l], TODAY, 60)[0]["kind"] == "registration"
+        assert pa.emi_rows([l], "2026-11", TODAY)[0]["kind"] == "registration"
+        late = lead(total=100000, reg=50000, emis=[emi("2026-10-01", 50000, kind="registration")])
+        assert pa.overdue_emis([late], TODAY)[0]["kind"] == "registration"
