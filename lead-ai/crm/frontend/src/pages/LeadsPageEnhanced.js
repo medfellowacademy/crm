@@ -2200,7 +2200,22 @@ const LeadsPageEnhanced = () => {
                   searchValue={addCourseSearch}
                   onSearch={setAddCourseSearch}
                   onChange={() => setAddCourseSearch('')}
-                  filterOption={(i, o) => o.children.toLowerCase().includes(i.toLowerCase())}
+                  onBlur={() => {
+                    const typed = addCourseSearch.trim();
+                    if (typed && !form.getFieldValue('course_interested')) {
+                      const known = (courses || []).find(c => c.course_name.toLowerCase() === typed.toLowerCase());
+                      form.setFieldsValue({ course_interested: known ? known.course_name : typed });
+                    }
+                    setAddCourseSearch('');
+                  }}
+                  onInputKeyDown={e => {
+                    const typed = addCourseSearch.trim();
+                    if (e.key === 'Enter' && typed && !(courses || []).some(c => c.course_name.toLowerCase().includes(typed.toLowerCase()))) {
+                      form.setFieldsValue({ course_interested: typed });
+                      setAddCourseSearch('');
+                    }
+                  }}
+                  filterOption={(i, o) => String(o?.value ?? '').toLowerCase().includes(i.toLowerCase())}
                   dropdownRender={menu => (
                     <>
                       {menu}
