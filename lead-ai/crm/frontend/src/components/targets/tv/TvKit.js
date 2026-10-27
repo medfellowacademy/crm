@@ -29,7 +29,7 @@ export const panel = { background: '#1f1f1f', border: '1px solid #2c2c2c', borde
 
 export const sectionLabel = {
   fontFamily: BODY_FONT, fontWeight: 700, color: MUTED, letterSpacing: 3, textTransform: 'uppercase',
-  fontSize: 'clamp(11px,1.05vw,18px)', marginBottom: '1.2vh',
+  fontSize: 'clamp(13px,1.26vw,22px)', marginBottom: '1.2vh',
 };
 
 export const ellipsis = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
@@ -62,19 +62,19 @@ export function Kpi({ tone = 'dark', label, value, money, sub, target, pct, chip
   return (
     <div style={{ position: 'relative', flex: 1, minWidth: 0, background: bg, color: fg, borderRadius: 28, padding: '1.8vh 1.6vw', overflow: 'hidden', border: dark ? '1px solid #2c2c2c' : 'none', boxShadow: dark ? undefined : `0 10px 50px ${bg}33` }}>
       <div style={{ position: 'absolute', right: -40, top: -40, width: 150, height: 150, borderRadius: '50%', border: `20px solid ${lemon ? '#00000014' : '#ffffff14'}` }} />
-      <div style={{ fontFamily: BODY_FONT, fontWeight: 700, letterSpacing: 3, textTransform: 'uppercase', fontSize: 'clamp(11px,1.1vw,19px)', opacity: 0.8 }}>{label}</div>
+      <div style={{ fontFamily: BODY_FONT, fontWeight: 700, letterSpacing: 3, textTransform: 'uppercase', fontSize: 'clamp(13px,1.32vw,23px)', opacity: 0.8 }}>{label}</div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
         <div style={{ fontFamily: DISPLAY_FONT, fontSize: 'clamp(28px,4.2vw,80px)', lineHeight: 1.05, margin: '0.4vh 0' }}>{money ? fmt(shown) : shown.toLocaleString('en-IN')}</div>
         {chip != null && <Chip value={chip} light={!lemon} />}
       </div>
       {target ? (
         <>
-          <div style={{ fontFamily: BODY_FONT, fontWeight: 500, fontSize: 'clamp(12px,1.25vw,21px)', marginBottom: 8 }}>
+          <div style={{ fontFamily: BODY_FONT, fontWeight: 500, fontSize: 'clamp(14px,1.5vw,25px)', marginBottom: 8 }}>
             of {money ? fmt(target) : target} target · <b>{pct}%</b>{pct >= 100 ? ' 🔥' : ''}
           </div>
           <Bar pct={pct} height={14} track={lemon ? '#00000022' : '#ffffff33'} color={lemon ? INK : LEMON} />
         </>
-      ) : sub ? <div style={{ fontFamily: BODY_FONT, opacity: 0.75, fontSize: 'clamp(12px,1.25vw,21px)' }}>{sub}</div> : null}
+      ) : sub ? <div style={{ fontFamily: BODY_FONT, opacity: 0.75, fontSize: 'clamp(14px,1.5vw,25px)' }}>{sub}</div> : null}
     </div>
   );
 }
@@ -84,7 +84,7 @@ export function Chip({ value, light }) {
   if (value == null) return null;
   const up = value >= 0;
   return (
-    <span style={{ fontFamily: BODY_FONT, fontWeight: 700, fontSize: 'clamp(11px,1.1vw,19px)', padding: '2px 10px', borderRadius: 99, background: up ? '#22c55e' : '#ef4444', color: '#fff', opacity: light ? 1 : 0.95 }}>
+    <span style={{ fontFamily: BODY_FONT, fontWeight: 700, fontSize: 'clamp(13px,1.32vw,23px)', padding: '2px 10px', borderRadius: 99, background: up ? '#22c55e' : '#ef4444', color: '#fff', opacity: light ? 1 : 0.95 }}>
       {up ? '▲' : '▼'} {Math.abs(value)}%
     </span>
   );
@@ -93,10 +93,10 @@ export function Chip({ value, light }) {
 // Horizontal list of "name ... bar ... count".
 export function RankedBars({ items, color = LAVENDER, unit = '' }) {
   const max = Math.max(1, ...items.map((i) => i.count));
-  if (!items.length) return <div style={{ color: MUTED, fontSize: 'clamp(13px,1.3vw,22px)' }}>Nothing yet this month</div>;
+  if (!items.length) return <div style={{ color: MUTED, fontSize: 'clamp(15px,1.56vw,26px)' }}>Nothing yet this month</div>;
   return items.map((it, i) => (
     <div key={it.name} style={{ marginBottom: '1vh', animation: `slideUp .5s ${i * 0.07}s both` }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontFamily: BODY_FONT, fontWeight: 700, fontSize: 'clamp(12px,1.25vw,21px)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontFamily: BODY_FONT, fontWeight: 700, fontSize: 'clamp(14px,1.5vw,25px)' }}>
         <span style={ellipsis}>{it.name}</span><span style={{ color: LEMON }}>{it.count}{unit}</span>
       </div>
       <Bar pct={(it.count / max) * 100} height={8} color={color} />

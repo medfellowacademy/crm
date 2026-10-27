@@ -389,7 +389,7 @@ def _build_slide(key: str, month: str) -> dict:
     elif key == "attendance":
         rows = supabase_data.client.table("attendance").select("user_name,check_in_at").eq("date", today.isoformat()).execute().data or []
         data = tv.attendance_slide(rows, _people_names(), today)
-        _with_photos(data["early_birds"], meta)
+        _with_photos(data["people"], meta)
     elif key == "pipeline":
         data = tv.pipeline_slide(get_report_leads(supabase_data.client, None), today)
     else:

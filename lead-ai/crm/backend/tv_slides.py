@@ -242,12 +242,17 @@ def attendance_slide(rows: list, employees: list, today: date) -> dict:
         d = _ist(r.get("check_in_at"))
         if k in emp and d and d.date() == today and (k not in seen or d < seen[k]):
             seen[k] = d
-    early = sorted(seen.items(), key=lambda kv: kv[1])[:3]
+    in_order = sorted(seen.items(), key=lambda kv: kv[1])
+    early = in_order[:3]
     total = len(emp)
+    # everyone: those checked in (earliest first), then those not in yet (A-Z)
+    everyone = [{"name": emp[k], "present": True, "time": d.strftime("%I:%M %p").lstrip("0")} for k, d in in_order]
+    everyone += [{"name": emp[k], "present": False, "time": ""} for k in sorted(emp) if k not in seen]
     return {
         "present": len(seen), "total": total,
         "present_pct": round(len(seen) / total * 100, 1) if total else 0.0,
         "early_birds": [{"name": emp[k], "time": d.strftime("%I:%M %p").lstrip("0")} for k, d in early],
+        "people": everyone,
     }
 
 

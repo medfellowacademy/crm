@@ -170,6 +170,12 @@ class TestAttendance:
         assert (out["present"], out["total"], out["present_pct"]) == (2, 4, 50.0)
         assert [(b["name"], b["time"]) for b in out["early_birds"]] == [("Asha", "8:45 AM"), ("Ravi", "9:10 AM")]
 
+    def test_everyone_listed_present_first_then_absent(self):
+        rows = [{"user_name": "ravi", "check_in_at": "2026-10-14T03:40:00+00:00"}]
+        out = tv.attendance_slide(rows, ["Asha", "Ravi", "Meena"], TODAY)
+        assert [(p["name"], p["present"]) for p in out["people"]] == [("Ravi", True), ("Asha", False), ("Meena", False)]
+        assert out["people"][0]["time"] == "9:10 AM" and out["people"][1]["time"] == ""
+
     def test_nobody_in_and_nobody_employed(self):
         assert tv.attendance_slide([], ["Asha"], TODAY)["present"] == 0
         assert tv.attendance_slide([], [], TODAY)["present_pct"] == 0.0

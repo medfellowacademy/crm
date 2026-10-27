@@ -260,7 +260,7 @@ export default function OfficeScreenPage() {
       <div style={{ position: 'relative', zIndex: 1, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: '1.2vh' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1.4vw', minWidth: 0 }}>
-            <div style={{ background: LEMON, borderRadius: 18, padding: '6px 14px', flex: '0 0 auto' }}><img src="/medfellow-logo.png" alt="MedFellow Academy" style={{ height: 'clamp(34px,5vh,62px)', display: 'block', mixBlendMode: 'multiply' }} /></div>
+            <img src="/medfellow-logo.png" alt="MedFellow Academy" style={{ height: 'clamp(34px,5vh,62px)', display: 'block', flex: '0 0 auto', filter: 'brightness(0) invert(1)' }} />
             <div key={current} style={{ fontFamily: DISPLAY_FONT, fontSize: 'clamp(24px,4vw,72px)', lineHeight: 1, letterSpacing: 1, whiteSpace: 'nowrap', animation: 'slideIn .6s both' }}>
               <span style={{ color: LEMON }}>{(SLIDE_TITLES[current] || current).toUpperCase()}</span>{' '}
               <span style={{ color: 'transparent', WebkitTextStroke: `2px ${LAVENDER}` }}>{subtitle}</span>
@@ -275,9 +275,9 @@ export default function OfficeScreenPage() {
                 ))}
               </div>
             )}
-            {!soundOn && <button onClick={enableSound} style={{ background: 'transparent', color: LEMON, border: `2px solid ${LEMON}`, borderRadius: 99, padding: '6px 16px', fontFamily: BODY_FONT, fontWeight: 700, fontSize: 'clamp(12px,1.1vw,18px)', cursor: 'pointer' }}>🔔 Enable sound</button>}
+            {!soundOn && <button onClick={enableSound} style={{ background: 'transparent', color: LEMON, border: `2px solid ${LEMON}`, borderRadius: 99, padding: '6px 16px', fontFamily: BODY_FONT, fontWeight: 700, fontSize: 'clamp(14px,1.32vw,22px)', cursor: 'pointer' }}>🔔 Enable sound</button>}
             <div style={{ textAlign: 'right' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end', fontWeight: 700, fontSize: 'clamp(12px,1.1vw,18px)', letterSpacing: 2 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end', fontWeight: 700, fontSize: 'clamp(14px,1.32vw,22px)', letterSpacing: 2 }}>
                 <span style={{ width: 12, height: 12, borderRadius: '50%', background: state === 'offline' ? '#f59e0b' : '#ff3b3b', animation: 'livePulse 1.4s infinite' }} />
                 {state === 'offline' ? 'RECONNECTING' : 'LIVE'}
               </div>
