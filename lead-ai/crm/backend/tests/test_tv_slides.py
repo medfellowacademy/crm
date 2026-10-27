@@ -20,7 +20,7 @@ class TestSettings:
         assert d["seconds"] == 15 and d["slides"][0] == "sales" and "pipeline" in d["slides"]
 
     def test_clean_drops_unknown_and_duplicate_keeps_order(self):
-        assert tv.clean_settings({"slides": ["analytics", "bogus", "sales", "analytics"], "seconds": 20}) == {"slides": ["analytics", "sales"], "seconds": 20}
+        assert tv.clean_settings({"slides": ["analytics", "bogus", "sales", "analytics"], "seconds": 20}) == {"slides": ["analytics", "sales"], "seconds": 20, "ticker": True, "quiet": {"on": False, "start": 20, "end": 8}}
 
     @pytest.mark.parametrize("raw", [None, "x", {}, {"slides": []}, {"slides": ["nope"]}, {"slides": "sales"}])
     def test_clean_never_returns_an_empty_slide_list(self, raw):
@@ -203,3 +203,52 @@ def test_slides_never_carry_contact_details():
     leads = [dict(L("A", "Enrolled", "2026-10-01T00:00:00+00:00", 5, "2026-10-02"), phone="+9199", email="x@y.in")]
     blob = str([tv.analytics_slide(leads, MONTH), tv.performance_slide(leads, MONTH, [], TODAY), tv.pipeline_slide(leads, TODAY)])
     assert "+9199" not in blob and "x@y.in" not in blob
+
+
+class TestDisplayOptions:
+    def test_ticker_and_quiet_hours_validated(self):
+        out = tv.clean_settings({"slides": ["sales"], "ticker": False, "quiet": {"on": True, "start": "22", "end": 99}})
+        assert out["ticker"] is False
+        assert out["quiet"] == {"on": True, "start": 22, "end": 23}
+
+    @pytest.mark.parametrize("quiet", [None, "x", [], {"on": "yes"}])
+    def test_bad_quiet_values_fall_back_to_off(self, quiet):
+        assert tv.clean_settings({"quiet": quiet})["quiet"]["on"] is False
+
+    def test_new_slides_registered(self):
+        assert {"leaders", "wins", "goal", "followups"} <= set(tv.SLIDES)
+        assert "followups" not in tv.default_settings()["slides"]
+
+
+def sale(who, day, fee, **kw):
+    return {"assigned_to": who, "enroll_date": day, "actual_revenue": fee, "full_name": kw.get("name", "Dr. Priya Rao"), "lead_id": kw.get("id", who + day)}
+
+
+class TestLeaders:
+    def test_today_week_month_windows(self):
+        rows = [sale("Asha", "2026-10-14", 100), sale("Ravi", "2026-10-12", 300), sale("Ravi", "2026-10-02", 50),
+                sale("Asha", "2026-09-30", 999), sale("Kiran", "2026-10-15", 500), sale("", "2026-10-14", 5)]
+        out = tv.leaders_slide(rows, TODAY)
+        assert [(p["name"], p["revenue"]) for p in out["today"]] == [("Asha", 100.0)]
+        assert [(p["name"], p["enrolled"]) for p in out["week"]] == [("Ravi", 1), ("Asha", 1)] or [p["name"] for p in out["week"]] == ["Ravi", "Asha"]
+        assert [(p["name"], p["revenue"]) for p in out["month"]] == [("Ravi", 350.0), ("Asha", 100.0)]
+
+    def test_nobody_sold(self):
+        assert tv.leaders_slide([], TODAY) == {"today": [], "week": [], "month": []}
+
+
+class TestWins:
+    def test_only_todays_sales_biggest_first_with_totals(self):
+        rows = [sale("Asha", "2026-10-14", 100, id="a"), sale("Ravi", "2026-10-14", 400, id="b"), sale("Ravi", "2026-10-13", 900, id="c")]
+        out = tv.wins_slide(rows, TODAY)
+        assert (out["count"], out["revenue"]) == (2, 500.0)
+        assert [w["id"] for w in out["wins"]] == ["b", "a"] and out["wins"][0]["student"] == "Priya"
+
+
+class TestFollowups:
+    def test_counts_overdue_per_person_without_student_details(self):
+        rows = [{"assigned_to": "asha", "follow_up_date": "2026-10-10T05:00:00+00:00"}, {"assigned_to": "Asha", "follow_up_date": "2026-10-01T05:00:00+00:00"},
+                {"assigned_to": "Ravi", "follow_up_date": "2026-10-14T05:00:00+00:00"},      # due today is not overdue
+                {"assigned_to": "Ghost", "follow_up_date": "2026-10-01T05:00:00+00:00"}, {"assigned_to": "Ravi", "follow_up_date": None}]
+        out = tv.followups_slide(rows, ["Asha", "Ravi"], TODAY)
+        assert out == {"total": 2, "people": [{"name": "Asha", "overdue": 2}]}

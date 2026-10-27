@@ -3,7 +3,17 @@ export const LEMON = '#FFF21A';
 export const CHARCOAL = '#171717';
 export const LAVENDER = '#A66BFF';
 export const INK = '#0d0d0d';
-export const MUTED = '#a3a3a3';
+export const MUTED = '#c7c7c7';       // light enough to read from across an office
+
+// The one type scale for the TV. Each size follows the screen width but is also capped by its height,
+// so it stays readable on 16:9, ultrawide and portrait screens alike. Use these, not ad-hoc sizes.
+export const FS = {
+  caption: 'clamp(14px,min(1.3vw,2.3vh),22px)',
+  label: 'clamp(16px,min(1.6vw,2.85vh),27px)',
+  name: 'clamp(18px,min(2.1vw,3.7vh),36px)',
+  title: 'clamp(26px,min(3.4vw,6vh),62px)',
+  hero: 'clamp(34px,min(4.8vw,8.5vh),88px)',
+};
 
 export const DISPLAY_FONT = "'Archivo Black', 'Arial Black', Impact, sans-serif";
 export const BODY_FONT = "'Space Grotesk', 'Segoe UI', system-ui, sans-serif";

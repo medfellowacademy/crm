@@ -349,23 +349,24 @@ class TestSlideSettings:
     def test_default_feed_carries_every_default_slide_in_order(self, api):
         token = self._link(api)
         body = api.get(f"/api/display/{token}").json()
-        assert body["settings"]["slides"] == ["sales", "teams", "activity", "analytics", "performance", "attendance", "pipeline"]
+        assert body["settings"]["slides"] == ["sales", "teams", "activity", "analytics", "performance", "attendance", "pipeline", "leaders", "wins", "goal"]
         assert body["settings"]["seconds"] == 15
-        assert set(body["slides"]) == {"activity", "analytics", "performance", "attendance", "pipeline"}     # sales/teams come from the core feed
+        assert set(body["slides"]) == {"activity", "analytics", "performance", "attendance", "pipeline", "leaders", "wins", "goal"}     # sales/teams come from the core feed
 
     def test_manager_chooses_slides_and_speed_and_only_those_are_built(self, api):
         token = self._link(api)
         r = api.put("/api/targets/screen/settings", json={"slides": ["analytics", "sales"], "seconds": 20})
         assert r.status_code == 200
         body = api.get(f"/api/display/{token}").json()
-        assert body["settings"] == {"slides": ["analytics", "sales"], "seconds": 20}
+        assert (body["settings"]["slides"], body["settings"]["seconds"]) == (["analytics", "sales"], 20)
         assert set(body["slides"]) == {"analytics"}
 
     def test_settings_survive_creating_a_new_link(self, api):
         self._link(api)
         api.put("/api/targets/screen/settings", json={"slides": ["sales"], "seconds": 30})
         new = self._link(api)
-        assert api.get(f"/api/display/{new}").json()["settings"] == {"slides": ["sales"], "seconds": 30}
+        kept = api.get(f"/api/display/{new}").json()["settings"]
+        assert (kept["slides"], kept["seconds"]) == (["sales"], 30)
 
     @pytest.mark.parametrize("body", [{"slides": [], "seconds": 15}, {"slides": ["nope"], "seconds": 15}, {"slides": ["sales"], "seconds": 0}])
     def test_bad_settings_rejected(self, api, body):

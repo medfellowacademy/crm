@@ -21,13 +21,28 @@ SLIDES = {
     "performance": ("Performance", True),
     "attendance": ("Attendance", True),
     "pipeline": ("Pipeline", True),
+    "leaders": ("Leaders: today / week / month", True),
+    "wins": ("Today's wins", True),
+    "goal": ("Goal countdown", True),
+    "followups": ("Overdue follow-ups", False),
 }
 DEFAULT_SECONDS = 15
 MIN_SECONDS, MAX_SECONDS = 8, 120
 
 
+DEFAULT_QUIET = {"on": False, "start": 20, "end": 8}      # screen goes calm 8pm-8am when switched on
+
+
 def default_settings() -> dict:
-    return {"slides": [k for k, (_, on) in SLIDES.items() if on], "seconds": DEFAULT_SECONDS}
+    return {"slides": [k for k, (_, on) in SLIDES.items() if on], "seconds": DEFAULT_SECONDS,
+            "ticker": True, "quiet": dict(DEFAULT_QUIET)}
+
+
+def _hour(v, fallback: int) -> int:
+    try:
+        return max(0, min(23, int(v)))
+    except (TypeError, ValueError):
+        return fallback
 
 
 def clean_settings(raw) -> dict:
@@ -44,7 +59,10 @@ def clean_settings(raw) -> dict:
     except (TypeError, ValueError):
         seconds = DEFAULT_SECONDS
     seconds = max(MIN_SECONDS, min(MAX_SECONDS, seconds))
-    return {"slides": slides or default_settings()["slides"], "seconds": seconds}
+    q = raw.get("quiet") if isinstance(raw.get("quiet"), dict) else {}
+    quiet = {"on": q.get("on") is True, "start": _hour(q.get("start"), DEFAULT_QUIET["start"]), "end": _hour(q.get("end"), DEFAULT_QUIET["end"])}
+    return {"slides": slides or default_settings()["slides"], "seconds": seconds,
+            "ticker": raw.get("ticker") is not False, "quiet": quiet}
 
 
 def _ist(ts) -> Optional[datetime]:
@@ -273,3 +291,66 @@ def pipeline_slide(leads: list, today: date) -> dict:
         "new_today": new_today, "new_week": new_week, "total": sum(status.values()),
         "statuses": [{"name": k, "count": v} for k, v in status.most_common(8)],
     }
+
+
+# ---------------------------------------------------------------- leaders by period
+
+def _sale_day(lead) -> Optional[date]:
+    raw = str(lead.get("enroll_date") or lead.get("enrolled_at") or "")[:10]
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def leaders_slide(enrolled: list, today: date, limit: int = 5) -> dict:
+    """Top sellers today, this week (Mon-today) and this month. Only people with a sale are listed."""
+    ws = week_start(today)
+    per = {"today": defaultdict(lambda: [0, 0.0]), "week": defaultdict(lambda: [0, 0.0]), "month": defaultdict(lambda: [0, 0.0])}
+    names = {}
+    for l in enrolled or []:
+        who, d = norm(l.get("assigned_to")), _sale_day(l)
+        if not who or not d:
+            continue
+        names.setdefault(who, str(l["assigned_to"]).strip())
+        fee = _money(l.get("actual_revenue"))
+        spans = [("today", d == today), ("week", ws <= d <= today), ("month", (d.year, d.month) == (today.year, today.month) and d <= today)]
+        for key, hit in spans:
+            if hit:
+                per[key][who][0] += 1
+                per[key][who][1] += fee
+    out = {}
+    for key, rows in per.items():
+        ranked = sorted(rows.items(), key=lambda kv: (-kv[1][1], -kv[1][0], kv[0]))[:limit]
+        out[key] = [{"name": names[k], "enrolled": v[0], "revenue": v[1]} for k, v in ranked]
+    return out
+
+
+# ---------------------------------------------------------------- today's wins
+
+def wins_slide(enrolled: list, today: date, limit: int = 8) -> dict:
+    """Everything enrolled today, biggest first, with the day's total."""
+    wins = []
+    for l in enrolled or []:
+        if _sale_day(l) == today:
+            wins.append({"id": str(l.get("lead_id") or l.get("id")), "student": first_name(l.get("full_name")),
+                         "counselor": l.get("assigned_to") or "", "course": l.get("course_interested") or "",
+                         "amount": _money(l.get("actual_revenue"))})
+    wins.sort(key=lambda w: -w["amount"])
+    return {"count": len(wins), "revenue": sum(w["amount"] for w in wins), "wins": wins[:limit]}
+
+
+# ---------------------------------------------------------------- overdue follow-ups
+
+def followups_slide(rows: list, people: list, today: date) -> dict:
+    """Overdue follow-up counts per counselor. rows: {assigned_to, follow_up_date} of open leads.
+    Counts only: no student names or contact details on a wall screen."""
+    names = {norm(p): p for p in people or []}
+    per = Counter()
+    for r in rows or []:
+        k = norm(r.get("assigned_to"))
+        d = _ist(r.get("follow_up_date"))
+        if k in names and d and d.date() < today:
+            per[k] += 1
+    ranked = sorted(per.items(), key=lambda kv: (-kv[1], kv[0]))
+    return {"total": sum(per.values()), "people": [{"name": names[k], "overdue": c} for k, c in ranked[:10]]}

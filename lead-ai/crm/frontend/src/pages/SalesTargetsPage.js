@@ -259,11 +259,16 @@ function ScreenLink() {
   });
   const [slides, setSlides] = useState(null);
   const [seconds, setSeconds] = useState(15);
+  const [ticker, setTicker] = useState(true);
+  const [quiet, setQuiet] = useState({ on: false, start: 20, end: 8 });
   useEffect(() => {
-    if (data?.settings) { setSlides(data.settings.slides); setSeconds(data.settings.seconds); }
+    if (data?.settings) {
+      setSlides(data.settings.slides); setSeconds(data.settings.seconds);
+      setTicker(data.settings.ticker !== false); setQuiet(data.settings.quiet || { on: false, start: 20, end: 8 });
+    }
   }, [data]);
   const saveSettings = useMutation({
-    mutationFn: () => targetsAPI.saveScreenSettings({ slides, seconds: Number(seconds) || 15 }),
+    mutationFn: () => targetsAPI.saveScreenSettings({ slides, seconds: Number(seconds) || 15, ticker, quiet }),
     onSuccess: () => { message.success('TV slides saved — the screen picks them up within a few seconds'); refresh(); },
     onError: (e) => message.error(errText(e, 'Could not save the slide settings')),
   });
@@ -272,7 +277,9 @@ function ScreenLink() {
     try { await navigator.clipboard.writeText(url); message.success('Link copied'); } catch { message.error('Copy failed — select the link and copy it'); }
   };
   const available = data?.available_slides || [];
-  const dirty = data?.settings && (JSON.stringify(slides) !== JSON.stringify(data.settings.slides) || Number(seconds) !== data.settings.seconds);
+  const saved = data?.settings;
+  const dirty = saved && (JSON.stringify(slides) !== JSON.stringify(saved.slides) || Number(seconds) !== saved.seconds
+    || ticker !== (saved.ticker !== false) || JSON.stringify(quiet) !== JSON.stringify(saved.quiet || { on: false, start: 20, end: 8 }));
 
   return (
     <div style={{ marginTop: 16, borderRadius: 22, background: CHARCOAL, color: '#fff', padding: '20px 24px' }}>
@@ -312,6 +319,19 @@ function ScreenLink() {
                   {available.map((a) => <Checkbox key={a.key} value={a.key}><span style={{ color: '#fff' }}>{a.title}</span></Checkbox>)}
                 </Space>
               </Checkbox.Group>
+              <div style={{ marginTop: 12 }}>
+                <Space wrap size={[24, 8]}>
+                  <Checkbox checked={ticker} onChange={(e) => setTicker(e.target.checked)}><span style={{ color: '#fff' }}>Scrolling ticker at the bottom</span></Checkbox>
+                  <Space>
+                    <Checkbox checked={quiet.on} onChange={(e) => setQuiet({ ...quiet, on: e.target.checked })}><span style={{ color: '#fff' }}>Quiet hours (clock only)</span></Checkbox>
+                    <span style={{ color: '#bdbdbd' }}>from</span>
+                    <InputNumber min={0} max={23} value={quiet.start} disabled={!quiet.on} onChange={(v) => setQuiet({ ...quiet, start: v ?? 20 })} />
+                    <span style={{ color: '#bdbdbd' }}>to</span>
+                    <InputNumber min={0} max={23} value={quiet.end} disabled={!quiet.on} onChange={(v) => setQuiet({ ...quiet, end: v ?? 8 })} />
+                    <span style={{ color: '#bdbdbd' }}>o'clock</span>
+                  </Space>
+                </Space>
+              </div>
               <div style={{ marginTop: 12 }}>
                 <Space>
                   <span style={{ color: '#bdbdbd' }}>Seconds per slide</span>

@@ -7,9 +7,11 @@ import { SalesAvatar } from '../components/targets/SalesAvatar';
 import { useCountUp } from '../components/targets/tv/TvKit';
 import {
   SLIDE_TITLES, SalesSlide, TeamsSlide, ActivitySlide, AnalyticsSlide, PerformanceSlide, AttendanceSlide, PipelineSlide,
+  LeadersSlide, WinsSlide, GoalSlide, FollowupsSlide,
 } from '../components/targets/tv/TvSlides';
+import { milestoneFor } from '../components/targets/tv/milestones';
 import {
-  LEMON, CHARCOAL, LAVENDER, INK, MUTED, DISPLAY_FONT, BODY_FONT, loadBrandFonts,
+  LEMON, CHARCOAL, LAVENDER, INK, MUTED, DISPLAY_FONT, BODY_FONT, FS, loadBrandFonts,
 } from '../components/targets/salesTheme';
 
 const POLL_MS = 15000;
@@ -18,7 +20,13 @@ const CELEBRATE_MS = 14000;
 const CELEBRATION_VIDEO = '/celebration.mp4';
 
 // Slides whose numbers are "today" rather than "this month" get today's date as their subtitle.
-const TODAY_SLIDES = new Set(['activity', 'attendance', 'pipeline']);
+const TODAY_SLIDES = new Set(['activity', 'attendance', 'pipeline', 'wins', 'followups']);
+
+// Quiet hours wrap past midnight (e.g. 20 to 8).
+const inQuietHours = (q, hour) => {
+  if (!q || !q.on || q.start === q.end) return false;
+  return q.start < q.end ? hour >= q.start && hour < q.end : hour >= q.start || hour < q.end;
+};
 
 // ── Confetti in brand colours: squares, dots and triangles ───────────────────
 function Confetti({ burstKey }) {
@@ -99,6 +107,7 @@ export default function OfficeScreenPage() {
   const [idx, setIdx] = useState(0);                       // which slide is on screen
   const [vh, setVh] = useState(typeof window === 'undefined' ? 1080 : window.innerHeight);
   const seen = useRef(null);                                // ids already shown; null until the first load
+  const lastCompany = useRef(null);                         // company numbers at the previous poll, for milestones
   const queue = useRef([]);
   const audio = useRef(null);
   const showing = useRef(false);
@@ -123,6 +132,8 @@ export default function OfficeScreenPage() {
       const d = res.data;
       setData(d);
       setState('ok');
+      const before = lastCompany.current;
+      lastCompany.current = d.company;
       const ids = (d.recent || []).map((r) => r.id);
       if (seen.current === null) {
         seen.current = new Set(ids);                        // first load: don't celebrate history
@@ -130,6 +141,8 @@ export default function OfficeScreenPage() {
         const fresh = (d.recent || []).filter((r) => !seen.current.has(r.id)).reverse();   // oldest first
         fresh.forEach((r) => seen.current.add(r.id));
         if (fresh.length) {
+          const banner = milestoneFor(before, d.company);
+          if (banner) fresh[fresh.length - 1] = { ...fresh[fresh.length - 1], milestone: banner };   // newest sale carries it
           queue.current.push(...fresh);
           if (!showing.current) next();
         }
@@ -190,7 +203,7 @@ export default function OfficeScreenPage() {
 
   const page = {
     height: '100vh', background: CHARCOAL, color: '#fff', fontFamily: BODY_FONT, boxSizing: 'border-box',
-    padding: '2vh 2.4vw 0', position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column',
+    padding: '3vh 3.2vw 0', fontVariantNumeric: 'tabular-nums', position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column',
   };
 
   if (state === 'invalid') {
@@ -225,7 +238,13 @@ export default function OfficeScreenPage() {
     performance: () => <PerformanceSlide data={slideData} photo={photo} />,
     attendance: () => <AttendanceSlide data={slideData} photo={photo} />,
     pipeline: () => <PipelineSlide data={slideData} />,
+    leaders: () => <LeadersSlide data={slideData} photo={photo} />,
+    wins: () => <WinsSlide data={slideData} photo={photo} />,
+    goal: () => <GoalSlide data={data} />,
+    followups: () => <FollowupsSlide data={slideData} photo={photo} />,
   }[current];
+  const quiet = inQuietHours(settings.quiet, now.hour());
+  const showTicker = settings.ticker !== false && !quiet;
 
   return (
     <div style={page}>
@@ -245,6 +264,11 @@ export default function OfficeScreenPage() {
         @keyframes slideIn { from { opacity: 0; transform: translateX(-60px) skewX(-8deg); } to { opacity: 1; transform: none; } }
         @keyframes stageIn { from { opacity: 0; transform: translateX(48px); } to { opacity: 1; transform: none; } }
         @keyframes tick { from { width: 0; } to { width: 100%; } }
+        @media (orientation: portrait) {
+          .tv-cols { grid-template-columns: minmax(0,1fr) !important; grid-auto-rows: minmax(0,1fr); }
+          .tv-row { flex-wrap: wrap; }
+          .tv-row > * { flex: 1 1 44% !important; }
+        }
       `}</style>
 
       {/* living background */}
@@ -261,13 +285,13 @@ export default function OfficeScreenPage() {
         <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: '1.2vh' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1.4vw', minWidth: 0 }}>
             <img src="/medfellow-logo.png" alt="MedFellow Academy" style={{ height: 'clamp(34px,5vh,62px)', display: 'block', flex: '0 0 auto', filter: 'brightness(0) invert(1)' }} />
-            <div key={current} style={{ fontFamily: DISPLAY_FONT, fontSize: 'clamp(24px,4vw,72px)', lineHeight: 1, letterSpacing: 1, whiteSpace: 'nowrap', animation: 'slideIn .6s both' }}>
+            <div key={current} style={{ display: quiet ? 'none' : undefined, fontFamily: DISPLAY_FONT, fontSize: FS.title, lineHeight: 1, letterSpacing: 1, whiteSpace: 'nowrap', animation: 'slideIn .6s both' }}>
               <span style={{ color: LEMON }}>{(SLIDE_TITLES[current] || current).toUpperCase()}</span>{' '}
               <span style={{ color: 'transparent', WebkitTextStroke: `2px ${LAVENDER}` }}>{subtitle}</span>
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, flex: '0 0 auto' }}>
-            {count > 1 && (
+            {count > 1 && !quiet && (
               <div style={{ display: 'flex', gap: 8 }} aria-label="slides">
                 {slides.map((k, i) => (
                   <button key={k} title={SLIDE_TITLES[k]} onClick={() => setIdx(i)}
@@ -275,33 +299,44 @@ export default function OfficeScreenPage() {
                 ))}
               </div>
             )}
-            {!soundOn && <button onClick={enableSound} style={{ background: 'transparent', color: LEMON, border: `2px solid ${LEMON}`, borderRadius: 99, padding: '6px 16px', fontFamily: BODY_FONT, fontWeight: 700, fontSize: 'clamp(14px,1.32vw,22px)', cursor: 'pointer' }}>🔔 Enable sound</button>}
+            {!soundOn && <button onClick={enableSound} style={{ background: 'transparent', color: LEMON, border: `2px solid ${LEMON}`, borderRadius: 99, padding: '6px 16px', fontFamily: BODY_FONT, fontWeight: 700, fontSize: FS.caption, cursor: 'pointer' }}>🔔 Enable sound</button>}
             <div style={{ textAlign: 'right' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end', fontWeight: 700, fontSize: 'clamp(14px,1.32vw,22px)', letterSpacing: 2 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end', fontWeight: 700, fontSize: FS.caption, letterSpacing: 2 }}>
                 <span style={{ width: 12, height: 12, borderRadius: '50%', background: state === 'offline' ? '#f59e0b' : '#ff3b3b', animation: 'livePulse 1.4s infinite' }} />
                 {state === 'offline' ? 'RECONNECTING' : 'LIVE'}
               </div>
-              <div style={{ fontFamily: DISPLAY_FONT, fontSize: 'clamp(18px,2.2vw,38px)' }}>{now.format('hh:mm A')}</div>
+              <div style={{ fontFamily: DISPLAY_FONT, fontSize: FS.name }}>{now.format('hh:mm A')}</div>
             </div>
           </div>
         </header>
 
         {/* time left on this slide */}
-        <div style={{ height: 4, background: '#2a2a2a', borderRadius: 99, overflow: 'hidden', marginBottom: '1.2vh', flex: '0 0 auto' }}>
+        <div style={{ visibility: quiet ? 'hidden' : undefined, height: 4, background: '#2a2a2a', borderRadius: 99, overflow: 'hidden', marginBottom: '1.2vh', flex: '0 0 auto' }}>
           {count > 1 && <div key={`${current}-${idx}`} style={{ height: '100%', background: LAVENDER, animation: `tick ${settings.seconds || 15}s linear both`, animationPlayState: celebration ? 'paused' : 'running' }} />}
         </div>
 
-        <div key={current} style={{ flex: 1, minHeight: 0, animation: 'stageIn .7s cubic-bezier(.2,.8,.2,1) both' }}>
-          {stage()}
-        </div>
+        {quiet ? (
+          <div style={{ flex: 1, display: 'grid', placeItems: 'center', textAlign: 'center' }}>
+            <div>
+              <div style={{ fontFamily: DISPLAY_FONT, fontSize: 'clamp(60px,min(14vw,26vh),280px)', lineHeight: 1, color: LEMON }}>{now.format('hh:mm')}</div>
+              <div style={{ fontFamily: BODY_FONT, fontWeight: 700, fontSize: FS.title, color: MUTED }}>{now.format('dddd, D MMMM')}</div>
+            </div>
+          </div>
+        ) : (
+          <div key={current} style={{ flex: 1, minHeight: 0, animation: 'stageIn .7s cubic-bezier(.2,.8,.2,1) both' }}>
+            {stage()}
+          </div>
+        )}
       </div>
 
       {/* scrolling ticker */}
-      <div style={{ position: 'relative', zIndex: 1, margin: '1.2vh -2.4vw 0', flex: '0 0 auto', background: LEMON, color: INK, overflow: 'hidden', whiteSpace: 'nowrap', padding: '1vh 0' }}>
-        <div style={{ display: 'inline-block', fontFamily: DISPLAY_FONT, fontSize: 'clamp(14px,1.7vw,28px)', animation: `marquee ${Math.max(30, strip.length / 3)}s linear infinite` }}>
+      {showTicker ? (
+      <div style={{ position: 'relative', zIndex: 1, margin: '1.2vh -3.2vw 0', flex: '0 0 auto', background: LEMON, color: INK, overflow: 'hidden', whiteSpace: 'nowrap', padding: '1vh 0 calc(1vh + 1.2vh)' }}>
+        <div style={{ display: 'inline-block', fontFamily: DISPLAY_FONT, fontSize: FS.label, animation: `marquee ${Math.max(30, strip.length / 3)}s linear infinite` }}>
           <span>{strip}</span><span>{strip}</span>
         </div>
       </div>
+      ) : <div style={{ flex: '0 0 3vh' }} />}
 
       {/* new-enrollment celebration */}
       {celebration && (
@@ -330,6 +365,11 @@ export default function OfficeScreenPage() {
             <div style={{ fontFamily: BODY_FONT, fontWeight: 700, fontSize: 'min(3.2vw, 5vh)' }}>{celebration.student} just joined</div>
             <div style={{ fontFamily: BODY_FONT, color: '#d4d4d4', fontSize: 'min(2vw, 3.1vh)', margin: '0.4vh 0 1.4vh' }}>{celebration.course}</div>
             <Amount value={celebration.amount} />
+            {celebration.milestone && (
+              <div style={{ marginTop: '1.6vh', fontFamily: DISPLAY_FONT, color: INK, background: LEMON, display: 'inline-block', padding: '0.5vh 1.6vw', borderRadius: 99, fontSize: 'min(2.6vw, 4vh)', animation: 'popIn .7s 1.4s both' }}>
+                {celebration.milestone.icon} {celebration.milestone.text}
+              </div>
+            )}
           </div>
         </div>
       )}

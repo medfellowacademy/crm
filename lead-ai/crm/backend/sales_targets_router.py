@@ -25,6 +25,8 @@ from pydantic import BaseModel, Field
 
 from auth import get_current_user
 import rbac
+import visibility
+from constants import TERMINAL_STATUSES
 from supabase_data_layer import supabase_data
 from logger_config import logger
 import sales_targets as st
@@ -259,6 +261,8 @@ def _active_screen() -> Optional[dict]:
 class ScreenSettings(BaseModel):
     slides: List[str] = Field(max_length=20)
     seconds: int = Field(tv.DEFAULT_SECONDS, ge=1, le=3600)
+    ticker: bool = True
+    quiet: Optional[dict] = None
 
 
 def _screen_payload(row: dict) -> dict:
@@ -311,7 +315,7 @@ def save_screen_settings(body: ScreenSettings, current_user: dict = Depends(get_
         raise HTTPException(status_code=422, detail=f"Unknown slide: {unknown[0]}")
     if not body.slides:
         raise HTTPException(status_code=422, detail="Keep at least one slide on")
-    settings = tv.clean_settings({"slides": body.slides, "seconds": body.seconds})
+    settings = tv.clean_settings({"slides": body.slides, "seconds": body.seconds, "ticker": body.ticker, "quiet": body.quiet})
     try:
         row = _active_screen()
         if not row:
@@ -368,6 +372,22 @@ def _fetch_notes_since(day) -> list:
     return rows
 
 
+def _fetch_overdue(today) -> list:
+    """Open leads whose follow-up date has passed (assigned_to + date only)."""
+    rows, offset = [], 0
+    with visibility.unguarded():
+        while True:
+            q = (supabase_data.client.table("leads").select("assigned_to,follow_up_date")
+                 .lt("follow_up_date", today.isoformat()).not_.in_("status", sorted(TERMINAL_STATUSES))
+                 .order("id").range(offset, offset + 999))
+            page = q.execute().data or []
+            rows += page
+            if len(page) < 1000 or offset > 200000:
+                break
+            offset += 1000
+    return rows
+
+
 def _with_photos(rows: list, meta: dict) -> list:
     for r in rows or []:
         m = meta.get(st.norm(r.get("name"))) or {}
@@ -392,6 +412,20 @@ def _build_slide(key: str, month: str) -> dict:
         _with_photos(data["people"], meta)
     elif key == "pipeline":
         data = tv.pipeline_slide(get_report_leads(supabase_data.client, None), today)
+    elif key == "leaders":
+        data = tv.leaders_slide(payments_router._fetch_enrolled(), today)
+        for rows in data.values():
+            _with_photos(rows, meta)
+    elif key == "wins":
+        data = tv.wins_slide(payments_router._fetch_enrolled(), today)
+        for w in data["wins"]:
+            m = meta.get(st.norm(w["counselor"])) or {}
+            w["counselor_id"], w["avatar_v"] = m.get("id"), m.get("v") or 0
+    elif key == "followups":
+        data = tv.followups_slide(_fetch_overdue(today), _people_names(), today)
+        _with_photos(data["people"], meta)
+    elif key == "goal":
+        data = {}
     else:
         data = {}
     return data
