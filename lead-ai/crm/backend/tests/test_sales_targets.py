@@ -113,21 +113,21 @@ class FakeClient:
 
 ADMIN = {"role": "Super Admin", "full_name": "Boss", "email": "boss@x.in"}
 MANAGER = {"role": "Manager", "full_name": "Mani", "email": "mani@x.in"}
-ASHA = {"role": "Counselor", "full_name": "Asha", "email": "asha@x.in"}
+ASHA = {"id": 1, "role": "Counselor", "full_name": "Asha", "email": "asha@x.in"}
 USERS = [
-    {"full_name": "Asha", "role": "Counselor", "is_active": True},
-    {"full_name": "Ravi", "role": "Counselor", "is_active": True},
-    {"full_name": "Gone", "role": "Counselor", "is_active": False},
-    {"full_name": "Finn", "role": "Finance", "is_active": True},
+    {"id": 1, "full_name": "Asha", "role": "Counselor", "is_active": True},
+    {"id": 2, "full_name": "Ravi", "role": "Counselor", "is_active": True},
+    {"id": 3, "full_name": "Gone", "role": "Counselor", "is_active": False},
+    {"id": 4, "full_name": "Finn", "role": "Finance", "is_active": True},
 ]
 
 
 @pytest.fixture()
 def api(monkeypatch):
-    tables = {"sales_targets": [], "office_screens": []}
+    tables = {"sales_targets": [], "office_screens": [], "users": [dict(u) for u in USERS]}
     fake = FakeClient(tables)
     monkeypatch.setattr(sr.supabase_data, "client", fake, raising=False)
-    monkeypatch.setattr(sr.supabase_data, "get_all_users", lambda: USERS, raising=False)
+    monkeypatch.setattr(sr.supabase_data, "get_all_users", lambda: tables["users"], raising=False)
     monkeypatch.setattr(sr.payments_router, "_fetch_enrolled", lambda: [
         lead(1, "Asha", 100000, f"{MONTH}-03T10:00:00+00:00"),
         lead(2, "Ravi", 50000, f"{MONTH}-04T10:00:00+00:00"),
@@ -235,6 +235,77 @@ class TestOfficeScreen:
     def test_tokens_are_long_and_random(self, api):
         a, b = self._link(api), self._link(api)
         assert len(a) >= 30 and a != b
+
+
+import base64
+
+JPEG_BYTES = bytes([0xFF, 0xD8, 0xFF, 0xE0]) + b"0" * 64
+PNG_BYTES = bytes([0x89]) + b"PNG" + bytes([0x0D, 0x0A, 0x1A, 0x0A]) + b"0" * 32
+JPEG = "data:image/jpeg;base64," + base64.b64encode(JPEG_BYTES).decode()
+PNG = "data:image/png;base64," + base64.b64encode(PNG_BYTES).decode()
+
+
+class TestParseAvatar:
+    def test_accepts_real_signatures(self):
+        assert st.parse_avatar(JPEG)[0] == "image/jpeg" and st.parse_avatar(PNG)[0] == "image/png"
+
+    @pytest.mark.parametrize("bad", [
+        "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=", "data:text/html;base64,PGI+", "http://evil/x.png", "", None, 5,
+        "data:image/jpeg;base64,!!!notbase64!!!",
+        "data:image/jpeg;base64," + base64.b64encode(b"not a jpeg at all").decode(),   # wrong magic bytes
+    ])
+    def test_rejects(self, bad):
+        with pytest.raises(ValueError):
+            st.parse_avatar(bad)
+
+    def test_rejects_oversized(self):
+        with pytest.raises(ValueError, match="too large"):
+            st.parse_avatar("data:image/png;base64," + "A" * (st.AVATAR_MAX_CHARS + 1))
+
+
+class TestAvatars:
+    def test_user_can_set_own_photo_and_it_is_served(self, api):
+        api.as_user(ASHA)
+        assert api.put("/api/targets/avatars/1", json={"image": JPEG}).status_code == 200
+        r = api.get("/api/targets/avatars/1")
+        assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg" and r.content == JPEG_BYTES
+        assert r.headers["x-content-type-options"] == "nosniff"
+
+    def test_user_cannot_change_someone_elses_photo_but_manager_can(self, api):
+        api.as_user(ASHA)
+        assert api.put("/api/targets/avatars/2", json={"image": JPEG}).status_code == 403
+        assert api.delete("/api/targets/avatars/2").status_code == 403
+        api.as_user(MANAGER)
+        assert api.put("/api/targets/avatars/2", json={"image": JPEG}).status_code == 200
+
+    def test_bad_image_rejected_and_nothing_stored(self, api):
+        api.as_user(ASHA)
+        r = api.put("/api/targets/avatars/1", json={"image": "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4="})
+        assert r.status_code == 422 and not api.tables["users"][0].get("avatar")
+
+    def test_progress_carries_photo_version_and_user_id(self, api):
+        api.as_user(ASHA)
+        api.put("/api/targets/avatars/1", json={"image": JPEG})
+        p = api.get(f"/api/targets/progress?month={MONTH}").json()
+        asha = next(x for x in p["people"] if x["name"] == "Asha")
+        ravi = next(x for x in p["people"] if x["name"] == "Ravi")
+        assert asha["user_id"] == 1 and asha["avatar_v"] > 0 and ravi["avatar_v"] == 0
+        assert p["recent"][-1]["counselor_id"] == 1                      # Asha's sale carries her photo id
+
+    def test_remove_photo(self, api):
+        api.as_user(ASHA)
+        api.put("/api/targets/avatars/1", json={"image": JPEG})
+        api.delete("/api/targets/avatars/1")
+        assert api.get("/api/targets/avatars/1").status_code == 404
+
+    def test_tv_photo_route_needs_the_secret(self, api):
+        api.as_user(ASHA)
+        api.put("/api/targets/avatars/1", json={"image": JPEG})
+        api.as_user(ADMIN)
+        token = api.post("/api/targets/screen").json()["token"]
+        assert api.get(f"/api/display/{token}/avatar/1").status_code == 200
+        assert api.get("/api/display/wrong/avatar/1").status_code == 404
+        assert api.get(f"/api/display/{token}/avatar/2").status_code == 404       # no photo set
 
 
 def test_display_path_is_public_in_the_global_auth_gate():

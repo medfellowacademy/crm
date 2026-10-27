@@ -38,13 +38,15 @@ def pct(done: float, target: float) -> Optional[float]:
     return round(done / target * 100, 1) if target and target > 0 else None
 
 
-def progress(enrolled: list, targets: list, month: str, people: list) -> dict:
+def progress(enrolled: list, targets: list, month: str, people: list, meta: Optional[dict] = None) -> dict:
     """Per-person and team achievement for `month`.
 
     enrolled: Enrolled leads with `enroll_date` resolved.
     targets:  rows {counselor, revenue_target, enrollment_target} for the month.
     people:   display names of everyone who should appear (even with 0 sales).
+    meta:     {normalised name: {"id": user id, "v": photo version}} for photos.
     """
+    meta = meta or {}
     display: dict = {}
     rows: dict = {}
 
@@ -70,8 +72,9 @@ def progress(enrolled: list, targets: list, month: str, people: list) -> dict:
 
     out = []
     for k, r in rows.items():
+        m = meta.get(k) or {}
         out.append({
-            "name": display[k], **r,
+            "name": display[k], "user_id": m.get("id"), "avatar_v": m.get("v") or 0, **r,
             "revenue_pct": pct(r["revenue"], r["revenue_target"]),
             "enrollment_pct": pct(r["enrolled"], r["enrollment_target"]),
         })
@@ -96,10 +99,11 @@ def first_name(name) -> str:
     return parts[0] if parts else "A new student"
 
 
-def recent_sales(enrolled: list, limit: int = 8) -> list:
+def recent_sales(enrolled: list, limit: int = 8, meta: Optional[dict] = None) -> list:
     """Latest enrollments, newest first. Only students with a known enrollment
     date are listed — an undated one can't be placed in time, and the TV uses
     this list's ids to detect 'a new sale just happened'."""
+    meta = meta or {}
     dated = [l for l in enrolled or [] if l.get("enroll_date") or l.get("enrolled_at")]
     dated.sort(key=lambda l: str(l.get("enroll_date") or l.get("enrolled_at")), reverse=True)
     return [
@@ -107,6 +111,8 @@ def recent_sales(enrolled: list, limit: int = 8) -> list:
             "id": str(l.get("lead_id") or l.get("id")),
             "student": first_name(l.get("full_name")),
             "counselor": l.get("assigned_to") or "",
+            "counselor_id": (meta.get(norm(l.get("assigned_to"))) or {}).get("id"),
+            "avatar_v": (meta.get(norm(l.get("assigned_to"))) or {}).get("v") or 0,
             "course": l.get("course_interested") or "",
             "country": l.get("country") or "",
             "amount": _money(l.get("actual_revenue")),
@@ -114,3 +120,33 @@ def recent_sales(enrolled: list, limit: int = 8) -> list:
         }
         for l in dated[:limit]
     ]
+
+
+# --- profile photos ---------------------------------------------------------
+
+_AVATAR = re.compile(r"^data:(image/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$")
+AVATAR_MAX_CHARS = 200_000          # a 256px JPEG is ~20-30KB; this only blocks abuse
+
+
+def parse_avatar(data_url) -> tuple:
+    """(mime, bytes) from a base64 image data URL, or ValueError. Only small
+    jpeg/png/webp images are accepted - never SVG (it can carry scripts)."""
+    import base64
+    import binascii
+    if not isinstance(data_url, str) or len(data_url) > AVATAR_MAX_CHARS:
+        raise ValueError("Photo is too large - use a smaller image")
+    m = _AVATAR.match(data_url)
+    if not m:
+        raise ValueError("Photo must be a JPEG, PNG or WebP image")
+    try:
+        raw = base64.b64decode(m.group(2), validate=True)
+    except (binascii.Error, ValueError):
+        raise ValueError("Photo data is corrupted")
+    sig = {
+        "image/jpeg": raw[:3] == b"\xff\xd8\xff",
+        "image/png": raw[:8] == b"\x89PNG\r\n\x1a\n",
+        "image/webp": raw[:4] == b"RIFF" and raw[8:12] == b"WEBP",
+    }
+    if not sig[m.group(1)]:
+        raise ValueError("Photo contents do not match its type")
+    return m.group(1), raw

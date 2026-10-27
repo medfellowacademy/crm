@@ -230,6 +230,9 @@ export const targetsAPI = {
   screen: () => api.get('/api/targets/screen'),
   newScreen: () => api.post('/api/targets/screen'),
   revokeScreen: () => api.delete('/api/targets/screen'),
+  avatar: (userId) => api.get(`/api/targets/avatars/${userId}`, { responseType: 'blob' }),
+  setAvatar: (userId, image) => api.put(`/api/targets/avatars/${userId}`, { image }),
+  removeAvatar: (userId) => api.delete(`/api/targets/avatars/${userId}`),
 };
 
 // The office TV has no login: the secret in the URL is the credential. A bare
@@ -237,6 +240,8 @@ export const targetsAPI = {
 // "401 -> bounce to /login" handling.
 export const displayAPI = {
   feed: (token) => axios.get(`${API_BASE_URL}/api/display/${encodeURIComponent(token)}`, { timeout: 20000 }),
+  // <img> can't send headers, so the secret travels in the path; ?v busts the cache when a photo changes
+  avatarUrl: (token, userId, v) => `${API_BASE_URL}/api/display/${encodeURIComponent(token)}/avatar/${userId}?v=${v || 0}`,
 };
 
 export const paymentsAPI = {

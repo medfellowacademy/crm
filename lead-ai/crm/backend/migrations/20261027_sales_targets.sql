@@ -20,3 +20,6 @@ create table if not exists public.office_screens (
 -- Same posture as the other CRM tables: only the backend (service role) reads these.
 alter table public.sales_targets enable row level security;
 alter table public.office_screens enable row level security;
+
+-- Profile photo (small cropped JPEG as a data URL) shown on Sales Targets and the office TV.
+alter table public.users add column if not exists avatar text;

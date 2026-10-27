@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from cachetools import TTLCache
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from auth import get_current_user
@@ -64,6 +64,15 @@ def _people_names() -> List[str]:
     return [u["full_name"] for u in users if u.get("role") in _PEOPLE_ROLES and u.get("is_active") and u.get("full_name")]
 
 
+def _people_meta() -> dict:
+    """{normalised name: {"id", "v"}} - who has a profile photo (v changes when it does)."""
+    out = {}
+    for u in supabase_data.get_all_users() or []:
+        if u.get("full_name") and u.get("id") is not None:
+            out[st.norm(u["full_name"])] = {"id": u["id"], "v": len(u.get("avatar") or "")}
+    return out
+
+
 def _targets_for(month: str) -> list:
     try:
         return supabase_data.client.table("sales_targets").select("*").eq("month", month).execute().data or []
@@ -74,7 +83,7 @@ def _targets_for(month: str) -> list:
 
 def _build_progress(month: str) -> dict:
     enrolled = payments_router._fetch_enrolled()
-    return st.progress(enrolled, _targets_for(month), month, _people_names())
+    return st.progress(enrolled, _targets_for(month), month, _people_names(), _people_meta())
 
 
 # --------------------------------------------------------------------------
@@ -97,7 +106,8 @@ def get_progress(month: Optional[str] = Query(None), current_user: dict = Depend
     data = _build_progress(m)
     data["can_manage"] = _can_manage(current_user)
     data["me"] = rbac.user_identity(current_user)
-    data["recent"] = st.recent_sales([l for l in payments_router._fetch_enrolled()], 10)
+    data["me_id"] = current_user.get("id")
+    data["recent"] = st.recent_sales(payments_router._fetch_enrolled(), 10, _people_meta())
     return data
 
 
@@ -147,6 +157,76 @@ def save_targets(body: TargetsBody, month: Optional[str] = Query(None), current_
     with _display_lock:
         _display_cache.clear()
     return {"ok": True, "saved": len(keep), "cleared": len(clear)}
+
+
+# --------------------------------------------------------------------------
+# Profile photos (leaderboard + enrollment celebration)
+# --------------------------------------------------------------------------
+
+class AvatarBody(BaseModel):
+    image: str = Field(max_length=st.AVATAR_MAX_CHARS + 100)
+
+
+def _can_edit_avatar(user: dict, user_id: int) -> bool:
+    return _can_manage(user) or (user.get("id") is not None and str(user.get("id")) == str(user_id))
+
+
+def _read_avatar(user_id: int) -> Optional[tuple]:
+    try:
+        rows = supabase_data.client.table("users").select("avatar").eq("id", user_id).limit(1).execute().data or []
+    except Exception as e:  # column missing until the migration is applied
+        logger.warning(f"avatar read failed: {e}")
+        return None
+    data = rows[0].get("avatar") if rows else None
+    try:
+        return st.parse_avatar(data) if data else None
+    except ValueError:
+        return None
+
+
+def _image_response(img: Optional[tuple]) -> Response:
+    if not img:
+        raise HTTPException(status_code=404, detail="No photo")
+    mime, raw = img
+    return Response(content=raw, media_type=mime,
+                    headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"})
+
+
+@router.put("/avatars/{user_id}")
+def set_avatar(user_id: int, body: AvatarBody, current_user: dict = Depends(get_current_user)):
+    if not _can_edit_avatar(current_user, user_id):
+        raise HTTPException(status_code=403, detail="You can only change your own photo")
+    try:
+        st.parse_avatar(body.image)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    try:
+        supabase_data.client.table("users").update({"avatar": body.image}).eq("id", user_id).execute()
+    except Exception as e:
+        logger.error(f"set_avatar failed: {e}")
+        raise HTTPException(status_code=503, detail="Could not save the photo - has the users.avatar migration been applied?")
+    with _display_lock:
+        _display_cache.clear()
+    return {"ok": True}
+
+
+@router.delete("/avatars/{user_id}")
+def remove_avatar(user_id: int, current_user: dict = Depends(get_current_user)):
+    if not _can_edit_avatar(current_user, user_id):
+        raise HTTPException(status_code=403, detail="You can only change your own photo")
+    try:
+        supabase_data.client.table("users").update({"avatar": None}).eq("id", user_id).execute()
+    except Exception as e:
+        logger.error(f"remove_avatar failed: {e}")
+        raise HTTPException(status_code=503, detail="Could not remove the photo")
+    with _display_lock:
+        _display_cache.clear()
+    return {"ok": True}
+
+
+@router.get("/avatars/{user_id}")
+def get_avatar(user_id: int, current_user: dict = Depends(get_current_user)):
+    return _image_response(_read_avatar(user_id))
 
 
 # --------------------------------------------------------------------------
@@ -223,9 +303,16 @@ def display_feed(token: str):
         with payments_router._lock:
             payments_router._cache.clear()
         data = _build_progress(month)
-        data["recent"] = st.recent_sales(payments_router._fetch_enrolled(), 8)
+        data["recent"] = st.recent_sales(payments_router._fetch_enrolled(), 8, _people_meta())
         data["generated_at"] = datetime.now(timezone.utc).isoformat()
         cached = data
         with _display_lock:
             _display_cache[month] = cached
     return cached
+
+
+@display_router.get("/{token}/avatar/{user_id}")
+def display_avatar(token: str, user_id: int):
+    if not _token_ok(token):
+        raise HTTPException(status_code=404, detail="Not found")
+    return _image_response(_read_avatar(user_id))
