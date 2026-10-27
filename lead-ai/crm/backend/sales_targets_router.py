@@ -2,10 +2,11 @@
 Sales targets, achievements and the office TV screen.
 
 Authenticated, under `/api/targets`:
-  GET  /progress?month=   -> everyone: achievement vs target for each person + team
-  GET  ?month=            -> Super Admin / Manager: the targets being edited
+  GET  /progress?month=   -> everyone: company, team and per-person achievement vs target
+  GET  ?month=            -> Super Admin / Manager: the targets being edited (company, teams, people)
   PUT  ?month=            -> Super Admin / Manager: save targets
   GET/POST/DELETE /screen -> Super Admin / Manager: the secret TV link
+  PUT  /screen/settings   -> Super Admin / Manager: which slides the TV rotates through, and how fast
 
 Public, under `/api/display/{token}` (no login — the TV has none). The secret
 in the URL IS the credential, so every handler there checks it against
@@ -15,8 +16,8 @@ in the URL IS the credential, so every handler there checks it against
 import hmac
 import secrets
 import threading
-from datetime import datetime, timezone
-from typing import List, Optional
+from datetime import datetime, time, timezone
+from typing import List, Literal, Optional
 
 from cachetools import TTLCache
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -27,7 +28,9 @@ import rbac
 from supabase_data_layer import supabase_data
 from logger_config import logger
 import sales_targets as st
+import tv_slides as tv
 import payments_router
+from report_data import get_report_leads
 
 router = APIRouter(prefix="/api/targets", tags=["targets"])
 display_router = APIRouter(prefix="/api/display", tags=["display"])
@@ -36,6 +39,7 @@ _PEOPLE_ROLES = {"Counselor", "Team Leader", "Manager"}
 _MANAGE_ROLES = {rbac.ROLE_SUPER_ADMIN, rbac.ROLE_MANAGER}
 
 _display_cache: TTLCache = TTLCache(maxsize=4, ttl=10)
+_slide_cache: TTLCache = TTLCache(maxsize=64, ttl=60)
 _display_lock = threading.Lock()
 
 
@@ -49,7 +53,7 @@ def _require_manage(user: dict) -> None:
 
 
 def _this_month() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m")
+    return st.ist_today().strftime("%Y-%m")        # the office runs on IST
 
 
 def _month(month: Optional[str]) -> str:
@@ -83,15 +87,17 @@ def _targets_for(month: str) -> list:
 
 def _build_progress(month: str) -> dict:
     enrolled = payments_router._fetch_enrolled()
-    return st.progress(enrolled, _targets_for(month), month, _people_names(), _people_meta())
+    users = supabase_data.get_all_users() or []
+    return st.progress(enrolled, _targets_for(month), month, _people_names(), _people_meta(), st.build_teams(users), st.ist_today())
 
 
 # --------------------------------------------------------------------------
-# Targets
+# Targets: one company target, one per team (a leader and everyone under them), one per person
 # --------------------------------------------------------------------------
 
 class TargetItem(BaseModel):
-    counselor: str = Field(min_length=1, max_length=120)
+    scope: Literal["company", "team", "person"] = "person"
+    subject: str = Field("", max_length=120)          # '' for company, the leader's name for a team, the person's name
     revenue_target: float = Field(0, ge=0, le=1e10)
     enrollment_target: int = Field(0, ge=0, le=100000)
 
@@ -115,42 +121,53 @@ def get_progress(month: Optional[str] = Query(None), current_user: dict = Depend
 def get_targets(month: Optional[str] = Query(None), current_user: dict = Depends(get_current_user)):
     _require_manage(current_user)
     m = _month(month)
-    by_name = {st.norm(t.get("counselor")): t for t in _targets_for(m)}
-    people = []
-    for name in sorted(_people_names(), key=st.norm):
-        t = by_name.get(st.norm(name), {})
-        people.append({
-            "counselor": name,
-            "revenue_target": float(t.get("revenue_target") or 0),
-            "enrollment_target": int(t.get("enrollment_target") or 0),
-        })
-    return {"month": m, "people": people}
+    rows = _targets_for(m)
+
+    def find(scope, subject=""):
+        for t in rows:
+            if (t.get("scope") or "person") == scope and st.norm(t.get("counselor")) == st.norm(subject):
+                return t
+        return {}
+
+    def vals(t):
+        return {"revenue_target": float(t.get("revenue_target") or 0), "enrollment_target": int(t.get("enrollment_target") or 0)}
+
+    teams = [{"subject": t["leader"], "members": len(t["members"]), **vals(find("team", t["leader"]))}
+             for t in st.build_teams(supabase_data.get_all_users() or [])]
+    people = [{"subject": n, **vals(find("person", n))} for n in sorted(_people_names(), key=st.norm)]
+    return {"month": m, "company": vals(find("company")), "teams": teams, "people": people}
 
 
 @router.put("")
 def save_targets(body: TargetsBody, month: Optional[str] = Query(None), current_user: dict = Depends(get_current_user)):
     _require_manage(current_user)
     m = _month(month)
-    valid = {st.norm(n): n for n in _people_names()}
+    users = supabase_data.get_all_users() or []
+    valid = {
+        "company": {"": ""},
+        "team": {st.norm(t["leader"]): t["leader"] for t in st.build_teams(users)},
+        "person": {st.norm(n): n for n in _people_names()},
+    }
     who = rbac.user_identity(current_user) or current_user.get("email") or ""
     now = datetime.now(timezone.utc).isoformat()
     keep, clear = [], []
     for it in body.items:
-        name = valid.get(st.norm(it.counselor))
-        if not name:
-            raise HTTPException(status_code=422, detail=f"'{it.counselor}' is not an active team member")
+        subject = valid[it.scope].get(st.norm(it.subject))
+        if subject is None:
+            label = "a team leader" if it.scope == "team" else "an active team member"
+            raise HTTPException(status_code=422, detail=f"'{it.subject}' is not {label}")
         if it.revenue_target <= 0 and it.enrollment_target <= 0:
-            clear.append(name)
+            clear.append((it.scope, subject))
         else:
             keep.append({
-                "month": m, "counselor": name, "revenue_target": it.revenue_target,
+                "month": m, "scope": it.scope, "counselor": subject, "revenue_target": it.revenue_target,
                 "enrollment_target": it.enrollment_target, "set_by": who, "updated_at": now,
             })
     try:
         if keep:
-            supabase_data.client.table("sales_targets").upsert(keep, on_conflict="month,counselor").execute()
-        for name in clear:
-            supabase_data.client.table("sales_targets").delete().eq("month", m).eq("counselor", name).execute()
+            supabase_data.client.table("sales_targets").upsert(keep, on_conflict="month,scope,counselor").execute()
+        for scope, subject in clear:
+            supabase_data.client.table("sales_targets").delete().eq("month", m).eq("scope", scope).eq("counselor", subject).execute()
     except Exception as e:
         logger.error(f"save_targets failed: {e}")
         raise HTTPException(status_code=503, detail="Could not save targets - has the sales_targets migration been applied?")
@@ -239,6 +256,18 @@ def _active_screen() -> Optional[dict]:
     return rows[0] if rows else None
 
 
+class ScreenSettings(BaseModel):
+    slides: List[str] = Field(max_length=20)
+    seconds: int = Field(tv.DEFAULT_SECONDS, ge=1, le=3600)
+
+
+def _screen_payload(row: dict) -> dict:
+    return {
+        "token": row["token"], "created_at": row.get("created_at"), "created_by": row.get("created_by"),
+        "settings": tv.clean_settings(row.get("settings")),
+    }
+
+
 @router.get("/screen")
 def get_screen(current_user: dict = Depends(get_current_user)):
     _require_manage(current_user)
@@ -247,25 +276,55 @@ def get_screen(current_user: dict = Depends(get_current_user)):
     except Exception as e:
         logger.warning(f"office_screens unavailable: {e}")
         raise HTTPException(status_code=503, detail="Office screen tables are not set up yet (migration not applied)")
-    return {"token": row["token"], "created_at": row.get("created_at"), "created_by": row.get("created_by")} if row else {"token": None}
+    base = {"available_slides": [{"key": k, "title": t, "default": on} for k, (t, on) in tv.SLIDES.items()],
+            "min_seconds": tv.MIN_SECONDS, "max_seconds": tv.MAX_SECONDS}
+    return {**base, **(_screen_payload(row) if row else {"token": None, "settings": tv.default_settings()})}
 
 
 @router.post("/screen")
 def create_screen(current_user: dict = Depends(get_current_user)):
-    """Create a new TV link. Any earlier link stops working immediately."""
+    """Create a new TV link. Any earlier link stops working immediately; slide settings carry over."""
     _require_manage(current_user)
     token = secrets.token_urlsafe(24)
     try:
+        previous = _active_screen()
         supabase_data.client.table("office_screens").update({"revoked": True}).eq("revoked", False).execute()
-        supabase_data.client.table("office_screens").insert({
+        new_row = {
             "token": token, "revoked": False,
             "created_by": rbac.user_identity(current_user) or current_user.get("email") or "",
             "created_at": datetime.now(timezone.utc).isoformat(),
-        }).execute()
+        }
+        if previous and previous.get("settings"):
+            new_row["settings"] = previous["settings"]
+        supabase_data.client.table("office_screens").insert(new_row).execute()
     except Exception as e:
         logger.error(f"create_screen failed: {e}")
         raise HTTPException(status_code=503, detail="Could not create the link - has the office_screens migration been applied?")
     return {"token": token}
+
+
+@router.put("/screen/settings")
+def save_screen_settings(body: ScreenSettings, current_user: dict = Depends(get_current_user)):
+    _require_manage(current_user)
+    unknown = [k for k in body.slides if k not in tv.SLIDES]
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Unknown slide: {unknown[0]}")
+    if not body.slides:
+        raise HTTPException(status_code=422, detail="Keep at least one slide on")
+    settings = tv.clean_settings({"slides": body.slides, "seconds": body.seconds})
+    try:
+        row = _active_screen()
+        if not row:
+            raise HTTPException(status_code=409, detail="Create the TV link first")
+        supabase_data.client.table("office_screens").update({"settings": settings}).eq("token", row["token"]).execute()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"save_screen_settings failed: {e}")
+        raise HTTPException(status_code=503, detail="Could not save - has the office_screens.settings migration been applied?")
+    with _display_lock:
+        _display_cache.clear()
+    return {"ok": True, "settings": settings}
 
 
 @router.delete("/screen")
@@ -279,36 +338,102 @@ def revoke_screen(current_user: dict = Depends(get_current_user)):
 # Public TV feed
 # --------------------------------------------------------------------------
 
-def _token_ok(token: str) -> bool:
+def _screen_row(token: str) -> Optional[dict]:
     if not token or len(token) > 200:
-        return False
+        return None
     try:
-        rows = (supabase_data.client.table("office_screens").select("token").eq("token", token)
+        rows = (supabase_data.client.table("office_screens").select("*").eq("token", token)
                 .eq("revoked", False).limit(1).execute().data or [])
     except Exception:
-        return False
-    return bool(rows) and hmac.compare_digest(str(rows[0]["token"]), token)
+        return None
+    return rows[0] if rows and hmac.compare_digest(str(rows[0]["token"]), token) else None
+
+
+def _token_ok(token: str) -> bool:
+    return _screen_row(token) is not None
+
+
+def _fetch_notes_since(day) -> list:
+    """Follow-up notes (not system noise) written since `day` 00:00 IST."""
+    start = datetime.combine(day, time.min, tzinfo=st.IST).astimezone(timezone.utc).isoformat()
+    rows, offset = [], 0
+    while offset <= 30000:
+        batch = (supabase_data.client.table("notes").select("created_by,channel,created_at")
+                 .gte("created_at", start).neq("channel", "system").order("id")
+                 .range(offset, offset + 999).execute().data or [])
+        rows.extend(batch)
+        if len(batch) < 1000:
+            break
+        offset += 1000
+    return rows
+
+
+def _with_photos(rows: list, meta: dict) -> list:
+    for r in rows or []:
+        m = meta.get(st.norm(r.get("name"))) or {}
+        r["user_id"], r["avatar_v"] = m.get("id"), m.get("v") or 0
+    return rows
+
+
+def _build_slide(key: str, month: str) -> dict:
+    today, meta = st.ist_today(), _people_meta()
+    if key == "activity":
+        data = tv.activity_slide(_fetch_notes_since(tv.week_start(today)), _people_names(), today)
+        _with_photos(data["people"], meta)
+    elif key == "analytics":
+        data = tv.analytics_slide(get_report_leads(supabase_data.client, None), month)
+    elif key == "performance":
+        data = tv.performance_slide(get_report_leads(supabase_data.client, None), month, supabase_data.get_all_users() or [], today)
+        _with_photos(data["highlights"], meta)
+        _with_photos(data["anniversaries"], meta)
+    elif key == "attendance":
+        rows = supabase_data.client.table("attendance").select("user_name,check_in_at").eq("date", today.isoformat()).execute().data or []
+        data = tv.attendance_slide(rows, _people_names(), today)
+        _with_photos(data["early_birds"], meta)
+    elif key == "pipeline":
+        data = tv.pipeline_slide(get_report_leads(supabase_data.client, None), today)
+    else:
+        data = {}
+    return data
+
+
+def _slide(key: str, month: str) -> dict:
+    """One slide's data, cached 60s. A slide that fails reports {"error": true} and never takes the whole feed down."""
+    with _display_lock:
+        hit = _slide_cache.get((key, month))
+    if hit is not None:
+        return hit
+    try:
+        data = _build_slide(key, month)
+    except Exception as e:
+        logger.error(f"tv slide '{key}' failed: {e}")
+        return {"error": True}
+    with _display_lock:
+        _slide_cache[(key, month)] = data
+    return data
 
 
 @display_router.get("/{token}")
 def display_feed(token: str):
-    if not _token_ok(token):
+    row = _screen_row(token)
+    if not row:
         # same answer for "wrong" and "revoked" so links can't be probed
         raise HTTPException(status_code=404, detail="Not found")
+    settings = tv.clean_settings(row.get("settings"))
     month = _this_month()
     with _display_lock:
-        cached = _display_cache.get(month)
-    if cached is None:
+        core = _display_cache.get(month)
+    if core is None:
         # the TV must notice a new sale within seconds, so skip payments' 30s enrolled cache
         with payments_router._lock:
             payments_router._cache.clear()
-        data = _build_progress(month)
-        data["recent"] = st.recent_sales(payments_router._fetch_enrolled(), 8, _people_meta())
-        data["generated_at"] = datetime.now(timezone.utc).isoformat()
-        cached = data
+        core = _build_progress(month)
+        core["recent"] = st.recent_sales(payments_router._fetch_enrolled(), 8, _people_meta())
+        core["generated_at"] = datetime.now(timezone.utc).isoformat()
         with _display_lock:
-            _display_cache[month] = cached
-    return cached
+            _display_cache[month] = core
+    slides = {k: _slide(k, month) for k in settings["slides"] if k not in ("sales", "teams")}
+    return {**core, "settings": settings, "slides": slides}
 
 
 @display_router.get("/{token}/avatar/{user_id}")

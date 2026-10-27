@@ -7,7 +7,9 @@ as the sale value — the same definition the dashboard and Employee Performance
 use, so every page agrees.
 """
 
+import calendar
 import re
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 _MONTH = re.compile(r"^\d{4}-\d{2}$")
@@ -38,13 +40,78 @@ def pct(done: float, target: float) -> Optional[float]:
     return round(done / target * 100, 1) if target and target > 0 else None
 
 
-def progress(enrolled: list, targets: list, month: str, people: list, meta: Optional[dict] = None) -> dict:
-    """Per-person and team achievement for `month`.
+IST = timezone(timedelta(hours=5, minutes=30))
+SCOPES = ("company", "team", "person")
+
+
+def ist_today() -> date:
+    return datetime.now(IST).date()
+
+
+def build_teams(users: list) -> list:
+    """A team = a Manager/Team Leader plus everyone who reports to them at any depth.
+    Only leaders with at least one report form a team. [{leader, leader_id, members:[names]}]"""
+    active = [u for u in users or [] if u.get("is_active", True) and norm(u.get("full_name"))]
+    children: dict = {}
+    for u in active:
+        if u.get("reports_to") is not None:
+            children.setdefault(u["reports_to"], []).append(u)
+    teams = []
+    for u in active:
+        if u.get("role") not in ("Manager", "Team Leader") or not children.get(u.get("id")):
+            continue
+        members, stack, seen = [u["full_name"].strip()], [u.get("id")], set()
+        while stack:
+            uid = stack.pop()
+            if uid in seen:
+                continue
+            seen.add(uid)
+            for c in children.get(uid, []):
+                members.append(c["full_name"].strip())
+                stack.append(c.get("id"))
+        teams.append({"leader": u["full_name"].strip(), "leader_id": u.get("id"), "members": members})
+    teams.sort(key=lambda t: norm(t["leader"]))
+    return teams
+
+
+def pace(month: str, today: date, achieved: float, target: float) -> Optional[dict]:
+    """How the month is going against the calendar. Only meaningful for the current month."""
+    if not valid_month(month) or month != today.strftime("%Y-%m"):
+        return None
+    total = calendar.monthrange(today.year, today.month)[1]
+    left = total - today.day + 1                      # today still counts
+    elapsed_pct = round(today.day / total * 100, 1)
+    projected = achieved / today.day * total if today.day else 0.0
+    out = {"days_total": total, "day": today.day, "days_left": left, "elapsed_pct": elapsed_pct,
+           "projected": round(projected, 2)}
+    if target and target > 0:
+        out["needed_per_day"] = round(max(0.0, target - achieved) / left, 2)
+        out["on_track"] = achieved / target * 100 >= elapsed_pct
+    return out
+
+
+def _totals(items: list, tg: Optional[dict] = None) -> dict:
+    out = {
+        "enrolled": sum(r["enrolled"] for r in items),
+        "revenue": sum(r["revenue"] for r in items),
+        "revenue_target": _money((tg or {}).get("revenue_target")) if tg else sum(r["revenue_target"] for r in items),
+        "enrollment_target": int(_money((tg or {}).get("enrollment_target"))) if tg else sum(r["enrollment_target"] for r in items),
+    }
+    out["revenue_pct"] = pct(out["revenue"], out["revenue_target"])
+    out["enrollment_pct"] = pct(out["enrolled"], out["enrollment_target"])
+    return out
+
+
+def progress(enrolled: list, targets: list, month: str, people: list, meta: Optional[dict] = None,
+             teams: Optional[list] = None, today: Optional[date] = None) -> dict:
+    """Company, team and per-person achievement for `month`.
 
     enrolled: Enrolled leads with `enroll_date` resolved.
-    targets:  rows {counselor, revenue_target, enrollment_target} for the month.
+    targets:  rows {scope: company|team|person, counselor: subject, revenue_target, enrollment_target}.
+              A row without `scope` is a person target (rows saved before scopes existed).
     people:   display names of everyone who should appear (even with 0 sales).
     meta:     {normalised name: {"id": user id, "v": photo version}} for photos.
+    teams:    build_teams() output.
     """
     meta = meta or {}
     display: dict = {}
@@ -55,11 +122,17 @@ def progress(enrolled: list, targets: list, month: str, people: list, meta: Opti
         display.setdefault(k, str(name).strip())
         return rows.setdefault(k, {"enrolled": 0, "revenue": 0.0, "revenue_target": 0.0, "enrollment_target": 0})
 
+    company_target, team_targets = None, {}
     for p in people or []:
         if norm(p):
             row(p)
     for t in targets or []:
-        if norm(t.get("counselor")):
+        scope = t.get("scope") or "person"
+        if scope == "company":
+            company_target = t
+        elif scope == "team":
+            team_targets[norm(t.get("counselor"))] = t
+        elif norm(t.get("counselor")):
             r = row(t["counselor"])
             r["revenue_target"] = _money(t.get("revenue_target"))
             r["enrollment_target"] = int(_money(t.get("enrollment_target")))
@@ -83,15 +156,23 @@ def progress(enrolled: list, targets: list, month: str, people: list, meta: Opti
     for i, r in enumerate(out, 1):
         r["rank"] = i
 
-    team = {
-        "enrolled": sum(r["enrolled"] for r in out),
-        "revenue": sum(r["revenue"] for r in out),
-        "revenue_target": sum(r["revenue_target"] for r in out),
-        "enrollment_target": sum(r["enrollment_target"] for r in out),
-    }
-    team["revenue_pct"] = pct(team["revenue"], team["revenue_target"])
-    team["enrollment_pct"] = pct(team["enrolled"], team["enrollment_target"])
-    return {"month": month, "team": team, "people": out}
+    by_norm = {norm(r["name"]): r for r in out}
+    team_rows = []
+    for t in teams or []:
+        members = [by_norm[k] for k in {norm(n) for n in t["members"]} if k in by_norm]
+        m = meta.get(norm(t["leader"])) or {}
+        team_rows.append({
+            "name": t["leader"], "user_id": t.get("leader_id"), "avatar_v": m.get("v") or 0, "members": len(t["members"]),
+            **_totals(members, team_targets.get(norm(t["leader"])) or {"revenue_target": 0, "enrollment_target": 0}),
+        })
+    team_rows.sort(key=lambda r: (-r["revenue"], norm(r["name"])))
+
+    # The company target is its own number. If none was set, fall back to the sum of everyone's
+    # targets and say so, so the TV never shows an empty goal while people have targets.
+    company = _totals(out, company_target)
+    company["derived"] = company_target is None and (company["revenue_target"] > 0 or company["enrollment_target"] > 0)
+    company["pace"] = pace(month, today or ist_today(), company["revenue"], company["revenue_target"])
+    return {"month": month, "company": company, "teams": team_rows, "people": out}
 
 
 def first_name(name) -> str:

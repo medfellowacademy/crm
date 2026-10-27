@@ -230,6 +230,7 @@ export const targetsAPI = {
   screen: () => api.get('/api/targets/screen'),
   newScreen: () => api.post('/api/targets/screen'),
   revokeScreen: () => api.delete('/api/targets/screen'),
+  saveScreenSettings: (settings) => api.put('/api/targets/screen/settings', settings),
   avatar: (userId) => api.get(`/api/targets/avatars/${userId}`, { responseType: 'blob' }),
   setAvatar: (userId, image) => api.put(`/api/targets/avatars/${userId}`, { image }),
   removeAvatar: (userId) => api.delete(`/api/targets/avatars/${userId}`),

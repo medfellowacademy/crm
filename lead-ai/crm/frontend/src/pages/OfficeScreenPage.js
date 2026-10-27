@@ -4,8 +4,12 @@ import dayjs from 'dayjs';
 import { displayAPI } from '../api/api';
 import { fmt } from '../utils/finance';
 import { SalesAvatar } from '../components/targets/SalesAvatar';
+import { useCountUp } from '../components/targets/tv/TvKit';
 import {
-  LEMON, CHARCOAL, LAVENDER, INK, MUTED, DISPLAY_FONT, BODY_FONT, barColor, loadBrandFonts,
+  SLIDE_TITLES, SalesSlide, TeamsSlide, ActivitySlide, AnalyticsSlide, PerformanceSlide, AttendanceSlide, PipelineSlide,
+} from '../components/targets/tv/TvSlides';
+import {
+  LEMON, CHARCOAL, LAVENDER, INK, MUTED, DISPLAY_FONT, BODY_FONT, loadBrandFonts,
 } from '../components/targets/salesTheme';
 
 const POLL_MS = 15000;
@@ -13,27 +17,8 @@ const CELEBRATE_MS = 14000;
 // Drop a file at frontend/public/celebration.mp4 and it plays behind every celebration.
 const CELEBRATION_VIDEO = '/celebration.mp4';
 
-// ── Count-up: numbers roll to their new value instead of jumping ─────────────
-function useCountUp(target, ms = 1400) {
-  const [val, setVal] = useState(0);
-  const from = useRef(0);
-  useEffect(() => {
-    const start = performance.now();
-    const a = from.current;
-    let raf;
-    const tick = (t) => {
-      const p = Math.min(1, (t - start) / ms);
-      const eased = 1 - (1 - p) ** 3;
-      const v = a + (target - a) * eased;
-      setVal(v);
-      from.current = v;
-      if (p < 1) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [target, ms]);
-  return Math.round(val);
-}
+// Slides whose numbers are "today" rather than "this month" get today's date as their subtitle.
+const TODAY_SLIDES = new Set(['activity', 'attendance', 'pipeline']);
 
 // ── Confetti in brand colours: squares, dots and triangles ───────────────────
 function Confetti({ burstKey }) {
@@ -93,64 +78,11 @@ function playChime(ctx) {
   });
 }
 
-function Bar({ pct, height = 12, track = '#2a2a2a', color }) {
-  const c = color || barColor(pct);
+function Amount({ value }) {
+  const shown = useCountUp(value, 1800);
   return (
-    <div style={{ background: track, borderRadius: 99, height, overflow: 'hidden' }}>
-      <div style={{ width: `${Math.min(100, pct || 0)}%`, height: '100%', background: c, borderRadius: 99, transition: 'width 1.4s cubic-bezier(.2,.8,.2,1)', boxShadow: pct >= 100 ? `0 0 14px ${c}` : undefined }} />
-    </div>
-  );
-}
-
-// A big KPI block. `tone` picks the brand colour: lemon (black text) or lavender.
-function Kpi({ tone, label, value, money, target, pct }) {
-  const shown = useCountUp(value);
-  const lemon = tone === 'lemon';
-  const bg = lemon ? LEMON : LAVENDER;
-  const fg = lemon ? INK : '#fff';
-  return (
-    <div style={{ position: 'relative', flex: 1, minWidth: 0, background: bg, color: fg, borderRadius: 28, padding: '1.8vh 1.6vw', overflow: 'hidden', boxShadow: `0 10px 50px ${bg}33` }}>
-      <div style={{ position: 'absolute', right: -40, top: -40, width: 160, height: 160, borderRadius: '50%', border: `22px solid ${lemon ? '#00000014' : '#ffffff22'}` }} />
-      <div style={{ fontFamily: BODY_FONT, fontWeight: 700, letterSpacing: 3, textTransform: 'uppercase', fontSize: 'clamp(12px,1.2vw,20px)', opacity: 0.8 }}>{label}</div>
-      <div style={{ fontFamily: DISPLAY_FONT, fontSize: 'clamp(30px,4.4vw,84px)', lineHeight: 1.05, margin: '0.4vh 0' }}>{money ? fmt(shown) : shown}</div>
-      {target ? (
-        <>
-          <div style={{ fontFamily: BODY_FONT, fontWeight: 500, fontSize: 'clamp(13px,1.3vw,22px)', marginBottom: 8 }}>
-            of {money ? fmt(target) : target} target · <b>{pct}%</b>{pct >= 100 ? ' 🔥' : ''}
-          </div>
-          <Bar pct={pct} height={14} track={lemon ? '#00000022' : '#ffffff33'} color={lemon ? INK : LEMON} />
-        </>
-      ) : <div style={{ fontFamily: BODY_FONT, opacity: 0.7, fontSize: 'clamp(13px,1.3vw,22px)' }}>No target set</div>}
-    </div>
-  );
-}
-
-const MEDAL = ['👑', '🥈', '🥉'];
-
-function Podium({ people, photo }) {
-  const [first, second, third] = people;
-  const slots = [
-    { p: second, place: 2, size: '9vh', lift: 0, ring: '#d4d4d4' },
-    { p: first, place: 1, size: '13vh', lift: '-1.2vh', ring: LEMON },
-    { p: third, place: 3, size: '9vh', lift: 0, ring: LAVENDER },
-  ];
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1fr', gap: '1.2vw', alignItems: 'end', marginBottom: '1vh' }}>
-      {slots.map(({ p, place, size, lift, ring }) => (
-        <div key={place} style={{ transform: `translateY(${lift})`, textAlign: 'center', background: place === 1 ? `linear-gradient(180deg, ${LEMON}22, transparent)` : 'transparent', borderRadius: 22, padding: '1.2vh 0.6vw', animation: `slideUp .8s ${place * 0.12}s both` }}>
-          {p ? (
-            <>
-              <div style={{ fontSize: place === 1 ? 'clamp(22px,2.6vw,44px)' : 'clamp(16px,1.8vw,30px)', lineHeight: 1, marginBottom: 4, animation: place === 1 ? 'floatY 2.4s ease-in-out infinite' : undefined }}>{MEDAL[place - 1]}</div>
-              <div style={{ display: 'flex', justifyContent: 'center' }}>
-                <SalesAvatar name={p.name} src={photo(p)} size={place === 1 ? 150 : 100} style={{ width: size, height: size }} ring={ring} ringWidth={place === 1 ? 5 : 3} glow={place === 1} />
-              </div>
-              <div style={{ fontFamily: DISPLAY_FONT, fontSize: place === 1 ? 'clamp(16px,2vw,34px)' : 'clamp(13px,1.4vw,24px)', marginTop: 6, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</div>
-              <div style={{ fontFamily: BODY_FONT, fontWeight: 700, color: place === 1 ? LEMON : '#fff', fontSize: place === 1 ? 'clamp(15px,1.8vw,30px)' : 'clamp(12px,1.3vw,22px)' }}>{fmt(p.revenue)}</div>
-              <div style={{ fontFamily: BODY_FONT, color: MUTED, fontSize: 'clamp(11px,1vw,17px)' }}>{p.enrolled} enrolled{p.revenue_pct != null ? ` · ${p.revenue_pct}%` : ''}</div>
-            </>
-          ) : <div style={{ height: size }} />}
-        </div>
-      ))}
+    <div style={{ display: 'inline-block', background: LAVENDER, color: '#fff', fontFamily: DISPLAY_FONT, fontSize: 'min(4vw, 6.4vh)', padding: '0.4vh 2vw', borderRadius: 99, boxShadow: `0 0 60px ${LAVENDER}aa`, animation: 'popIn .7s .8s both' }}>
+      {fmt(shown)}
     </div>
   );
 }
@@ -164,6 +96,7 @@ export default function OfficeScreenPage() {
   const [soundOn, setSoundOn] = useState(false);
   const [videoOk, setVideoOk] = useState(true);
   const [now, setNow] = useState(dayjs());
+  const [idx, setIdx] = useState(0);                       // which slide is on screen
   const [vh, setVh] = useState(typeof window === 'undefined' ? 1080 : window.innerHeight);
   const seen = useRef(null);                                // ids already shown; null until the first load
   const queue = useRef([]);
@@ -222,6 +155,29 @@ export default function OfficeScreenPage() {
     return () => { clearInterval(clock); window.removeEventListener('resize', onResize); pending.forEach(clearTimeout); };
   }, []);
 
+  // Slides to show: the ones switched on in settings whose data arrived without an error.
+  const settings = data?.settings || { slides: ['sales'], seconds: 15 };
+  const slides = (settings.slides || []).filter((k) => k === 'sales' || k === 'teams' || (data?.slides?.[k] && !data.slides[k].error));
+  const count = slides.length || 1;
+  const current = slides[idx % count] || 'sales';
+
+  // Rotate. Paused while a celebration is on screen, and restarted whenever the slide changes.
+  useEffect(() => {
+    if (count < 2 || celebration) return undefined;
+    const t = setTimeout(() => setIdx((i) => (i + 1) % count), (settings.seconds || 15) * 1000);
+    return () => clearTimeout(t);
+  }, [idx, count, celebration, settings.seconds]);
+
+  // Arrow keys step through slides (handy when someone is presenting a number).
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'ArrowRight') setIdx((i) => (i + 1) % count);
+      if (e.key === 'ArrowLeft') setIdx((i) => (i - 1 + count) % count);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [count]);
+
   const enableSound = () => {
     try {
       const Ctx = window.AudioContext || window.webkitAudioContext;
@@ -252,17 +208,24 @@ export default function OfficeScreenPage() {
     return <div style={{ ...page, display: 'grid', placeItems: 'center' }}><div style={{ fontFamily: DISPLAY_FONT, fontSize: 28, color: LEMON }}>{state === 'offline' ? 'Connecting…' : 'Loading…'}</div></div>;
   }
 
-  const { team, people, recent } = data;
+  const { company, recent } = data;
   const monthLabel = dayjs(`${data.month}-01`).format('MMMM YYYY').toUpperCase();
-  // only as many rows below the podium as fit the screen, so nothing is cut off mid-row
-  const rest = people.slice(3, 3 + Math.max(0, Math.min(5, Math.floor((vh - 640) / 58))));
+  const subtitle = TODAY_SLIDES.has(current) ? now.format('ddd D MMM').toUpperCase() : monthLabel.split(' ')[0];
   const ticker = recent.length
     ? recent.map((r) => `🎓 ${r.student} joined ${r.course} — closed by ${r.counselor}`).join('   ✦   ')
     : 'Every enrollment shows up here the moment it happens';
-  const strip = `SALES ${monthLabel}   ✦   ${fmt(team.revenue)} REVENUE   ✦   ${team.enrolled} ENROLLMENTS   ✦   ${ticker}   ✦   `;
+  const strip = `SALES ${monthLabel}   ✦   ${fmt(company.revenue)} REVENUE   ✦   ${company.enrolled} ENROLLMENTS   ✦   ${ticker}   ✦   `;
+  const slideData = data.slides?.[current];
 
-  const panel = { background: '#1f1f1f', border: '1px solid #2c2c2c', borderRadius: 28, padding: '2vh 1.5vw' };
-  const label = { fontFamily: BODY_FONT, fontWeight: 700, color: MUTED, letterSpacing: 3, textTransform: 'uppercase', fontSize: 'clamp(11px,1.05vw,18px)', marginBottom: '1.2vh' };
+  const stage = {
+    sales: () => <SalesSlide data={data} photo={photo} vh={vh} />,
+    teams: () => <TeamsSlide data={data} photo={photo} />,
+    activity: () => <ActivitySlide data={slideData} photo={photo} vh={vh} />,
+    analytics: () => <AnalyticsSlide data={slideData} />,
+    performance: () => <PerformanceSlide data={slideData} photo={photo} />,
+    attendance: () => <AttendanceSlide data={slideData} photo={photo} />,
+    pipeline: () => <PipelineSlide data={slideData} />,
+  }[current];
 
   return (
     <div style={page}>
@@ -273,12 +236,15 @@ export default function OfficeScreenPage() {
         @keyframes marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
         @keyframes livePulse { 0% { box-shadow: 0 0 0 0 #ff3b3b99; } 100% { box-shadow: 0 0 0 14px #ff3b3b00; } }
         @keyframes slideUp { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; } }
+        @keyframes grow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
         @keyframes floatY { 0%,100% { transform: translateY(0) rotate(-4deg); } 50% { transform: translateY(-10px) rotate(4deg); } }
         @keyframes popIn { 0% { opacity: 0; transform: scale(.55) rotate(-4deg); } 60% { opacity: 1; transform: scale(1.06) rotate(1deg); } 100% { transform: scale(1) rotate(0); } }
         @keyframes ring { 0% { transform: scale(.9); opacity: .9; } 100% { transform: scale(1.7); opacity: 0; } }
         @keyframes shine { from { background-position: 200% 0; } to { background-position: -200% 0; } }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
         @keyframes slideIn { from { opacity: 0; transform: translateX(-60px) skewX(-8deg); } to { opacity: 1; transform: none; } }
+        @keyframes stageIn { from { opacity: 0; transform: translateX(48px); } to { opacity: 1; transform: none; } }
+        @keyframes tick { from { width: 0; } to { width: 100%; } }
       `}</style>
 
       {/* living background */}
@@ -292,17 +258,23 @@ export default function OfficeScreenPage() {
       <Confetti burstKey={burst} />
 
       <div style={{ position: 'relative', zIndex: 1, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: '1.6vh' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1.4vw' }}>
-            <div style={{ background: LEMON, borderRadius: 18, padding: '6px 14px' }}><img src="/medfellow-logo.png" alt="MedFellow Academy" style={{ height: 'clamp(34px,5vh,62px)', display: 'block', mixBlendMode: 'multiply' }} /></div>
-            <div>
-              <div style={{ fontFamily: DISPLAY_FONT, fontSize: 'clamp(26px,4.4vw,78px)', lineHeight: 1, letterSpacing: 1 }}>
-                <span style={{ color: LEMON }}>SALES</span>{' '}
-                <span style={{ color: 'transparent', WebkitTextStroke: `2px ${LAVENDER}` }}>{monthLabel.split(' ')[0]}</span>
-              </div>
+        <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: '1.2vh' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1.4vw', minWidth: 0 }}>
+            <div style={{ background: LEMON, borderRadius: 18, padding: '6px 14px', flex: '0 0 auto' }}><img src="/medfellow-logo.png" alt="MedFellow Academy" style={{ height: 'clamp(34px,5vh,62px)', display: 'block', mixBlendMode: 'multiply' }} /></div>
+            <div key={current} style={{ fontFamily: DISPLAY_FONT, fontSize: 'clamp(24px,4vw,72px)', lineHeight: 1, letterSpacing: 1, whiteSpace: 'nowrap', animation: 'slideIn .6s both' }}>
+              <span style={{ color: LEMON }}>{(SLIDE_TITLES[current] || current).toUpperCase()}</span>{' '}
+              <span style={{ color: 'transparent', WebkitTextStroke: `2px ${LAVENDER}` }}>{subtitle}</span>
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, flex: '0 0 auto' }}>
+            {count > 1 && (
+              <div style={{ display: 'flex', gap: 8 }} aria-label="slides">
+                {slides.map((k, i) => (
+                  <button key={k} title={SLIDE_TITLES[k]} onClick={() => setIdx(i)}
+                    style={{ width: i === idx % count ? 34 : 12, height: 12, borderRadius: 99, border: 'none', cursor: 'pointer', padding: 0, background: i === idx % count ? LEMON : '#525252', transition: 'all .4s' }} />
+                ))}
+              </div>
+            )}
             {!soundOn && <button onClick={enableSound} style={{ background: 'transparent', color: LEMON, border: `2px solid ${LEMON}`, borderRadius: 99, padding: '6px 16px', fontFamily: BODY_FONT, fontWeight: 700, fontSize: 'clamp(12px,1.1vw,18px)', cursor: 'pointer' }}>🔔 Enable sound</button>}
             <div style={{ textAlign: 'right' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end', fontWeight: 700, fontSize: 'clamp(12px,1.1vw,18px)', letterSpacing: 2 }}>
@@ -314,54 +286,13 @@ export default function OfficeScreenPage() {
           </div>
         </header>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,2.1fr) minmax(0,1fr)', gap: '1.6vw', flex: 1, minHeight: 0 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.6vh', minWidth: 0, minHeight: 0 }}>
-            <div style={{ display: 'flex', gap: '1.4vw', flexWrap: 'wrap' }}>
-              <Kpi tone="lemon" label="Team revenue" value={team.revenue} money target={team.revenue_target} pct={team.revenue_pct} />
-              <Kpi tone="lavender" label="Enrollments" value={team.enrolled} target={team.enrollment_target} pct={team.enrollment_pct} />
-            </div>
+        {/* time left on this slide */}
+        <div style={{ height: 4, background: '#2a2a2a', borderRadius: 99, overflow: 'hidden', marginBottom: '1.2vh', flex: '0 0 auto' }}>
+          {count > 1 && <div key={`${current}-${idx}`} style={{ height: '100%', background: LAVENDER, animation: `tick ${settings.seconds || 15}s linear both`, animationPlayState: celebration ? 'paused' : 'running' }} />}
+        </div>
 
-            <section style={{ ...panel, flex: 1, minHeight: 0, overflow: 'hidden' }}>
-              <div style={label}>Leaderboard</div>
-              {people.length === 0 && <div style={{ color: MUTED, fontSize: 22 }}>No team members yet</div>}
-              {people.length > 0 && <Podium people={people} photo={photo} />}
-              {rest.map((p) => (
-                <div key={p.name} style={{ display: 'grid', gridTemplateColumns: '2.4vw 4.2vh minmax(0,1.2fr) minmax(0,2fr)', alignItems: 'center', gap: 14, padding: '0.9vh 0', borderTop: '1px solid #2c2c2c' }}>
-                  <div style={{ fontFamily: DISPLAY_FONT, color: MUTED, fontSize: 'clamp(14px,1.5vw,26px)', textAlign: 'center' }}>{p.rank}</div>
-                  <SalesAvatar name={p.name} src={photo(p)} size={36} ring={LAVENDER} ringWidth={2} style={{ width: '4.2vh', height: '4.2vh' }} />
-                  <div>
-                    <div style={{ fontFamily: BODY_FONT, fontWeight: 700, fontSize: 'clamp(14px,1.5vw,26px)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</div>
-                    <div style={{ color: MUTED, fontSize: 'clamp(11px,0.95vw,16px)' }}>{p.enrolled} enrolled{p.enrollment_target ? ` / ${p.enrollment_target}` : ''}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: 'clamp(13px,1.3vw,22px)', marginBottom: 4 }}>
-                      {fmt(p.revenue)}{p.revenue_target ? <span style={{ color: MUTED, fontWeight: 500 }}> / {fmt(p.revenue_target)} · <b style={{ color: barColor(p.revenue_pct) }}>{p.revenue_pct}%</b></span> : null}
-                    </div>
-                    <Bar pct={p.revenue_pct} height={9} />
-                  </div>
-                </div>
-              ))}
-            </section>
-          </div>
-
-          <section style={{ ...panel, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
-            <div style={label}>Latest enrollments</div>
-            {recent.length === 0 && <div style={{ color: MUTED, fontSize: 20 }}>No enrollments yet</div>}
-            {recent.slice(0, 6).map((r, i) => (
-              <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '1.2vh 0', borderTop: i ? '1px solid #2c2c2c' : 'none', animation: `slideUp .6s ${i * 0.08}s both` }}>
-                <SalesAvatar name={r.counselor} src={photo({ user_id: r.counselor_id, avatar_v: r.avatar_v })} size={44} ring={i === 0 ? LEMON : LAVENDER} style={{ width: '5.4vh', height: '5.4vh' }} />
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontWeight: 700, fontSize: 'clamp(14px,1.5vw,25px)' }}>
-                    <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>🎓 {r.student}</span>
-                    <span style={{ color: LEMON, fontFamily: DISPLAY_FONT }}>{fmt(r.amount)}</span>
-                  </div>
-                  <div style={{ color: MUTED, fontSize: 'clamp(11px,0.95vw,16px)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {r.course} · {r.counselor} · {dayjs(r.at).format('DD MMM')}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </section>
+        <div key={current} style={{ flex: 1, minHeight: 0, animation: 'stageIn .7s cubic-bezier(.2,.8,.2,1) both' }}>
+          {stage()}
         </div>
       </div>
 
@@ -402,15 +333,6 @@ export default function OfficeScreenPage() {
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function Amount({ value }) {
-  const shown = useCountUp(value, 1800);
-  return (
-    <div style={{ display: 'inline-block', background: LAVENDER, color: '#fff', fontFamily: DISPLAY_FONT, fontSize: 'min(4vw, 6.4vh)', padding: '0.4vh 2vw', borderRadius: 99, boxShadow: `0 0 60px ${LAVENDER}aa`, animation: 'popIn .7s .8s both' }}>
-      {fmt(shown)}
     </div>
   );
 }
