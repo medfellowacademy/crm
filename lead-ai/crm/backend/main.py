@@ -139,6 +139,7 @@ import visibility
 from vacancy_router import router as vacancy_router
 from restrictions_router import router as restrictions_router
 from consolidated_reports_router import router as consolidated_reports_router
+from sales_targets_router import router as sales_targets_router, display_router
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -461,6 +462,10 @@ async def _verify_token(request: Request) -> None:
     # Allow Swagger UI asset paths
     if request.url.path.startswith(("/docs", "/redoc", "/openapi")):
         return
+    # Office TV feed: the secret in the URL is the credential and the handler
+    # verifies it (sales_targets_router.display_feed) - the TV has no login.
+    if request.url.path.startswith("/api/display/"):
+        return
 
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
@@ -745,6 +750,8 @@ app.include_router(payments_router)
 app.include_router(vacancy_router)
 app.include_router(restrictions_router)
 app.include_router(consolidated_reports_router)
+app.include_router(sales_targets_router)
+app.include_router(display_router)
 
 logger.info("🚀 FastAPI application initialized with logging and error handling")
 

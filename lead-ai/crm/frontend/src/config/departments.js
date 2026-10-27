@@ -20,7 +20,7 @@ import {
   GitBranch, UserPlus, Activity, Shield, CalendarClock, DollarSign,
   Settings, Timer, Users2, ClipboardList,
   Share2, Globe, Bot, Trophy, MapPin, Building2, Megaphone, Wallet,
-  Settings2, FileText, MessageCircleHeart, Award, LayoutGrid,
+  Settings2, FileText, MessageCircleHeart, Award, LayoutGrid, Target,
 } from 'lucide-react';
 
 export const DEPARTMENTS = {
@@ -104,6 +104,7 @@ export const GENERAL_PAGES = [
   { key: '/ai-chat',     icon: Bot,             label: 'MedFellow AI Chat' },
   { key: '/reports',     icon: BarChart3,       label: 'Consolidated Reports' },
   { key: '/vacancy',     icon: LayoutGrid,      label: 'Vacancy Board' },
+  { key: '/targets',     icon: Target,          label: 'Sales Targets' },
   { key: '/brochures',   icon: FileText,        label: 'Brochures' },
   { key: '/settings',    icon: Settings,        label: 'Settings' },
 ];

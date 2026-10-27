@@ -33,6 +33,8 @@ const LeadRecoveryPage          = lazy(() => import('./pages/LeadRecoveryPage'))
 const EmployeePerformancePage   = lazy(() => import('./pages/EmployeePerformancePage'));
 const ConsolidatedReportsPage   = lazy(() => import('./pages/ConsolidatedReportsPage'));
 const VacancyBoardPage          = lazy(() => import('./pages/VacancyBoardPage'));
+const SalesTargetsPage          = lazy(() => import('./pages/SalesTargetsPage'));
+const OfficeScreenPage          = lazy(() => import('./pages/OfficeScreenPage'));
 import { isFeatureEnabled } from './config/featureFlags';
 import ErrorBoundary from './components/ErrorBoundary';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -81,6 +83,9 @@ function AppRoutes() {
         {/* Public login route */}
         <Route path="/login" element={<Suspense fallback={null}><LoginPage /></Suspense>} />
 
+        {/* Office TV: no login, the secret link is the credential */}
+        <Route path="/display/:token" element={<Suspense fallback={null}><OfficeScreenPage /></Suspense>} />
+
         {/* All protected routes wrapped in layout */}
         <Route
           path="/*"
@@ -98,6 +103,7 @@ function AppRoutes() {
                     <Route path="/employee-performance" element={<EmployeePerformancePage />} />
                     <Route path="/reports" element={<ConsolidatedReportsPage />} />
                     <Route path="/vacancy" element={<VacancyBoardPage />} />
+                    <Route path="/targets" element={<SalesTargetsPage />} />
                     <Route path="/attendance" element={<AttendancePage />} />
                     <Route path="/followups" element={<FollowupTodayPage />} />
                     <Route path="/leads" element={<LeadsPageEnhanced />} />

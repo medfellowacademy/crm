@@ -223,6 +223,22 @@ export const vacancyAPI = {
   remove: (id) => api.delete(`/api/vacancy-boards/${id}`),
 };
 
+export const targetsAPI = {
+  progress: (month) => api.get('/api/targets/progress', { params: { month } }),
+  get: (month) => api.get('/api/targets', { params: { month } }),
+  save: (month, items) => api.put('/api/targets', { items }, { params: { month } }),
+  screen: () => api.get('/api/targets/screen'),
+  newScreen: () => api.post('/api/targets/screen'),
+  revokeScreen: () => api.delete('/api/targets/screen'),
+};
+
+// The office TV has no login: the secret in the URL is the credential. A bare
+// axios call (not `api`) so a 404 for a revoked link can never trigger the
+// "401 -> bounce to /login" handling.
+export const displayAPI = {
+  feed: (token) => axios.get(`${API_BASE_URL}/api/display/${encodeURIComponent(token)}`, { timeout: 20000 }),
+};
+
 export const paymentsAPI = {
   overview: (params) => api.get('/api/payments/enrolled', { params }),
   overdue: () => api.get('/api/payments/overdue'),
