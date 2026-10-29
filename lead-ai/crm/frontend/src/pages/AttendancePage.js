@@ -1381,6 +1381,16 @@ function AdvancesPanel() {
     onError: (e) => message.error('Failed: ' + (e?.response?.data?.detail || e.message)),
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: (id) => attendanceAPI.deleteAdvance(id),
+    onSuccess: () => {
+      message.success('Advance deleted.');
+      queryClient.invalidateQueries({ queryKey: ['advances-all'] });
+      queryClient.invalidateQueries({ queryKey: ['advances-pending'] });
+    },
+    onError: (e) => message.error('Failed: ' + (e?.response?.data?.detail || e.message)),
+  });
+
   const handleCreate = () => {
     if (!formEmail) { message.warning('Select an employee.'); return; }
     if (!formAmount || parseFloat(formAmount) <= 0) { message.warning('Enter a valid amount.'); return; }
@@ -1404,6 +1414,21 @@ function AdvancesPanel() {
     },
     { title: 'Notes',       dataIndex: 'notes',          key: 'notes' },
     { title: 'Deducted On', dataIndex: 'deducted_date',  key: 'deducted_date', width: 130, render: d => d ? dayjs(d).format('DD MMM YYYY') : '—' },
+    {
+      title: '', key: 'actions', width: 60,
+      render: (_, a) => (
+        <Popconfirm
+          title="Delete this advance?"
+          description={a.status === 'deducted'
+            ? 'It was already deducted on a salary slip. The slip keeps its figures; only this record is removed.'
+            : 'It will no longer be available to deduct from salary.'}
+          okText="Delete" okButtonProps={{ danger: true }}
+          onConfirm={() => deleteMutation.mutate(a.id)}
+        >
+          <Button size="small" danger icon={<DeleteOutlined />} loading={deleteMutation.isPending && deleteMutation.variables === a.id} />
+        </Popconfirm>
+      ),
+    },
   ];
 
   return (

@@ -830,3 +830,20 @@ async def update_advance(advance_id: int, request: Request):
     except Exception as e:
         logger.error("Failed to update advance: {}", e)
         raise HTTPException(status_code=500, detail="Failed to update advance")
+
+
+@router.delete("/advances/{advance_id}")
+async def delete_advance(advance_id: int, request: Request):
+    """Remove an advance recorded by mistake. Salary slips already saved keep their figures."""
+    current = _current_user(request)
+    if not _view_all(current, vis.HIDE_PAYROLL):
+        raise HTTPException(status_code=403, detail="Admin role required")
+    try:
+        resp = supabase_data.client.table("salary_advances").delete().eq("id", advance_id).execute()
+    except Exception as e:
+        logger.error("Failed to delete advance: {}", e)
+        raise HTTPException(status_code=500, detail="Failed to delete advance")
+    if not resp.data:
+        raise HTTPException(status_code=404, detail="Advance not found")
+    logger.info("Advance {} deleted by {}", advance_id, current["email"])
+    return {"ok": True}
