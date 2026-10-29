@@ -118,16 +118,24 @@ def get_overdue_worklist(current_user: dict = Depends(get_current_user)):
         today = pa.today_ist()
         overdue = pa.overdue_emis(scoped_enrolled(rbac.lead_scope_names(current_user)), today)
         latest: dict = {}
+        promised: dict = {}   # lead_id -> follow-ups that carry an expected date, newest first
         ids = sorted({o["lead_id"] for o in overdue if o.get("lead_id")})
         for i in range(0, len(ids), 100):
             rows = (
-                supabase_data.client.table("payment_followups").select("lead_id,note,promised_date,created_by,created_at")
+                supabase_data.client.table("payment_followups")
+                .select("lead_id,emi_index,note,promised_date,created_by,created_at")
                 .in_("lead_id", ids[i:i + 100]).order("created_at", desc=True).execute().data or []
             )
             for r in rows:
                 latest.setdefault(r["lead_id"], r)
+                if r.get("promised_date"):
+                    promised.setdefault(r["lead_id"], []).append(r)
         for o in overdue:
             o["last_followup"] = latest.get(o.get("lead_id"))
+            # newest expected date for this instalment (or one given for the account as a whole)
+            mine = next((p for p in promised.get(o.get("lead_id"), [])
+                         if p.get("emi_index") in (None, o.get("emi_index"))), None)
+            o["expected_date"] = mine["promised_date"] if mine else None
         return {"items": overdue, "total": round(sum(o["amount"] for o in overdue), 2)}
     except Exception as e:
         logger.error(f"get_overdue_worklist error: {e}")

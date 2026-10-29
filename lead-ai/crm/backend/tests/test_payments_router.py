@@ -108,6 +108,17 @@ def test_overdue_worklist_includes_latest_followup(client):
     assert next(i for i in items if i["lead_id"] == "L1")["last_followup"]["note"] == "older"
 
 
+def test_overdue_worklist_carries_the_newest_expected_date(client):
+    client.tables["payment_followups"] = [
+        {"lead_id": "L1", "emi_index": None, "note": "newest, no date", "created_at": "2026-10-03", "created_by": "x"},
+        {"lead_id": "L1", "emi_index": None, "note": "will pay", "promised_date": "2026-11-05", "created_at": "2026-10-02", "created_by": "x"},
+        {"lead_id": "L1", "emi_index": None, "note": "old", "promised_date": "2026-10-10", "created_at": "2026-10-01", "created_by": "x"},
+    ]
+    items = client.get("/api/payments/overdue").json()["items"]
+    assert next(i for i in items if i["lead_id"] == "L1")["expected_date"] == "2026-11-05"
+    assert next(i for i in items if i["lead_id"] == "L2")["expected_date"] is None
+
+
 def test_mark_paid_updates_schedule_ledger_and_activity_and_blocks_double_pay(client):
     r = client.post("/api/payments/L1/emis/0/pay", json={"paid_on": "2026-10-20", "method": "UPI", "note": "ref 1"})
     assert r.status_code == 200
