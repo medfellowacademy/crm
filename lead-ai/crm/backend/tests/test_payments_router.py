@@ -108,6 +108,14 @@ def test_overdue_worklist_includes_latest_followup(client):
     assert next(i for i in items if i["lead_id"] == "L1")["last_followup"]["note"] == "older"
 
 
+def test_a_lead_edit_clears_the_cached_enrolled_list(client):
+    """Editing a lead must show on the next Payments fetch, not after the 30s cache expires."""
+    from cache import invalidate_cache, LEAD_CACHE
+    pr._cache["enrolled"] = [{"lead_id": "STALE"}]
+    invalidate_cache(LEAD_CACHE)
+    assert "enrolled" not in pr._cache
+
+
 def test_overdue_worklist_carries_the_newest_expected_date(client):
     client.tables["payment_followups"] = [
         {"lead_id": "L1", "emi_index": None, "note": "newest, no date", "created_at": "2026-10-03", "created_by": "x"},

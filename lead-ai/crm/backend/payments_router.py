@@ -21,7 +21,7 @@ import rbac
 from rbac import require_permission, P
 from supabase_data_layer import supabase_data
 from logger_config import logger
-from cache import invalidate_cache, LEAD_CACHE, STATS_CACHE
+from cache import invalidate_cache, on_lead_cache_cleared, LEAD_CACHE, STATS_CACHE
 import visibility
 from enrollment_dates import load_enroll_dates
 from employee_performance import norm
@@ -56,6 +56,15 @@ def _fetch_enrolled() -> list:
                 rows = load_enroll_dates(supabase_data.client, rows)
             _cache["enrolled"] = rows
     return visibility.drop_unassigned_if_active(rows)
+
+
+def _drop_enrolled_cache() -> None:
+    with _lock:
+        _cache.clear()
+
+
+# Any lead edit (e.g. the Payments edit form) must show up on the very next fetch, not after the 30s TTL.
+on_lead_cache_cleared(_drop_enrolled_cache)
 
 
 def _clear() -> None:

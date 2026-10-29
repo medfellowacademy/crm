@@ -216,14 +216,29 @@ def cache_async_result(cache: Any, key_prefix: str = ""):
     return decorator
 
 
+_lead_change_listeners: list = []
+
+
+def on_lead_cache_cleared(fn) -> None:
+    """Register a callback that runs whenever the whole lead cache is cleared (i.e. after any lead
+    edit), so caches derived from leads elsewhere don't keep serving stale rows."""
+    _lead_change_listeners.append(fn)
+
+
 def invalidate_cache(cache: Any, key_prefix: Optional[str] = None):
     """
     Invalidate cache entries
-    
+
     Args:
         cache: The cache to invalidate
         key_prefix: If provided, only invalidate keys with this prefix
     """
+    if cache is LEAD_CACHE and not key_prefix:
+        for fn in _lead_change_listeners:
+            try:
+                fn()
+            except Exception as e:  # a derived cache must never break the edit itself
+                logger.warning(f"lead cache listener failed: {e}")
     if key_prefix:
         # Invalidate specific prefix
         keys_to_delete = [k for k in cache.keys() if k.startswith(key_prefix)]
