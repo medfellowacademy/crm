@@ -294,6 +294,7 @@ const PaymentsPage = () => {
       setEditLead(null);
       message.success('Payment details updated');
     },
+    onError: (e) => message.error(e?.response?.data?.detail || 'Could not save — nothing was changed. Please try again.'),
   });
 
   const leads = useMemo(() => overview?.leads || [], [overview]);

@@ -2765,7 +2765,8 @@ async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, b
 
         updated_lead = supabase_data.update_lead(lead_id, update_data)
         if not updated_lead:
-            raise HTTPException(status_code=404, detail="Lead not found")
+            # The lead was found a moment ago, so this is a failed write, not a missing lead.
+            raise HTTPException(status_code=503, detail="Couldn't save just now — please try again")
 
         # The data layer strips None values, so an explicit null is needed to
         # actually clear follow_up_date for a terminal-status lead.

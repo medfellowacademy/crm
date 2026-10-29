@@ -319,9 +319,15 @@ class TestOfficeScreen:
         self._link(api)
         assert api.get("/api/display/not-the-token").status_code == 404
 
-    def test_new_link_kills_the_old_one(self, api):
+    def test_link_is_permanent_unless_reset(self, api):
+        first = self._link(api)
+        assert self._link(api) == first and self._link(api) == first
+        assert api.get("/api/targets/screen").json()["token"] == first
+        assert api.get(f"/api/display/{first}").status_code == 200
+
+    def test_reset_kills_the_old_one(self, api):
         old = self._link(api)
-        new = self._link(api)
+        new = api.post("/api/targets/screen?reset=true").json()["token"]
         assert old != new
         assert api.get(f"/api/display/{old}").status_code == 404
         assert api.get(f"/api/display/{new}").status_code == 200
@@ -338,7 +344,8 @@ class TestOfficeScreen:
         assert api.get(f"/api/display/{token}").status_code == 404
 
     def test_tokens_are_long_and_random(self, api):
-        a, b = self._link(api), self._link(api)
+        a = self._link(api)
+        b = api.post("/api/targets/screen?reset=true").json()["token"]
         assert len(a) >= 30 and a != b
 
 

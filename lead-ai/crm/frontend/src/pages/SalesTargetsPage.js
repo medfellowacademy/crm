@@ -250,7 +250,8 @@ function ScreenLink() {
   });
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['targets-screen'] });
   const create = useMutation({
-    mutationFn: () => targetsAPI.newScreen(), onSuccess: () => { message.success('New link created — the old one no longer works'); refresh(); },
+    mutationFn: (reset) => targetsAPI.newScreen(reset === true),
+    onSuccess: (r) => { message.success(r.data?.created === false ? 'Your TV link is unchanged' : 'TV link created'); refresh(); },
     onError: (e) => message.error(errText(e, 'Could not create the link')),
   });
   const revoke = useMutation({
@@ -290,7 +291,7 @@ function ScreenLink() {
         <>
           <div style={{ color: '#bdbdbd' }}>
             Open this link in the browser on the office TV and press F11. Anyone with the link can see the sales numbers, so share it only
-            inside the office. Creating a new link instantly disables the old one.
+            inside the office. This link is permanent — it never changes unless you reset it.
           </div>
           <div style={{ marginTop: 12 }}>
             {url ? (
@@ -303,10 +304,10 @@ function ScreenLink() {
           </div>
           <Space style={{ marginTop: 12 }}>
             {url ? (
-              <Popconfirm title="Replace the link? The TV will stop working until you open the new one." onConfirm={() => create.mutate()}>
-                <Button loading={create.isPending}>Create new link</Button>
+              <Popconfirm title="Reset the link only if it leaked. The TV stops working until you open the new link there." okText="Reset" okButtonProps={{ danger: true }} onConfirm={() => create.mutate(true)}>
+                <Button loading={create.isPending}>Reset link</Button>
               </Popconfirm>
-            ) : <Button style={lemonBtn} loading={create.isPending} onClick={() => create.mutate()}>Create link</Button>}
+            ) : <Button style={lemonBtn} loading={create.isPending} onClick={() => create.mutate(false)}>Create link</Button>}
             {url && <Popconfirm title="Disable the TV link?" onConfirm={() => revoke.mutate()}><Button danger loading={revoke.isPending}>Disable</Button></Popconfirm>}
           </Space>
 

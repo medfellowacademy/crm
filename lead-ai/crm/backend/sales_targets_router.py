@@ -286,12 +286,16 @@ def get_screen(current_user: dict = Depends(get_current_user)):
 
 
 @router.post("/screen")
-def create_screen(current_user: dict = Depends(get_current_user)):
-    """Create a new TV link. Any earlier link stops working immediately; slide settings carry over."""
+def create_screen(reset: bool = False, current_user: dict = Depends(get_current_user)):
+    """Get the TV link, creating it the first time. The link is permanent: calling this again returns the
+    same one. Only an explicit `reset=true` (e.g. the link leaked) replaces it, which disables the old one
+    immediately; slide settings carry over."""
     _require_manage(current_user)
     token = secrets.token_urlsafe(24)
     try:
         previous = _active_screen()
+        if previous and not reset:
+            return {"token": previous["token"], "created": False}
         supabase_data.client.table("office_screens").update({"revoked": True}).eq("revoked", False).execute()
         new_row = {
             "token": token, "revoked": False,
@@ -304,7 +308,7 @@ def create_screen(current_user: dict = Depends(get_current_user)):
     except Exception as e:
         logger.error(f"create_screen failed: {e}")
         raise HTTPException(status_code=503, detail="Could not create the link - has the office_screens migration been applied?")
-    return {"token": token}
+    return {"token": token, "created": True}
 
 
 @router.put("/screen/settings")

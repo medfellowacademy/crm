@@ -458,7 +458,15 @@ class SupabaseDataLayer:
             'meta_lead_id', 'adset_name', 'campaign_name', 'ad_name', 'is_repeated',
         }
         try:
-            response = self.client.table('leads').update(cleaned_data).eq('lead_id', lead_id).execute()
+            try:
+                response = self.client.table('leads').update(cleaned_data).eq('lead_id', lead_id).execute()
+            except Exception as first:
+                # A connection that went stale while idle fails its first request and works on
+                # the next; without this retry the user's first save silently did nothing.
+                if any(c in str(first) for c in NEW_COLUMNS):
+                    raise
+                logger.warning(f"update_lead {lead_id}: first attempt failed ({first}); retrying once")
+                response = self.client.table('leads').update(cleaned_data).eq('lead_id', lead_id).execute()
             return response.data[0] if response.data else None
         except Exception as e:
             err_str = str(e)

@@ -228,7 +228,7 @@ export const targetsAPI = {
   get: (month) => api.get('/api/targets', { params: { month } }),
   save: (month, items) => api.put('/api/targets', { items }, { params: { month } }),
   screen: () => api.get('/api/targets/screen'),
-  newScreen: () => api.post('/api/targets/screen'),
+  newScreen: (reset = false) => api.post('/api/targets/screen', null, { params: reset ? { reset: true } : {} }),
   revokeScreen: () => api.delete('/api/targets/screen'),
   saveScreenSettings: (settings) => api.put('/api/targets/screen/settings', settings),
   avatar: (userId) => api.get(`/api/targets/avatars/${userId}`, { responseType: 'blob' }),
