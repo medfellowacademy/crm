@@ -127,6 +127,22 @@ def test_overdue_worklist_carries_the_newest_expected_date(client):
     assert next(i for i in items if i["lead_id"] == "L2")["expected_date"] is None
 
 
+def test_overdue_worklist_carries_the_newest_status(client):
+    assert client.post("/api/payments/L1/followups", json={"note": "x", "status": "Dead response"}).status_code == 200
+    stored = client.tables["payment_followups"]
+    assert stored[0]["status"] == "Dead response"
+    # the real query returns newest first; the fake keeps insertion order, so put the newer row first
+    stored.insert(0, {"lead_id": "L1", "emi_index": None, "note": "y", "status": "On arrival", "created_at": "2026-10-02"})
+    d = client.get("/api/payments/overdue").json()
+    assert next(i for i in d["items"] if i["lead_id"] == "L1")["followup_status"] == "On arrival"
+    assert next(i for i in d["items"] if i["lead_id"] == "L2")["followup_status"] is None
+    assert d["statuses"] == ["Dead response", "On arrival", "Financial issue"]
+
+
+def test_followup_rejects_an_unknown_status(client):
+    assert client.post("/api/payments/L1/followups", json={"note": "x", "status": "Whatever"}).status_code == 422
+
+
 def test_mark_paid_updates_schedule_ledger_and_activity_and_blocks_double_pay(client):
     r = client.post("/api/payments/L1/emis/0/pay", json={"paid_on": "2026-10-20", "method": "UPI", "note": "ref 1"})
     assert r.status_code == 200
@@ -203,6 +219,12 @@ def test_overview_reports_scheduled_and_unscheduled_money(client):
 
 def test_negative_actual_amount_rejected(client):
     assert client.post("/api/payments/L1/emis/0/pay", json={"paid_on": "2026-10-20", "amount": -1}).status_code == 422
+
+
+def test_emi_rows_carry_the_student_email_for_reminders(client):
+    client.tables["leads"][0]["email"] = "asha@example.com"
+    rows = client.get("/api/payments/emis?month=2026-01").json()["rows"]
+    assert {r["email"] for r in rows if r["lead_id"] == "L1"} == {"asha@example.com"}
 
 
 def test_emis_by_month_with_latest_comment(client):

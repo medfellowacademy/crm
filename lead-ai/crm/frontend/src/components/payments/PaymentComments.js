@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Form, Input, DatePicker, Button, Typography, Spin, Modal, Tag, message } from 'antd';
 import dayjs from 'dayjs';
 import { paymentsAPI } from '../../api/api';
-import { fmt } from '../../utils/finance';
+import { fmtBoth as fmt } from '../../utils/finance';
 
 const { Text } = Typography;
 

@@ -3,6 +3,15 @@ import dayjs from 'dayjs';
 // Currency formatter shared by every page that shows lead revenue/payments.
 export const fmt = v => `₹${Number(v || 0).toLocaleString('en-IN')}`;
 
+// Fixed conversion used for every INR <-> USD figure in the CRM (amounts are always stored in INR).
+export const USD_TO_INR = 94;
+
+// Rupees with the dollar equivalent beside it, e.g. "₹1,00,000 ($1,064)". Used across the Payments page.
+export const fmtBoth = v => {
+  const inr = Number(v || 0);
+  return `${fmt(inr)} ($${Math.round(inr / USD_TO_INR).toLocaleString('en-US')})`;
+};
+
 // Safe JSON parse — emi_details / registration_payments / documents /
 // lms_modules may arrive as a string from Supabase JSONB depending on the
 // write path, so callers should never assume Array.isArray() alone is safe.

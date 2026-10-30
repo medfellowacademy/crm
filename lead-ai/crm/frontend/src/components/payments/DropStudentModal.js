@@ -3,7 +3,7 @@ import { Modal, Form, DatePicker, Select, Input, InputNumber, Alert, message } f
 import { useMutation } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import { paymentsAPI } from '../../api/api';
-import { financeFor, fmt } from '../../utils/finance';
+import { financeFor, fmtBoth as fmt } from '../../utils/finance';
 
 export const DROP_REASONS = [
   'Financial reasons', 'Personal / family reasons', 'Joined another course', 'Not satisfied with the course',

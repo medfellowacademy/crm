@@ -5,21 +5,21 @@ import {
 } from 'antd';
 import { PlusOutlined, DeleteOutlined, CheckCircleOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import { USD_TO_INR, fmtBoth } from '../../utils/finance';
 
 const { Text } = Typography;
 const { Option } = Select;
 
 // All monetary values are stored in INR - if entered in USD, everything is
 // converted at this fixed rate before saving, so revenue analytics never
-// have to deal with a mix of currencies/scales.
-const USD_TO_INR = 94;
+// have to deal with a mix of currencies/scales (rate shared via utils/finance).
 
 const fmtNum = (symbol) => (v) => v != null ? `${symbol} ${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',') : '';
 const parseNum = (symbol) => (v) => {
   const n = Number(String(v ?? '').replace(new RegExp(`\\${symbol}\\s?|,`, 'g'), '').trim());
   return isNaN(n) ? 0 : n;
 };
-const inr = (n) => `₹${Math.round(Number(n) || 0).toLocaleString('en-IN')}`;
+const inr = (n) => fmtBoth(Math.round(Number(n) || 0));
 const ymd = (d) => dayjs(d).format('YYYY-MM-DD');
 
 const MODULE_OPTIONS    = ['M1','M2','M3','M4','M5','M6','M7','M8','M9','M10','M11','M12'];

@@ -3,7 +3,7 @@ import { Modal, Form, DatePicker, Select, Input, InputNumber, Alert, message } f
 import { useMutation } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import { paymentsAPI } from '../../api/api';
-import { fmt } from '../../utils/finance';
+import { fmtBoth as fmt } from '../../utils/finance';
 
 export const PAYMENT_METHODS = ['UPI', 'Bank transfer', 'Cash', 'Card', 'Cheque', 'Other'];
 

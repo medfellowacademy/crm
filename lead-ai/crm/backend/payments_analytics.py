@@ -366,6 +366,7 @@ def emi_rows(leads: list, month: str, today: date) -> list:
             status = _emi_status(e, today)
             out.append({
                 "lead_id": lead.get("lead_id"), "name": lead.get("full_name"), "phone": lead.get("phone"),
+                "email": lead.get("email"),
                 "counselor": lead.get("assigned_to"), "course": lead.get("course_interested"),
                 "emi_index": i, "emi_count": len(emis_of(lead)), "due_date": d, "kind": e.get("kind") or "emi", "label": instalment_label(emis_of(lead), i),
                 "scheduled": _num(e.get("amount")),

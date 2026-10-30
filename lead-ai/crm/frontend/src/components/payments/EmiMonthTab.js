@@ -1,25 +1,28 @@
 import React, { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Card, Row, Col, Statistic, DatePicker, Table, Tag, Button, Space, Typography, Segmented, Empty, Result, Progress, Tooltip,
+  Card, Row, Col, Statistic, DatePicker, Table, Tag, Button, Space, Typography, Segmented, Empty, Result, Progress, Tooltip, Select, message,
 } from 'antd';
-import { CheckOutlined, CommentOutlined, DownloadOutlined } from '@ant-design/icons';
+import { CheckOutlined, CommentOutlined, DownloadOutlined, MailOutlined } from '@ant-design/icons';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, Legend,
 } from 'recharts';
 import dayjs from 'dayjs';
 import { paymentsAPI } from '../../api/api';
-import { fmt } from '../../utils/finance';
+import { fmtBoth as fmt } from '../../utils/finance';
 import PayEmiModal from './PayEmiModal';
 import { CommentsModal } from './PaymentComments';
 
 const { Text } = Typography;
 const STATUS = { paid: { color: 'green', label: 'Paid' }, pending: { color: 'blue', label: 'Pending' }, overdue: { color: 'red', label: 'Overdue' } };
 
+const labelOf = (r) => r.label || `EMI ${r.emi_index + 1}`;
+
 export default function EmiMonthTab({ onChanged }) {
   const queryClient = useQueryClient();
   const [month, setMonth] = useState(dayjs());
   const [status, setStatus] = useState('all');
+  const [emiNos, setEmiNos] = useState([]);   // instalment labels to keep, e.g. ['EMI 1', 'EMI 2']; empty = all
   const [pay, setPay] = useState(null);
   const [comments, setComments] = useState(null);
 
@@ -29,7 +32,31 @@ export default function EmiMonthTab({ onChanged }) {
     queryFn: () => paymentsAPI.emis({ month: monthStr }).then((r) => r.data),
   });
 
-  const rows = useMemo(() => (data?.rows || []).filter((r) => status === 'all' || r.status === status), [data, status]);
+  const emiOptions = useMemo(() => {
+    const seen = [...new Set((data?.rows || []).map(labelOf))];
+    const num = (l) => (/^EMI (\d+)$/.exec(l) ? Number(/^EMI (\d+)$/.exec(l)[1]) : 1e6);   // EMI 1, 2, 3 ... then registration balance
+    return seen.sort((a, b) => num(a) - num(b) || a.localeCompare(b));
+  }, [data]);
+  const rows = useMemo(() => (data?.rows || []).filter((r) => (status === 'all' || r.status === status)
+    && (!emiNos.length || emiNos.includes(labelOf(r)))), [data, status, emiNos]);
+  const emails = useMemo(() => {
+    const seen = new Set();
+    rows.forEach((r) => { const e = (r.email || '').trim(); if (e) seen.add(e); });
+    return [...seen];
+  }, [rows]);
+  const noEmail = rows.filter((r) => !(r.email || '').trim()).length;
+  const copyEmails = async () => {
+    const text = emails.join(', ');
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const t = document.createElement('textarea');   // older browsers / non-secure pages
+      t.value = text; document.body.appendChild(t); t.select();
+      const ok = document.execCommand('copy'); t.remove();
+      if (!ok) { message.error('Copy failed — try again'); return; }
+    }
+    message.success(`Copied ${emails.length} email${emails.length === 1 ? '' : 's'}${noEmail ? ` (${noEmail} without an email skipped)` : ''}`);
+  };
   const trend = useMemo(
     () => (data?.trend || []).map((t) => ({ ...t, label: dayjs(t.month + '-01').format('MMM YY') })),
     [data]
@@ -43,8 +70,8 @@ export default function EmiMonthTab({ onChanged }) {
 
   const exportCsv = () => {
     const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const header = ['Lead ID', 'Name', 'Counselor', 'EMI', 'Due date', 'Scheduled', 'Received', 'Status', 'Paid on', 'Method', 'Last comment'];
-    const body = rows.map((r) => [r.lead_id, r.name, r.counselor, `${r.emi_index + 1}/${r.emi_count}`, r.due_date,
+    const header = ['Lead ID', 'Name', 'Email', 'Counselor', 'EMI', 'Due date', 'Scheduled', 'Received', 'Status', 'Paid on', 'Method', 'Last comment'];
+    const body = rows.map((r) => [r.lead_id, r.name, r.email, r.counselor, `${r.emi_index + 1}/${r.emi_count}`, r.due_date,
       r.scheduled, r.received, STATUS[r.status].label, r.paid_date || '', r.method || '', r.last_comment?.note || ''].map(esc).join(','));
     const blob = new Blob(['﻿' + [header.map(esc).join(','), ...body].join('\n')], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -65,6 +92,7 @@ export default function EmiMonthTab({ onChanged }) {
     { title: 'Lead', key: 'lead', render: (_, r) => (
       <div><div style={{ fontWeight: 600 }}>{r.name}</div><Text type="secondary" style={{ fontSize: 12 }}>{r.phone}</Text></div>
     ) },
+    { title: 'Email', dataIndex: 'email', render: (e) => e || <Text type="secondary">—</Text> },
     { title: 'Counselor', dataIndex: 'counselor' },
     { title: 'Instalment', key: 'emi', render: (_, r) => r.label || `EMI ${r.emi_index + 1}` },
     { title: 'Due', dataIndex: 'due_date', sorter: (a, b) => a.due_date.localeCompare(b.due_date), defaultSortOrder: 'ascend',
@@ -109,8 +137,17 @@ export default function EmiMonthTab({ onChanged }) {
           <DatePicker picker="month" value={month} onChange={(v) => v && setMonth(v)} allowClear={false} />
           <Segmented value={status} onChange={setStatus}
             options={[{ label: 'All', value: 'all' }, { label: 'Paid', value: 'paid' }, { label: 'Pending', value: 'pending' }, { label: 'Overdue', value: 'overdue' }]} />
+          <Select
+            mode="multiple" allowClear style={{ minWidth: 220 }} maxTagCount="responsive" placeholder="All EMI numbers"
+            value={emiNos} onChange={setEmiNos} options={emiOptions.map((l) => ({ value: l, label: l }))}
+          />
         </Space>
-        <Button icon={<DownloadOutlined />} onClick={exportCsv} disabled={!rows.length}>Export CSV</Button>
+        <Space wrap>
+          <Tooltip title="Copies the email of every student in the list below (after the filters), separated by commas, ready to paste into a mail's To/Bcc">
+            <Button type="primary" icon={<MailOutlined />} onClick={copyEmails} disabled={!emails.length}>Copy emails ({emails.length})</Button>
+          </Tooltip>
+          <Button icon={<DownloadOutlined />} onClick={exportCsv} disabled={!rows.length}>Export CSV</Button>
+        </Space>
       </Space>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
@@ -150,10 +187,10 @@ export default function EmiMonthTab({ onChanged }) {
           locale={{ emptyText: <Empty description={`No EMIs ${status === 'all' ? '' : status + ' '}in ${month.format('MMM YYYY')}`} /> }}
           summary={(pageData) => (pageData.length ? (
             <Table.Summary.Row>
-              <Table.Summary.Cell index={0} colSpan={4}><Text strong>Total ({rows.length})</Text></Table.Summary.Cell>
-              <Table.Summary.Cell index={4} align="right"><Text strong>{fmt(rows.reduce((a, r) => a + r.scheduled, 0))}</Text></Table.Summary.Cell>
-              <Table.Summary.Cell index={5} align="right"><Text strong style={{ color: '#389e0d' }}>{fmt(rows.reduce((a, r) => a + r.received, 0))}</Text></Table.Summary.Cell>
-              <Table.Summary.Cell index={6} colSpan={4} />
+              <Table.Summary.Cell index={0} colSpan={5}><Text strong>Total ({rows.length})</Text></Table.Summary.Cell>
+              <Table.Summary.Cell index={5} align="right"><Text strong>{fmt(rows.reduce((a, r) => a + r.scheduled, 0))}</Text></Table.Summary.Cell>
+              <Table.Summary.Cell index={6} align="right"><Text strong style={{ color: '#389e0d' }}>{fmt(rows.reduce((a, r) => a + r.received, 0))}</Text></Table.Summary.Cell>
+              <Table.Summary.Cell index={7} colSpan={4} />
             </Table.Summary.Row>
           ) : null)}
         />

@@ -10,7 +10,7 @@ small fetch), an overdue-EMI worklist, "mark EMI paid" with an audit ledger
 
 import threading
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Literal, Optional
 
 from cachetools import TTLCache
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -31,6 +31,9 @@ router = APIRouter(prefix="/api/payments", tags=["payments"])
 
 _VIEW = Depends(require_permission(P.VIEW_REVENUE, P.VIEW_ALL_REVENUE, P.MANAGE_PAYMENTS))
 _EDIT = Depends(require_permission(P.MANAGE_PAYMENTS, P.EDIT_LEAD))
+
+# Where an overdue account stands, set from the Overdue tab's update dialog.
+OVERDUE_STATUSES = ("Dead response", "On arrival", "Financial issue")
 
 _cache: TTLCache = TTLCache(maxsize=1, ttl=30)
 _lock = threading.Lock()
@@ -128,24 +131,33 @@ def get_overdue_worklist(current_user: dict = Depends(get_current_user)):
         overdue = pa.overdue_emis(scoped_enrolled(rbac.lead_scope_names(current_user)), today)
         latest: dict = {}
         promised: dict = {}   # lead_id -> follow-ups that carry an expected date, newest first
+        staged: dict = {}     # lead_id -> follow-ups that carry a status, newest first
         ids = sorted({o["lead_id"] for o in overdue if o.get("lead_id")})
         for i in range(0, len(ids), 100):
             rows = (
-                supabase_data.client.table("payment_followups")
-                .select("lead_id,emi_index,note,promised_date,created_by,created_at")
+                # "*" so the list still loads before the follow-up status column exists
+                supabase_data.client.table("payment_followups").select("*")
                 .in_("lead_id", ids[i:i + 100]).order("created_at", desc=True).execute().data or []
             )
             for r in rows:
                 latest.setdefault(r["lead_id"], r)
                 if r.get("promised_date"):
                     promised.setdefault(r["lead_id"], []).append(r)
+                if r.get("status"):
+                    staged.setdefault(r["lead_id"], []).append(r)
+
+        def newest(group: dict, o: dict):
+            # newest entry for this instalment, or one given for the account as a whole
+            return next((p for p in group.get(o.get("lead_id"), []) if p.get("emi_index") in (None, o.get("emi_index"))), None)
+
         for o in overdue:
             o["last_followup"] = latest.get(o.get("lead_id"))
-            # newest expected date for this instalment (or one given for the account as a whole)
-            mine = next((p for p in promised.get(o.get("lead_id"), [])
-                         if p.get("emi_index") in (None, o.get("emi_index"))), None)
+            mine = newest(promised, o)
             o["expected_date"] = mine["promised_date"] if mine else None
-        return {"items": overdue, "total": round(sum(o["amount"] for o in overdue), 2)}
+            st = newest(staged, o)
+            o["followup_status"] = st["status"] if st else None
+        return {"items": overdue, "total": round(sum(o["amount"] for o in overdue), 2),
+                "statuses": list(OVERDUE_STATUSES)}
     except Exception as e:
         logger.error(f"get_overdue_worklist error: {e}")
         raise HTTPException(status_code=500, detail="Failed to load overdue EMIs")
@@ -236,20 +248,26 @@ class Followup(BaseModel):
     note: str = Field(..., min_length=1, max_length=1000)
     emi_index: Optional[int] = None
     promised_date: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    status: Optional[Literal["Dead response", "On arrival", "Financial issue"]] = None
 
 
 @router.post("/{lead_id}/followups", dependencies=[_EDIT])
 def add_followup(lead_id: str, body: Followup, current_user: dict = Depends(get_current_user)):
     _get_lead(lead_id, current_user)
+    row = {
+        "lead_id": lead_id, "emi_index": body.emi_index, "note": body.note.strip(),
+        "promised_date": body.promised_date,
+        "created_by": rbac.user_identity(current_user) or current_user.get("email"),
+    }
+    if body.status:
+        row["status"] = body.status
     try:
-        supabase_data.client.table("payment_followups").insert({
-            "lead_id": lead_id, "emi_index": body.emi_index, "note": body.note.strip(),
-            "promised_date": body.promised_date,
-            "created_by": rbac.user_identity(current_user) or current_user.get("email"),
-        }).execute()
+        supabase_data.client.table("payment_followups").insert(row).execute()
         return {"ok": True}
     except Exception as e:
         logger.error(f"add_followup error: {e}")
+        if body.status and "status" in str(e):
+            raise HTTPException(status_code=503, detail="Status can't be saved yet - run the payment_followups status migration")
         raise HTTPException(status_code=500, detail="Failed to save the follow-up")
 
 

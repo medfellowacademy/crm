@@ -4,7 +4,7 @@ import { Card, Table, Tag, Button, Space, Typography, Popconfirm, Row, Col, Stat
 import { UndoOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { paymentsAPI } from '../../api/api';
-import { fmt } from '../../utils/finance';
+import { fmtBoth as fmt } from '../../utils/finance';
 
 const { Text } = Typography;
 

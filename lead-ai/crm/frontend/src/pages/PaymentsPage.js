@@ -24,7 +24,7 @@ import DroppedTab from '../components/payments/DroppedTab';
 import { PaymentActivity } from '../components/payments/PaymentComments';
 import EnrollmentModal from '../components/leads/EnrollmentModal';
 import { useAuth } from '../context/AuthContext';
-import { fmt, safeParse, financeFor, instalmentLabel, PAYMENT_STATUS_CONFIG } from '../utils/finance';
+import { fmtBoth as fmt, safeParse, financeFor, instalmentLabel, PAYMENT_STATUS_CONFIG } from '../utils/finance';
 
 const { Text, Title } = Typography;
 

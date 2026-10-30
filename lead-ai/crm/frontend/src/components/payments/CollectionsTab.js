@@ -5,7 +5,7 @@ import {
   BarChart, Cell,
 } from 'recharts';
 import dayjs from 'dayjs';
-import { fmt } from '../../utils/finance';
+import { fmtBoth as fmt } from '../../utils/finance';
 
 const { Text } = Typography;
 const AGING_COLORS = ['#faad14', '#fa8c16', '#f5222d', '#a8071a'];
