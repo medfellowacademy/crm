@@ -1,15 +1,76 @@
-import React, { useState } from 'react';
-import { Tabs, Form, Input, Button, Card, Row, Col, Alert, message, Spin } from 'antd';
+import React, { useEffect, useRef, useState } from 'react';
+import { Tabs, Form, Input, Button, Card, Row, Col, Alert, message } from 'antd';
 import { useAuth } from '../context/AuthContext';
-import { userStatsAPI } from '../api/api';
+import { userStatsAPI, targetsAPI } from '../api/api';
+import { SalesAvatar } from '../components/targets/SalesAvatar';
+import { fileToAvatarDataUrl } from '../utils/imageResize';
 import { useMutation } from '@tanstack/react-query';
 import { featureFlags } from '../config/featureFlags';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://medfellow-crm-api.onrender.com';
 
+// The logged-in user's own profile photo: shows it, uploads a new one, or removes it.
+function ProfilePhoto({ user }) {
+  const input = useRef(null);
+  const [src, setSrc] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!user?.id) return undefined;
+    let alive = true;
+    let url;
+    targetsAPI.avatar(user.id).then((r) => {
+      if (!alive) return;
+      url = URL.createObjectURL(r.data);
+      setSrc(url);
+    }).catch(() => { /* no photo yet */ });
+    return () => { alive = false; if (url) URL.revokeObjectURL(url); };
+  }, [user?.id]);
+
+  const pick = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setBusy(true);
+    try {
+      const image = await fileToAvatarDataUrl(file);
+      await targetsAPI.setAvatar(user.id, image);
+      setSrc(image);
+      message.success('Profile photo updated');
+    } catch (err) {
+      message.error(err?.response?.data?.detail || err?.message || 'Could not upload the photo');
+    } finally { setBusy(false); }
+  };
+
+  const remove = async () => {
+    setBusy(true);
+    try {
+      await targetsAPI.removeAvatar(user.id);
+      setSrc(null);
+      message.success('Profile photo removed');
+    } catch (err) {
+      message.error(err?.response?.data?.detail || 'Could not remove the photo');
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 24, flexWrap: 'wrap' }}>
+      <SalesAvatar name={user?.full_name} src={src} size={96} ring="#e5e7eb" ringWidth={3} />
+      <div>
+        <div style={{ fontWeight: 600, marginBottom: 8 }}>Profile photo</div>
+        <Button type="primary" loading={busy} onClick={() => input.current?.click()} style={{ borderRadius: 8 }}>
+          {src ? 'Change photo' : 'Upload photo'}
+        </Button>
+        {src && <Button danger type="text" disabled={busy} onClick={remove} style={{ marginLeft: 8 }}>Remove</Button>}
+        <div style={{ color: '#8c8c8c', fontSize: 12, marginTop: 6 }}>JPEG, PNG or WebP. It's cropped to a square and shown on the sales leaderboard and office TV.</div>
+        <input ref={input} type="file" accept="image/jpeg,image/png,image/webp" hidden onChange={pick} />
+      </div>
+    </div>
+  );
+}
+
 const SettingsPage = () => {
-  const { user, updateUser } = useAuth();
-  const [form] = Form.useForm();
+  const { user } = useAuth();
   const [passwordForm] = Form.useForm();
 
   // Password change mutation
@@ -42,6 +103,7 @@ const SettingsPage = () => {
       children: (
         <div style={{ maxWidth: '600px' }}>
           <Card style={{ borderRadius: '12px' }}>
+            <ProfilePhoto user={user} />
             <Form layout="vertical" style={{ marginBottom: '24px' }}>
               <Form.Item label="Full Name">
                 <Input
