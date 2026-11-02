@@ -5,6 +5,7 @@ Payroll - `/api/payroll/*` (Super Admin only, like the rest of salary handling).
   PUT  /employees/{user_id}/salary   set one person's monthly salary
   GET/PUT /incentive-settings        how incentive is worked out (base amount + achievement slabs)
   GET  /incentive?month&user_email   a person's sales incentive for a month, with the numbers behind it
+  GET/PUT/DELETE /incentives         incentives recorded by hand: employee + month + revenue + % -> amount
   POST /calc                         every amount of a salary slip, worked out server-side
   GET  /duplicate-slips              employee-months that have more than one saved slip
 """
@@ -121,6 +122,69 @@ def get_incentive(month: str, user_email: str, request: Request):
     enrolled = payments_router._fetch_enrolled()
     targets = sales_targets_router._targets_for(month)
     return payroll.incentive_for(user["full_name"], month, enrolled, targets, settings)
+
+
+# -- incentives entered by hand --------------------------------------------
+
+class IncentiveBody(BaseModel):
+    user_email: str = Field(max_length=200)
+    month: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    revenue: float = Field(ge=0, le=10_000_000_000)
+    percent: float = Field(ge=0, le=100)
+    note: Optional[str] = Field(None, max_length=200)
+
+
+@router.get("/incentives")
+def list_incentives(request: Request, month: Optional[str] = None, user_email: Optional[str] = None):
+    _admin(request)
+    try:
+        q = supabase_data.client.table("payroll_incentives").select("*")
+        if month:
+            q = q.eq("month", month)
+        if user_email:
+            q = q.eq("user_email", user_email)
+        return q.order("created_at", desc=True).execute().data or []
+    except Exception as e:  # table missing until the migration is applied
+        logger.warning(f"payroll_incentives unavailable: {e}")
+        return []
+
+
+@router.put("/incentives")
+def save_incentive(body: IncentiveBody, request: Request):
+    """Record (or replace) one person's incentive for a month. The amount is worked out here."""
+    current = _admin(request)
+    user = supabase_data.get_user_by_email(body.user_email)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    row = {
+        "user_email": body.user_email, "user_name": user.get("full_name") or body.user_email, "month": body.month,
+        "revenue": body.revenue, "percent": body.percent, "amount": payroll.manual_incentive(body.revenue, body.percent),
+        "note": (body.note or "").strip() or None, "created_by": current["email"],
+    }
+    try:
+        table = supabase_data.client.table("payroll_incentives")
+        found = table.select("id").eq("user_email", body.user_email).eq("month", body.month).limit(1).execute().data or []
+        if found:
+            saved = supabase_data.client.table("payroll_incentives").update(row).eq("id", found[0]["id"]).execute()
+        else:
+            saved = supabase_data.client.table("payroll_incentives").insert(row).execute()
+    except Exception as e:
+        logger.error(f"save_incentive failed: {e}")
+        raise HTTPException(status_code=503, detail="Could not save - has the payroll_incentives migration been applied?")
+    return {**(saved.data[0] if saved.data else row), "replaced": bool(found)}
+
+
+@router.delete("/incentives/{incentive_id}")
+def delete_incentive(incentive_id: int, request: Request):
+    _admin(request)
+    try:
+        rows = supabase_data.client.table("payroll_incentives").delete().eq("id", incentive_id).execute().data
+    except Exception as e:
+        logger.error(f"delete_incentive failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete the incentive")
+    if not rows:
+        raise HTTPException(status_code=404, detail="Incentive not found")
+    return {"ok": True}
 
 
 # -- slip maths -----------------------------------------------------------

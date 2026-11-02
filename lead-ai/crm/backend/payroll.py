@@ -94,6 +94,11 @@ def incentive_for(user_name: str, month: str, enrolled: list, targets: list, set
     }
 
 
+def manual_incentive(revenue: float, percent: float) -> int:
+    """Incentive typed in by hand: a percentage of a revenue figure, to the whole rupee."""
+    return round(max(0.0, _num(revenue)) * max(0.0, _num(percent)) / 100)
+
+
 def _num(v) -> float:
     try:
         return float(v or 0)

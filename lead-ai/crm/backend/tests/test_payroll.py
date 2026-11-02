@@ -127,6 +127,7 @@ class Query:
     def eq(self, c, v): self.filters.append((c, v)); return self
     def insert(self, row): self.op, self.payload = "insert", row; return self
     def update(self, row): self.op, self.payload = "update", row; return self
+    def delete(self): self.op = "delete"; return self
     def upsert(self, row, on_conflict=None): self.op, self.payload = "upsert", row; return self
 
     def execute(self):
@@ -141,6 +142,9 @@ class Query:
         if self.op == "update":
             for r in hit:
                 r.update(self.payload)
+            return type("R", (), {"data": hit})
+        if self.op == "delete":
+            rows[:] = [r for r in rows if r not in hit]
             return type("R", (), {"data": hit})
         if self.op == "upsert":
             rows[:] = [r for r in rows if r.get("id") != self.payload.get("id")] + [dict(self.payload)]
@@ -276,3 +280,52 @@ class TestPayrollEndpoints:
         ]
         d = api.get("/api/payroll/duplicate-slips").json()
         assert len(d) == 1 and d[0]["month"] == "2026-09" and [s["id"] for s in d[0]["slips"]] == [1, 2]
+
+
+class TestManualIncentive:
+    BODY = {"user_email": "ravi@x.in", "month": "2026-10", "revenue": 250000, "percent": 2, "note": "Oct sales"}
+
+    def test_amount_is_percent_of_revenue(self, api):
+        r = api.put("/api/payroll/incentives", json=self.BODY).json()
+        assert r["amount"] == 5000 and r["user_name"] == "Ravi" and r["replaced"] is False
+
+    def test_rounds_to_the_rupee(self):
+        assert payroll.manual_incentive(100001, 2.5) == 2500
+        assert payroll.manual_incentive(-5, 10) == 0
+
+    def test_one_per_person_per_month_replaces(self, api):
+        api.put("/api/payroll/incentives", json=self.BODY)
+        r = api.put("/api/payroll/incentives", json={**self.BODY, "percent": 3}).json()
+        assert r["replaced"] is True and r["amount"] == 7500
+        assert len(api.get("/api/payroll/incentives?month=2026-10").json()) == 1
+
+    def test_list_filters_by_month_and_person(self, api):
+        api.put("/api/payroll/incentives", json=self.BODY)
+        api.put("/api/payroll/incentives", json={**self.BODY, "month": "2026-11"})
+        assert len(api.get("/api/payroll/incentives").json()) == 2
+        assert len(api.get("/api/payroll/incentives?month=2026-11&user_email=ravi@x.in").json()) == 1
+        assert api.get("/api/payroll/incentives?user_email=nobody@x.in").json() == []
+
+    def test_delete(self, api):
+        api.put("/api/payroll/incentives", json=self.BODY)
+        iid = api.get("/api/payroll/incentives").json()[0]["id"]
+        assert api.delete(f"/api/payroll/incentives/{iid}").status_code == 200
+        assert api.delete(f"/api/payroll/incentives/{iid}").status_code == 404
+        assert api.get("/api/payroll/incentives").json() == []
+
+    def test_validation(self, api):
+        assert api.put("/api/payroll/incentives", json={**self.BODY, "percent": 101}).status_code == 422
+        assert api.put("/api/payroll/incentives", json={**self.BODY, "revenue": -1}).status_code == 422
+        assert api.put("/api/payroll/incentives", json={**self.BODY, "month": "2026-13"}).status_code == 422
+        assert api.put("/api/payroll/incentives", json={**self.BODY, "user_email": "nobody@x.in"}).status_code == 404
+
+    def test_admin_only(self, api):
+        api.as_user({"email": "ravi@x.in", "full_name": "Ravi", "role": "Counselor", "restrictions": {}})
+        assert api.put("/api/payroll/incentives", json=self.BODY).status_code == 403
+        assert api.get("/api/payroll/incentives").status_code == 403
+        assert api.delete("/api/payroll/incentives/1").status_code == 403
+
+    def test_missing_table_is_a_clear_503_and_listing_stays_empty(self, api):
+        api.db.broken = True
+        assert api.put("/api/payroll/incentives", json=self.BODY).status_code == 503
+        assert api.get("/api/payroll/incentives").json() == []

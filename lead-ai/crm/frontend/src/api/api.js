@@ -442,6 +442,9 @@ export const payrollAPI = {
   incentive:         (month, userEmail)   => api.get('/api/payroll/incentive', { params: { month, user_email: userEmail } }),
   calc:              (body)               => api.post('/api/payroll/calc', body),
   duplicateSlips:    ()                   => api.get('/api/payroll/duplicate-slips'),
+  incentives:        (month, userEmail)   => api.get('/api/payroll/incentives', { params: { month, user_email: userEmail } }),
+  saveIncentive:     (body)               => api.put('/api/payroll/incentives', body),
+  deleteIncentive:   (id)                 => api.delete(`/api/payroll/incentives/${id}`),
 };
 
 // Attendance API (geofenced check-in/check-out)

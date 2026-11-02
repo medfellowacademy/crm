@@ -921,6 +921,19 @@ function AttendanceReport() {
     setIncentiveAmount(0); setIncentiveNote(''); setIncentiveInfo(null);
   }, [selectedUser, slipMonth]);
 
+  // An incentive recorded on the Payroll tab for this person and month fills in by itself.
+  const { data: recordedIncentives = [] } = useQuery({
+    queryKey: ['payroll-incentives', slipMonth],
+    queryFn:  () => payrollAPI.incentives(slipMonth).then(r => r.data),
+    enabled:  isAdmin && !!slipMonth,
+  });
+  const recorded = recordedIncentives.find(i => i.user_email === selectedUser) || null;
+  useEffect(() => {
+    if (!recorded) return;
+    setIncentiveAmount(Number(recorded.amount) || 0);
+    setIncentiveNote(recorded.note || `${Number(recorded.percent)}% of ${fmtINR(recorded.revenue)}`);
+  }, [selectedUser, slipMonth, recorded?.id, recorded?.amount]);
+
   const calcIncentive = async () => {
     if (!selectedUser) { message.warning('Select an employee first.'); return; }
     try {
@@ -983,6 +996,8 @@ function AttendanceReport() {
       ...(incentiveInfo ? {
         incentive_revenue: incentiveInfo.booked, incentive_collected: incentiveInfo.collected,
         incentive_sales: incentiveInfo.sales, incentive_pct: incentiveInfo.pct, incentive_rate: incentiveInfo.rate_pct,
+      } : recorded ? {
+        incentive_revenue: Number(recorded.revenue), incentive_rate: Number(recorded.percent),
       } : {}),
       net_salary:            salaryCalc.netSalary,
       advance_deduction:     salaryCalc.advDeduction,
@@ -1238,6 +1253,11 @@ function AttendanceReport() {
                   formatter={v => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
                   parser={v => v.replace(/,/g, '')} size="large"
                 />
+                {recorded && !incentiveInfo && (
+                  <div style={{ marginTop: 6, fontSize: 12, color: '#389e0d' }}>
+                    Recorded incentive applied: {Number(recorded.percent)}% of {fmtINR(recorded.revenue)}
+                  </div>
+                )}
                 <Button style={{ marginTop: 6 }} block onClick={calcIncentive} disabled={!selectedUser}>Calculate from sales</Button>
                 <Input
                   style={{ marginTop: 6 }} placeholder="Incentive note (optional)"
@@ -1450,6 +1470,17 @@ function PayrollPanel() {
     queryKey: ['incentive-settings'],
     queryFn:  () => payrollAPI.incentiveSettings().then(r => r.data),
   });
+  const [incUser,    setIncUser]    = useState(null);
+  const [incMonth,   setIncMonth]   = useState(dayjs());
+  const [incRevenue, setIncRevenue] = useState(null);
+  const [incPercent, setIncPercent] = useState(null);
+  const [incNote,    setIncNote]    = useState('');
+  const incMonthStr = incMonth.format('YYYY-MM');
+  const incAmount   = Math.round((Number(incRevenue) || 0) * (Number(incPercent) || 0) / 100);
+  const { data: incentives = [] } = useQuery({
+    queryKey: ['payroll-incentives', incMonthStr],
+    queryFn:  () => payrollAPI.incentives(incMonthStr).then(r => r.data),
+  });
   const { data: dupes = [] } = useQuery({
     queryKey: ['payroll-duplicates'],
     queryFn:  () => payrollAPI.duplicateSlips().then(r => r.data),
@@ -1477,6 +1508,31 @@ function PayrollPanel() {
     onSuccess: () => { message.success('Incentive rules saved.'); queryClient.invalidateQueries({ queryKey: ['incentive-settings'] }); },
     onError: (e) => message.error(errMsg(e)),
   });
+
+  const saveIncentive = useMutation({
+    mutationFn: () => payrollAPI.saveIncentive({
+      user_email: incUser, month: incMonthStr, revenue: Number(incRevenue) || 0, percent: Number(incPercent) || 0, note: incNote || null,
+    }),
+    onSuccess: (res) => {
+      message.success(res?.data?.replaced ? 'Incentive updated.' : 'Incentive saved — it fills in when you make their slip.');
+      queryClient.invalidateQueries({ queryKey: ['payroll-incentives'] });
+      setIncRevenue(null); setIncPercent(null); setIncNote('');
+    },
+    onError: (e) => message.error(errMsg(e)),
+  });
+  const deleteIncentive = useMutation({
+    mutationFn: (id) => payrollAPI.deleteIncentive(id),
+    onSuccess: () => { message.success('Incentive removed.'); queryClient.invalidateQueries({ queryKey: ['payroll-incentives'] }); },
+    onError: (e) => message.error(errMsg(e)),
+  });
+  const fillFromSales = async () => {
+    if (!incUser) { message.warning('Select an employee first.'); return; }
+    try {
+      const d = (await payrollAPI.incentive(incMonthStr, incUser)).data;
+      setIncRevenue(d.base_amount);
+      message.info(`Filled with ${d.base === 'collected' ? 'money collected' : 'revenue booked'} in ${incMonthStr}: ${fmtINR(d.base_amount)}`);
+    } catch (e) { message.error(errMsg(e)); }
+  };
 
   const deleteSlip = useMutation({
     mutationFn: (id) => attendanceAPI.deleteSlip(id),
@@ -1518,6 +1574,69 @@ function PayrollPanel() {
                 </Space>
               );
             } },
+          ]}
+        />
+      </Card>
+
+      <Card title={<Space><DollarOutlined />Add an incentive</Space>} style={{ marginBottom: 16 }}>
+        <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+          Pick the employee and month, enter the revenue and the percentage, and the incentive is worked out. Once saved, it fills in
+          automatically on that person's salary slip for the month.
+        </Text>
+        <Row gutter={[12, 12]} align="bottom">
+          <Col xs={24} sm={7}>
+            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Employee</div>
+            <Select showSearch optionFilterProp="label" style={{ width: '100%' }} placeholder="Select employee"
+              value={incUser} onChange={setIncUser}
+              options={employees.filter(e => e.is_active).map(e => ({ value: e.email, label: `${e.full_name} (${e.role})` }))} />
+          </Col>
+          <Col xs={12} sm={4}>
+            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Month</div>
+            <DatePicker picker="month" allowClear={false} style={{ width: '100%' }} value={incMonth} onChange={(v) => v && setIncMonth(v)} />
+          </Col>
+          <Col xs={12} sm={5}>
+            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Total revenue (₹)</div>
+            <InputNumber min={0} style={{ width: '100%' }} placeholder="e.g. 250000" value={incRevenue} onChange={setIncRevenue}
+              formatter={x => `${x}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')} parser={x => x.replace(/,/g, '')} />
+          </Col>
+          <Col xs={12} sm={4}>
+            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Incentive %</div>
+            <InputNumber min={0} max={100} step={0.5} style={{ width: '100%' }} placeholder="e.g. 2" value={incPercent} onChange={setIncPercent} addonAfter="%" />
+          </Col>
+          <Col xs={12} sm={4}>
+            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Incentive amount</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: '#389e0d', lineHeight: '32px' }}>{fmtINR(incAmount)}</div>
+          </Col>
+        </Row>
+        <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
+          <Col xs={24} sm={12}>
+            <Input placeholder="Note (optional), e.g. October admissions" maxLength={200} value={incNote} onChange={e => setIncNote(e.target.value)} />
+          </Col>
+          <Col xs={24} sm={12}>
+            <Space wrap>
+              <Button onClick={fillFromSales} disabled={!incUser}>Fill revenue from sales</Button>
+              <Button type="primary" icon={<SaveOutlined />} loading={saveIncentive.isPending}
+                disabled={!incUser || !(Number(incRevenue) > 0) || !(Number(incPercent) > 0)} onClick={() => saveIncentive.mutate()}>
+                Save incentive
+              </Button>
+            </Space>
+          </Col>
+        </Row>
+        <Divider style={{ margin: '16px 0 8px' }} />
+        <div style={{ fontWeight: 600, marginBottom: 8 }}>Incentives recorded for {incMonth.format('MMMM YYYY')}</div>
+        <Table
+          size="small" rowKey="id" dataSource={incentives} pagination={false} locale={{ emptyText: 'None yet for this month' }}
+          columns={[
+            { title: 'Employee', dataIndex: 'user_name' },
+            { title: 'Revenue', dataIndex: 'revenue', align: 'right', render: v => fmtINR(v) },
+            { title: '%', dataIndex: 'percent', width: 70, align: 'right', render: v => `${Number(v)}%` },
+            { title: 'Incentive', dataIndex: 'amount', align: 'right', render: v => <Text strong style={{ color: '#389e0d' }}>{fmtINR(v)}</Text> },
+            { title: 'Note', dataIndex: 'note', ellipsis: true },
+            { title: '', key: 'x', width: 60, render: (_, r) => (
+              <Popconfirm title="Remove this incentive?" okText="Remove" okButtonProps={{ danger: true }} onConfirm={() => deleteIncentive.mutate(r.id)}>
+                <Button size="small" danger type="text" icon={<DeleteOutlined />} />
+              </Popconfirm>
+            ) },
           ]}
         />
       </Card>
