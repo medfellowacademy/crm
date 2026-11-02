@@ -27,7 +27,7 @@ function Meter({ pct, dark }) {
   );
 }
 
-function Kpi({ tone, label, value, target, pct, money, derived }) {
+function Kpi({ tone, label, value, done, target, pct, money, derived }) {
   const lemon = tone === 'lemon';
   const fg = lemon ? INK : '#fff';
   return (
@@ -41,6 +41,11 @@ function Kpi({ tone, label, value, target, pct, money, derived }) {
             of {money ? fmt(target) : target} {derived ? 'combined target (sum of everyone)' : 'company target'} · <b>{pct}%</b>{pct >= 100 ? ' 🔥' : ''}
           </div>
           <Meter pct={pct} dark={!lemon} />
+          <div style={{ fontSize: 13, marginTop: 8, fontWeight: 700 }}>
+            {done >= target
+              ? `🎯 Target beaten by ${money ? fmt(done - target) : done - target}`
+              : `${money ? fmt(target - done) : target - done} to go`}
+          </div>
         </>
       ) : <div style={{ fontSize: 13, opacity: 0.75 }}>No company target set — use “Set targets”</div>}
     </div>
@@ -376,6 +381,7 @@ export default function SalesTargetsPage() {
         <div style={{ position: 'absolute', right: -60, top: -80, width: 260, height: 260, borderRadius: '50%', background: LAVENDER, opacity: 0.5, filter: 'blur(40px)' }} />
         <Space wrap style={{ width: '100%', justifyContent: 'space-between', position: 'relative' }}>
           <div>
+            <img src="/medfellow-logo-white.png" alt="MedFellow Academy" style={{ height: 36, width: 'auto', display: 'block', marginBottom: 12 }} />
             <div style={{ fontFamily: DISPLAY_FONT, fontSize: 'clamp(26px,4vw,46px)', lineHeight: 1 }}>
               <span style={{ color: LEMON }}>SALES </span>
               <span style={{ color: 'transparent', WebkitTextStroke: `2px ${LAVENDER}` }}>TARGETS</span>
@@ -390,8 +396,8 @@ export default function SalesTargetsPage() {
       </div>
 
       <Row gutter={[16, 16]}>
-        <Col xs={24} md={9}><Kpi tone="lemon" label="Company revenue" value={isLoading ? '…' : fmt(company.revenue || 0)} target={company.revenue_target} pct={company.revenue_pct} money derived={company.derived} /></Col>
-        <Col xs={24} md={9}><Kpi tone="lavender" label="Company enrollments" value={isLoading ? '…' : company.enrolled || 0} target={company.enrollment_target} pct={company.enrollment_pct} derived={company.derived} /></Col>
+        <Col xs={24} md={9}><Kpi tone="lemon" label="Company revenue" value={isLoading ? '…' : fmt(company.revenue || 0)} done={company.revenue || 0} target={company.revenue_target} pct={company.revenue_pct} money derived={company.derived} /></Col>
+        <Col xs={24} md={9}><Kpi tone="lavender" label="Company enrollments" value={isLoading ? '…' : company.enrolled || 0} done={company.enrolled || 0} target={company.enrollment_target} pct={company.enrollment_pct} derived={company.derived} /></Col>
         <Col xs={24} md={6}><PaceCard company={company} /></Col>
       </Row>
       <div style={{ color: '#8c8c8c', fontSize: 12, margin: '6px 4px 0' }}>Revenue = booked fee of students enrolled this month.</div>

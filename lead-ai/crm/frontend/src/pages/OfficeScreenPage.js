@@ -9,6 +9,7 @@ import {
   SLIDE_TITLES, SalesSlide, TeamsSlide, ActivitySlide, AnalyticsSlide, PerformanceSlide, AttendanceSlide, PipelineSlide,
   LeadersSlide, WinsSlide, GoalSlide, FollowupsSlide,
 } from '../components/targets/tv/TvSlides';
+import { playCelebration } from '../components/targets/tv/tvSound';
 import { milestoneFor } from '../components/targets/tv/milestones';
 import {
   LEMON, CHARCOAL, LAVENDER, INK, MUTED, DISPLAY_FONT, BODY_FONT, FS, loadBrandFonts,
@@ -75,17 +76,6 @@ function Confetti({ burstKey }) {
   return <canvas ref={ref} style={{ position: 'fixed', inset: 0, zIndex: 80, pointerEvents: 'none' }} />;
 }
 
-// ── Sound: a short chime, only after someone clicked "Enable sound" once ────
-function playChime(ctx) {
-  [523.25, 659.25, 783.99, 1046.5, 1318.5].forEach((f, i) => {
-    const o = ctx.createOscillator(); const g = ctx.createGain();
-    o.type = 'triangle'; o.frequency.value = f;
-    const t0 = ctx.currentTime + i * 0.14;
-    g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.28, t0 + 0.03); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.7);
-    o.connect(g); g.connect(ctx.destination); o.start(t0); o.stop(t0 + 0.75);
-  });
-}
-
 function Amount({ value }) {
   const shown = useCountUp(value, 1800);
   return (
@@ -122,7 +112,7 @@ export default function OfficeScreenPage() {
     setVideoOk(true);
     setCelebration(sale);
     setBurst((b) => b + 1);
-    if (audio.current) { try { playChime(audio.current); } catch { /* sound is optional */ } }
+    if (audio.current) { try { playCelebration(audio.current, { big: !!sale.milestone }); } catch { /* sound is optional */ } }
     timers.current.push(setTimeout(next, CELEBRATE_MS));
   }, []);
 
@@ -196,7 +186,7 @@ export default function OfficeScreenPage() {
       const Ctx = window.AudioContext || window.webkitAudioContext;
       audio.current = audio.current || new Ctx();
       audio.current.resume?.();
-      playChime(audio.current);
+      playCelebration(audio.current);       // plays once so whoever clicks hears that it works
       setSoundOn(true);
     } catch { /* browser without audio: silently stay muted */ }
   };
@@ -284,21 +274,13 @@ export default function OfficeScreenPage() {
       <div style={{ position: 'relative', zIndex: 1, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: '1.2vh' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1.4vw', minWidth: 0 }}>
-            <img src="/medfellow-logo.png" alt="MedFellow Academy" style={{ height: 'clamp(34px,5vh,62px)', display: 'block', flex: '0 0 auto', filter: 'brightness(0) invert(1)' }} />
-            <div key={current} style={{ display: quiet ? 'none' : undefined, fontFamily: DISPLAY_FONT, fontSize: FS.title, lineHeight: 1, letterSpacing: 1, whiteSpace: 'nowrap', animation: 'slideIn .6s both' }}>
+            <img src="/medfellow-logo-white.png" alt="MedFellow Academy" style={{ height: 'clamp(42px,6.8vh,84px)', width: 'auto', display: 'block', flex: '0 0 auto' }} />
+            <div key={current} style={{ display: quiet ? 'none' : undefined, fontFamily: DISPLAY_FONT, fontSize: FS.title, lineHeight: 1, letterSpacing: 1, whiteSpace: 'nowrap', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', animation: 'slideIn .6s both' }}>
               <span style={{ color: LEMON }}>{(SLIDE_TITLES[current] || current).toUpperCase()}</span>{' '}
               <span style={{ color: 'transparent', WebkitTextStroke: `2px ${LAVENDER}` }}>{subtitle}</span>
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, flex: '0 0 auto' }}>
-            {count > 1 && !quiet && (
-              <div style={{ display: 'flex', gap: 8 }} aria-label="slides">
-                {slides.map((k, i) => (
-                  <button key={k} title={SLIDE_TITLES[k]} onClick={() => setIdx(i)}
-                    style={{ width: i === idx % count ? 34 : 12, height: 12, borderRadius: 99, border: 'none', cursor: 'pointer', padding: 0, background: i === idx % count ? LEMON : '#525252', transition: 'all .4s' }} />
-                ))}
-              </div>
-            )}
             {!soundOn && <button onClick={enableSound} style={{ background: 'transparent', color: LEMON, border: `2px solid ${LEMON}`, borderRadius: 99, padding: '6px 16px', fontFamily: BODY_FONT, fontWeight: 700, fontSize: FS.caption, cursor: 'pointer' }}>🔔 Enable sound</button>}
             <div style={{ textAlign: 'right' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end', fontWeight: 700, fontSize: FS.caption, letterSpacing: 2 }}>
@@ -310,9 +292,19 @@ export default function OfficeScreenPage() {
           </div>
         </header>
 
-        {/* time left on this slide */}
-        <div style={{ visibility: quiet ? 'hidden' : undefined, height: 4, background: '#2a2a2a', borderRadius: 99, overflow: 'hidden', marginBottom: '1.2vh', flex: '0 0 auto' }}>
-          {count > 1 && <div key={`${current}-${idx}`} style={{ height: '100%', background: LAVENDER, animation: `tick ${settings.seconds || 15}s linear both`, animationPlayState: celebration ? 'paused' : 'running' }} />}
+        {/* time left on this slide, with a dot per slide */}
+        <div style={{ visibility: quiet ? 'hidden' : undefined, display: 'flex', alignItems: 'center', gap: 14, marginBottom: '1.2vh', flex: '0 0 auto' }}>
+          <div style={{ flex: 1, height: 4, background: '#2a2a2a', borderRadius: 99, overflow: 'hidden' }}>
+            {count > 1 && <div key={`${current}-${idx}`} style={{ height: '100%', background: LAVENDER, animation: `tick ${settings.seconds || 15}s linear both`, animationPlayState: celebration ? 'paused' : 'running' }} />}
+          </div>
+          {count > 1 && !quiet && (
+            <div style={{ display: 'flex', gap: 6 }} aria-label="slides">
+              {slides.map((k, i) => (
+                <button key={k} title={SLIDE_TITLES[k]} onClick={() => setIdx(i)}
+                  style={{ width: i === idx % count ? 28 : 10, height: 10, borderRadius: 99, border: 'none', cursor: 'pointer', padding: 0, background: i === idx % count ? LEMON : '#525252', transition: 'all .4s' }} />
+              ))}
+            </div>
+          )}
         </div>
 
         {quiet ? (
