@@ -526,6 +526,31 @@ function downloadPayrollCSV(slips, monthTag) {
   URL.revokeObjectURL(url);
 }
 
+// One month's recorded incentives as a spreadsheet-friendly CSV, with a total row.
+function downloadIncentivesCSV(incentives, monthTag) {
+  const esc = (v) => {
+    const s = v == null ? '' : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const num = (v) => (v == null || v === '' ? 0 : Number(v));
+  const headers = ['Month', 'Employee', 'Email', 'Total Revenue', 'Incentive %', 'Incentive Amount', 'Note', 'Recorded By'];
+  const rows = incentives.map((i) => [
+    dayjs(`${i.month}-01`).format('MMMM YYYY'), i.user_name, i.user_email,
+    num(i.revenue), num(i.percent), num(i.amount), i.note || '', i.created_by ? i.created_by.split('@')[0] : '',
+  ]);
+  rows.push([
+    'TOTAL', `${incentives.length} employee${incentives.length !== 1 ? 's' : ''}`, '',
+    incentives.reduce((t, i) => t + num(i.revenue), 0), '', incentives.reduce((t, i) => t + num(i.amount), 0), '', '',
+  ]);
+  const csv = [headers, ...rows].map((r) => r.map(esc).join(',')).join('\n');
+  const url = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `incentives_${monthTag}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 // ── Salary Slips List ────────────────────────────────────────────────────────
 function SalarySlips() {
   const queryClient = useQueryClient();
@@ -1623,7 +1648,12 @@ function PayrollPanel() {
           </Col>
         </Row>
         <Divider style={{ margin: '16px 0 8px' }} />
-        <div style={{ fontWeight: 600, marginBottom: 8 }}>Incentives recorded for {incMonth.format('MMMM YYYY')}</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
+          <div style={{ fontWeight: 600 }}>Incentives recorded for {incMonth.format('MMMM YYYY')}</div>
+          <Button icon={<DownloadOutlined />} disabled={incentives.length === 0} onClick={() => downloadIncentivesCSV(incentives, incMonthStr)}>
+            Download CSV
+          </Button>
+        </div>
         <Table
           size="small" rowKey="id" dataSource={incentives} pagination={false} locale={{ emptyText: 'None yet for this month' }}
           columns={[
