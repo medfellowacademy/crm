@@ -433,6 +433,17 @@ export const communicationAPI = {
   markTraining: (id, data) => api.post(`/api/communications/mark-training`, { id, ...data }),
 };
 
+// Payroll: stored salaries, incentive rules/maths, server-side slip maths (Super Admin)
+export const payrollAPI = {
+  employees:         ()                   => api.get('/api/payroll/employees'),
+  setSalary:         (userId, salary)     => api.put(`/api/payroll/employees/${userId}/salary`, { monthly_salary: salary }),
+  incentiveSettings: ()                   => api.get('/api/payroll/incentive-settings'),
+  saveIncentiveSettings: (body)           => api.put('/api/payroll/incentive-settings', body),
+  incentive:         (month, userEmail)   => api.get('/api/payroll/incentive', { params: { month, user_email: userEmail } }),
+  calc:              (body)               => api.post('/api/payroll/calc', body),
+  duplicateSlips:    ()                   => api.get('/api/payroll/duplicate-slips'),
+};
+
 // Attendance API (geofenced check-in/check-out)
 export const attendanceAPI = {
   today:      ()             => api.get('/api/attendance/today'),

@@ -1,5 +1,5 @@
-import React, { useState, useMemo } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import React, { useState, useMemo, useEffect } from 'react';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import {
   Card, Button, Tag, Table, Typography, Space, Alert, Spin, Tabs, DatePicker,
   Empty, Select, InputNumber, Row, Col, Statistic, Divider, Tooltip, message, Input, Popconfirm,
@@ -11,7 +11,7 @@ import {
   DeleteOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { attendanceAPI, usersAPI, restrictionsAPI } from '../api/api';
+import { attendanceAPI, usersAPI, restrictionsAPI, payrollAPI } from '../api/api';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -737,6 +737,7 @@ function SalarySlips() {
 
 // ── Reports + Salary Calculator ─────────────────────────────────────────────
 function AttendanceReport() {
+  const queryClient = useQueryClient();
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
   const isAdmin     = currentUser.role === 'Super Admin';
 
@@ -750,6 +751,7 @@ function AttendanceReport() {
   const [selectedAdvanceId,   setSelectedAdvanceId]   = useState(null);
   const [incentiveAmount,     setIncentiveAmount]     = useState(0);
   const [incentiveNote,       setIncentiveNote]       = useState('');
+  const [incentiveInfo,       setIncentiveInfo]       = useState(null);   // the sales numbers behind the incentive
   const [festivalDate,        setFestivalDate]        = useState(null);
   const [festivalName,        setFestivalName]        = useState('');
 
@@ -795,7 +797,13 @@ function AttendanceReport() {
 
   const saveMutation = useMutation({
     mutationFn: (payload) => attendanceAPI.saveSlip(payload),
-    onSuccess: () => message.success('Salary slip saved. View it in the Salary Slips tab.'),
+    onSuccess: (res) => {
+      message.success(res?.data?.replaced
+        ? 'Salary slip updated — it replaces the earlier slip for this month.'
+        : 'Salary slip saved. View it in the Salary Slips tab.');
+      queryClient.invalidateQueries({ queryKey: ['salary-slips'] });
+      queryClient.invalidateQueries({ queryKey: ['payroll-duplicates'] });
+    },
     onError:   (e) => message.error('Failed to save: ' + (e?.response?.data?.detail || e.message)),
   });
 
@@ -855,7 +863,8 @@ function AttendanceReport() {
     const lateLeftEarly = dailyList.filter(r => r.status === 'late_and_left_early').length;
     const absent        = dailyList.filter(r => r.status === 'absent').length;
     const attended      = present + late + leftEarly + lateLeftEarly + weekOffs + festivalDays;
-    return { working, weekOffs, festivalDays, present, late, leftEarly, lateLeftEarly, absent, attended };
+    const lateDays      = late + lateLeftEarly;   // a late arrival counts as late even if they also left early
+    return { working, weekOffs, festivalDays, present, late, leftEarly, lateLeftEarly, lateDays, absent, attended };
   }, [dailyList]);
 
   // Leave balance calculation for this month
@@ -869,23 +878,72 @@ function AttendanceReport() {
     return { opening, accrued, available: opening + accrued, used, closing, payoutDays };
   }, [leaveBalance, leavesUsed]);
 
-  const salaryCalc = useMemo(() => {
-    const sal = parseFloat(monthlySalary);
-    if (!sal || summary.working === 0) return null;
-    const perDay          = sal / summary.working;
-    // Absences: reduce by leaves used this month (those are paid)
-    const effectiveAbsent = Math.max(0, summary.absent - leaveCalc.used);
-    const absentDeduction = effectiveAbsent * perDay;
-    const lateDeduction   = summary.late * parseFloat(lateDeductionPerDay || 0);
-    const advDeduction    = parseFloat(advanceDeduction || 0);
-    // Leave payout when balance would exceed 3 months
-    const leavePayoutAmt  = leaveCalc.payoutDays * perDay;
-    const incentive       = Math.max(0, parseFloat(incentiveAmount || 0));
-    const totalDeduction  = absentDeduction + lateDeduction + advDeduction;
-    const netSalary       = Math.max(0, sal - totalDeduction + leavePayoutAmt + incentive);
-    return { perDay, effectiveAbsent, absentDeduction, lateDeduction, advDeduction,
-             leavePayoutAmt, incentive, totalDeduction, netSalary };
-  }, [monthlySalary, lateDeductionPerDay, advanceDeduction, incentiveAmount, summary, leaveCalc]);
+  // Every rupee figure is worked out by the server (one day's pay = gross / days in the whole month),
+  // so what is previewed here is exactly what gets saved on the slip.
+  const calcInputs = {
+    gross_salary:           parseFloat(monthlySalary) || 0,
+    month:                  slipMonth,
+    days_absent:            summary.absent,
+    days_late:              summary.lateDays,
+    leaves_used:            leaveCalc.used,
+    late_deduction_per_day: parseFloat(lateDeductionPerDay || 0),
+    advance_deduction:      parseFloat(advanceDeduction || 0),
+    leave_payout_days:      leaveCalc.payoutDays,
+    incentive_amount:       parseFloat(incentiveAmount || 0),
+  };
+  const calcEnabled = isAdmin && !!slipMonth && calcInputs.gross_salary > 0 && summary.working > 0;
+  const { data: calcData } = useQuery({
+    queryKey:        ['payroll-calc', calcInputs],
+    queryFn:         () => payrollAPI.calc(calcInputs).then(r => r.data),
+    enabled:         calcEnabled,
+    placeholderData: keepPreviousData,
+    staleTime:       60 * 1000,
+  });
+  const salaryCalc = useMemo(() => (calcEnabled && calcData ? {
+    perDay: calcData.per_day, monthDays: calcData.working_days, effectiveAbsent: calcData.effective_absent,
+    absentDeduction: calcData.absent_deduction, lateDeduction: calcData.late_deduction_total,
+    advDeduction: calcData.advance_deduction, leavePayoutAmt: calcData.leave_payout_amt,
+    incentive: calcData.incentive_amount, totalDeduction: calcData.total_deduction, netSalary: calcData.net_salary,
+  } : null), [calcEnabled, calcData]);
+
+  // Salary is stored once per employee: picking the employee fills it in. Incentive belongs to one
+  // employee and month, so it starts again whenever either changes.
+  const { data: payrollEmployees = [] } = useQuery({
+    queryKey: ['payroll-employees'],
+    queryFn:  () => payrollAPI.employees().then(r => r.data),
+    enabled:  isAdmin,
+  });
+  useEffect(() => {
+    const e = payrollEmployees.find(x => x.email === selectedUser);
+    setMonthlySalary(e?.monthly_salary != null ? Number(e.monthly_salary) : '');
+  }, [selectedUser, payrollEmployees]);
+  useEffect(() => {
+    setIncentiveAmount(0); setIncentiveNote(''); setIncentiveInfo(null);
+  }, [selectedUser, slipMonth]);
+
+  const calcIncentive = async () => {
+    if (!selectedUser) { message.warning('Select an employee first.'); return; }
+    try {
+      const d = { ...(await payrollAPI.incentive(slipMonth, selectedUser)).data };
+      d.slab_rate_pct = d.rate_pct;            // what the slabs say; the rate can then be changed by hand
+      setIncentiveInfo(d);
+      setIncentiveAmount(d.incentive);
+      setIncentiveNote(d.pct != null ? `${d.rate_pct}% slab · ${d.pct}% of target` : '');
+      if (d.note) message.info(d.note);
+    } catch (e) { message.error('Failed: ' + (e?.response?.data?.detail || e.message)); }
+  };
+
+  // Change the rate by hand: the incentive becomes that rate of the same base amount.
+  const setIncentiveRate = (rate) => {
+    if (!incentiveInfo) return;
+    const r = Math.max(0, Number(rate) || 0);
+    const amount = Math.round(incentiveInfo.base_amount * r / 100);
+    setIncentiveInfo({ ...incentiveInfo, rate_pct: r, incentive: amount });
+    setIncentiveAmount(amount);
+    setIncentiveNote(incentiveInfo.pct != null ? `${r}% rate · ${incentiveInfo.pct}% of target` : `${r}% rate`);
+  };
+
+  const rangeIsMonthFromFirst = !!dateRange[0] && !!dateRange[1] && dateRange[0].date() === 1 && dateRange[0].isSame(dateRange[1], 'month');
 
   const handleDownloadCSV = async () => {
     if (!dateFrom || !dateTo) return;
@@ -908,9 +966,9 @@ function AttendanceReport() {
       user_name:             employeeName,
       month:                 slipMonth,
       gross_salary:          parseFloat(monthlySalary),
-      working_days:          summary.working,
+      working_days:          salaryCalc.monthDays,
       days_present:          summary.present,
-      days_late:             summary.late,
+      days_late:             summary.lateDays,
       days_left_early:       summary.leftEarly + summary.lateLeftEarly,
       days_absent:           summary.absent,
       paid_leaves_allowed:   leaveCalc.used,
@@ -922,6 +980,10 @@ function AttendanceReport() {
       paid_festival_days:    summary.festivalDays,
       incentive_amount:      salaryCalc.incentive,
       incentive_note:        incentiveNote || null,
+      ...(incentiveInfo ? {
+        incentive_revenue: incentiveInfo.booked, incentive_collected: incentiveInfo.collected,
+        incentive_sales: incentiveInfo.sales, incentive_pct: incentiveInfo.pct, incentive_rate: incentiveInfo.rate_pct,
+      } : {}),
       net_salary:            salaryCalc.netSalary,
       advance_deduction:     salaryCalc.advDeduction,
       leave_opening:         leaveCalc.opening,
@@ -935,6 +997,7 @@ function AttendanceReport() {
 
   const handleSaveSlipFull = async () => {
     if (!salaryCalc) return;
+    if (isAdmin && !selectedUser) { message.warning('Select an employee first — otherwise the slip would be for you.'); return; }
     const employeeEmail = selectedUser || currentUser.email;
     const employeeName  = (usersData || []).find(u => u.email === employeeEmail)?.full_name || employeeEmail;
     // 1. Save the slip
@@ -955,6 +1018,7 @@ function AttendanceReport() {
 
   const handleDownloadSlipPDF = () => {
     if (!salaryCalc) return;
+    if (isAdmin && !selectedUser) { message.warning('Select an employee first — otherwise the slip would be for you.'); return; }
     const slip = buildSlipPayload();
     const w = window.open('', '_blank');
     w.document.write(generateSlipHTML(slip));
@@ -1130,6 +1194,14 @@ function AttendanceReport() {
       {/* ── Salary Calculator ── */}
       {(isAdmin || selectedUser === currentUser.email) && (
         <Card title={<Space><DollarOutlined />Salary Calculator &amp; Slip Generator</Space>} style={{ marginBottom: 16 }}>
+          {isAdmin && !selectedUser && (
+            <Alert type="info" showIcon style={{ marginBottom: 12 }} message="Select an employee above to fill in their salary and make a slip." />
+          )}
+          {!rangeIsMonthFromFirst && (
+            <Alert type="warning" showIcon style={{ marginBottom: 12 }}
+              message="The attendance range is not one month starting on the 1st"
+              description="Pay is for the whole calendar month of the first date, so set the range from the 1st (to the month end, or to today for a part-month slip) or some absences won't be counted." />
+          )}
           <Row gutter={16}>
             <Col xs={24} sm={6}>
               <div style={{ marginBottom: 16 }}>
@@ -1146,7 +1218,7 @@ function AttendanceReport() {
               <Tooltip title="Amount deducted per late-arrival day. Set 0 to ignore late arrivals.">
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 6 }}>
-                    Late Entry Deduction / Day (₹) <span style={{ color: '#fa8c16' }}>● {summary.late} late day{summary.late !== 1 ? 's' : ''}</span>
+                    Late Entry Deduction / Day (₹) <span style={{ color: '#fa8c16' }}>● {summary.lateDays} late day{summary.lateDays !== 1 ? 's' : ''}</span>
                   </div>
                   <InputNumber
                     style={{ width: '100%' }} placeholder="e.g. 200" min={0}
@@ -1158,21 +1230,38 @@ function AttendanceReport() {
               </Tooltip>
             </Col>
             <Col xs={24} sm={6}>
-              <Tooltip title="One-off amount added to net pay this month (bonus / incentive).">
-                <div style={{ marginBottom: 16 }}>
-                  <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 6 }}>Incentive / Bonus (₹)</div>
-                  <InputNumber
-                    style={{ width: '100%' }} placeholder="e.g. 2000" min={0}
-                    value={incentiveAmount} onChange={(v) => setIncentiveAmount(v ?? 0)}
-                    formatter={v => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
-                    parser={v => v.replace(/,/g, '')} size="large"
-                  />
-                  <Input
-                    style={{ marginTop: 6 }} placeholder="Incentive note (optional)"
-                    value={incentiveNote} onChange={e => setIncentiveNote(e.target.value)}
-                  />
-                </div>
-              </Tooltip>
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 6 }}>Incentive / Bonus (₹)</div>
+                <InputNumber
+                  style={{ width: '100%' }} placeholder="e.g. 2000" min={0}
+                  value={incentiveAmount} onChange={(v) => setIncentiveAmount(v ?? 0)}
+                  formatter={v => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+                  parser={v => v.replace(/,/g, '')} size="large"
+                />
+                <Button style={{ marginTop: 6 }} block onClick={calcIncentive} disabled={!selectedUser}>Calculate from sales</Button>
+                <Input
+                  style={{ marginTop: 6 }} placeholder="Incentive note (optional)"
+                  value={incentiveNote} onChange={e => setIncentiveNote(e.target.value)}
+                />
+                {incentiveInfo && (
+                  <div style={{ marginTop: 6, fontSize: 12, color: '#595959', background: '#f6ffed', border: '1px solid #b7eb8f', borderRadius: 6, padding: '6px 8px' }}>
+                    <div>{incentiveInfo.sales} sale{incentiveInfo.sales !== 1 ? 's' : ''} · booked {fmtINR(incentiveInfo.booked)}</div>
+                    <div>Collected in {slipMonth}: {fmtINR(incentiveInfo.collected)}</div>
+                    <div>Target {incentiveInfo.revenue_target ? fmtINR(incentiveInfo.revenue_target) : 'not set'}
+                      {incentiveInfo.pct != null && <> · <b>{incentiveInfo.pct}%</b> achieved</>}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                      <span>Rate</span>
+                      <InputNumber size="small" min={0} max={100} step={0.5} style={{ width: 90 }} addonAfter="%"
+                        value={incentiveInfo.rate_pct} onChange={setIncentiveRate} />
+                      <span>of {incentiveInfo.base} ({fmtINR(incentiveInfo.base_amount)}) = <b>{fmtINR(incentiveInfo.incentive)}</b></span>
+                    </div>
+                    {incentiveInfo.slab_rate_pct !== incentiveInfo.rate_pct && (
+                      <div style={{ color: '#d46b08' }}>Rate set by hand (the slabs gave {incentiveInfo.slab_rate_pct}%)</div>
+                    )}
+                    {Number(incentiveAmount) !== incentiveInfo.incentive && <div style={{ color: '#d46b08' }}>Amount adjusted by hand from {fmtINR(incentiveInfo.incentive)}</div>}
+                  </div>
+                )}
+              </div>
             </Col>
             <Col xs={24} sm={6}>
               <div style={{ marginBottom: 16 }}>
@@ -1205,7 +1294,7 @@ function AttendanceReport() {
                 <Col xs={12} sm={6} style={{ marginBottom: 8 }}>
                   <Card size="small" bodyStyle={{ padding: '12px 16px', background: '#fff7e6', borderColor: '#ffd591' }}>
                     <div style={{ fontSize: 11, color: '#8c8c8c' }}>Late Days (deduction)</div>
-                    <div style={{ fontSize: 20, fontWeight: 700, color: '#fa8c16' }}>{summary.late}</div>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: '#fa8c16' }}>{summary.lateDays}</div>
                     {lateDeductionPerDay > 0 && (
                       <div style={{ fontSize: 11, color: '#fa8c16' }}>− {fmtINR(salaryCalc.lateDeduction)}</div>
                     )}
@@ -1224,6 +1313,7 @@ function AttendanceReport() {
                   <Card size="small" bodyStyle={{ padding: '14px 16px', background: '#f9f0ff', borderColor: '#d3adf7' }}>
                     <div style={{ fontSize: 11, color: '#8c8c8c' }}>Per Day Rate</div>
                     <div style={{ fontSize: 20, fontWeight: 700, color: '#722ed1' }}>{fmtINR(salaryCalc.perDay)}</div>
+                    <div style={{ fontSize: 11, color: '#8c8c8c' }}>gross ÷ {salaryCalc.monthDays} days in the month</div>
                   </Card>
                 </Col>
                 <Col xs={24} sm={8} style={{ marginBottom: 8 }}>
@@ -1339,6 +1429,166 @@ function AttendanceReport() {
           ) : (
             <Text type="secondary">Enter the monthly gross salary above to calculate net pay.</Text>
           )}
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// ── Payroll setup (admin): stored salaries, incentive rules, duplicate slips ──────────────
+function PayrollPanel() {
+  const queryClient = useQueryClient();
+  const [drafts, setDrafts] = useState({});          // employee id -> salary being typed
+  const [base,   setBase]   = useState('collected');
+  const [slabs,  setSlabs]  = useState([]);
+
+  const { data: employees = [], isLoading } = useQuery({
+    queryKey: ['payroll-employees'],
+    queryFn:  () => payrollAPI.employees().then(r => r.data),
+  });
+  const { data: rules } = useQuery({
+    queryKey: ['incentive-settings'],
+    queryFn:  () => payrollAPI.incentiveSettings().then(r => r.data),
+  });
+  const { data: dupes = [] } = useQuery({
+    queryKey: ['payroll-duplicates'],
+    queryFn:  () => payrollAPI.duplicateSlips().then(r => r.data),
+  });
+  useEffect(() => {
+    if (rules) { setBase(rules.base); setSlabs(rules.slabs.map(s => ({ ...s }))); }
+  }, [rules]);
+
+  const errMsg = (e) => 'Failed: ' + (e?.response?.data?.detail || e.message);
+
+  const saveSalary = useMutation({
+    mutationFn: ({ id, salary }) => payrollAPI.setSalary(id, salary),
+    onSuccess: (_, { id }) => {
+      message.success('Salary saved.');
+      setDrafts(d => { const n = { ...d }; delete n[id]; return n; });
+      queryClient.invalidateQueries({ queryKey: ['payroll-employees'] });
+    },
+    onError: (e) => message.error(errMsg(e)),
+  });
+
+  const saveRules = useMutation({
+    mutationFn: () => payrollAPI.saveIncentiveSettings({
+      base, slabs: slabs.map(s => ({ min_pct: Number(s.min_pct) || 0, rate_pct: Number(s.rate_pct) || 0 })),
+    }),
+    onSuccess: () => { message.success('Incentive rules saved.'); queryClient.invalidateQueries({ queryKey: ['incentive-settings'] }); },
+    onError: (e) => message.error(errMsg(e)),
+  });
+
+  const deleteSlip = useMutation({
+    mutationFn: (id) => attendanceAPI.deleteSlip(id),
+    onSuccess: () => {
+      message.success('Salary slip deleted.');
+      queryClient.invalidateQueries({ queryKey: ['payroll-duplicates'] });
+      queryClient.invalidateQueries({ queryKey: ['salary-slips'] });
+    },
+    onError: (e) => message.error(errMsg(e)),
+  });
+
+  const setSlab = (i, key, v) => setSlabs(cur => cur.map((s, j) => (j === i ? { ...s, [key]: v } : s)));
+  const sortedSlabs = [...slabs].sort((a, b) => (Number(a.min_pct) || 0) - (Number(b.min_pct) || 0));
+  const money = (v) => ({
+    min: 0, style: { width: 150 }, formatter: x => `${x}`.replace(/\B(?=(\d{3})+(?!\d))/g, ','), parser: x => x.replace(/,/g, ''), value: v,
+  });
+
+  return (
+    <div>
+      <Card title={<Space><DollarOutlined />Monthly salaries</Space>} style={{ marginBottom: 16 }}>
+        <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+          Set each person's gross monthly salary once. It fills in automatically when you make their slip.
+        </Text>
+        <Table
+          size="small" loading={isLoading} rowKey="id" dataSource={employees} pagination={{ pageSize: 15, hideOnSinglePage: true }}
+          columns={[
+            { title: 'Employee', dataIndex: 'full_name', render: (v, r) => <span>{v}{!r.is_active && <Tag style={{ marginLeft: 8 }}>inactive</Tag>}</span> },
+            { title: 'Role', dataIndex: 'role', width: 140 },
+            { title: 'Monthly salary (₹)', key: 'salary', width: 330, render: (_, r) => {
+              const current = r.monthly_salary != null ? Number(r.monthly_salary) : null;
+              const draft = drafts[r.id];
+              const value = draft !== undefined ? draft : current;
+              const changed = draft !== undefined && draft !== current;
+              return (
+                <Space>
+                  <InputNumber {...money(value)} placeholder="not set" onChange={(v) => setDrafts(d => ({ ...d, [r.id]: v }))} />
+                  <Button type="primary" size="small" disabled={!changed} loading={saveSalary.isPending && saveSalary.variables?.id === r.id}
+                    onClick={() => saveSalary.mutate({ id: r.id, salary: draft ?? null })}>Save</Button>
+                </Space>
+              );
+            } },
+          ]}
+        />
+      </Card>
+
+      <Card title={<Space><DollarOutlined />Sales incentive rules</Space>} style={{ marginBottom: 16 }}>
+        {slabs.length === 0 && (
+          <Alert type="info" showIcon style={{ marginBottom: 12 }}
+            message="No slabs yet"
+            description="Add your own slabs below, or leave them empty and type the rate by hand on each salary slip. Nothing is built in." />
+        )}
+        <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+          Achievement = the revenue booked from students enrolled in the month ÷ the person's revenue target (set on Sales Targets).
+          The slabs suggest a rate; on every slip you can still change the rate or the amount by hand.
+        </Text>
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <div>
+            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Incentive is paid on</div>
+            <Select value={base} onChange={setBase} style={{ width: 360 }} options={[
+              { value: 'collected', label: 'Money collected in the month (recommended)' },
+              { value: 'booked',    label: 'Revenue booked from the month’s enrollments' },
+            ]} />
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Slabs</div>
+            {slabs.length === 0 && <Text type="secondary">No slabs set.</Text>}
+            {slabs.map((s, i) => (
+              <Space key={i} style={{ display: 'flex', marginBottom: 8 }} wrap>
+                <span>From</span>
+                <InputNumber min={0} max={1000} value={s.min_pct} onChange={v => setSlab(i, 'min_pct', v)} addonAfter="% of target" style={{ width: 170 }} />
+                <span>→ pay</span>
+                <InputNumber min={0} max={100} step={0.5} value={s.rate_pct} onChange={v => setSlab(i, 'rate_pct', v)} addonAfter="%" style={{ width: 120 }} />
+                <Button danger type="text" icon={<DeleteOutlined />} onClick={() => setSlabs(cur => cur.filter((_, j) => j !== i))} />
+              </Space>
+            ))}
+            <Button icon={<PlusOutlined />} disabled={slabs.length >= 10} onClick={() => setSlabs(cur => [...cur, { min_pct: 0, rate_pct: 0 }])}>Add slab</Button>
+          </div>
+          {sortedSlabs.length > 0 && (
+            <Text type="secondary">
+              Below {sortedSlabs[0].min_pct}% earns nothing{sortedSlabs.map((s, i) => (
+                `; ${s.min_pct}%${sortedSlabs[i + 1] ? `–${sortedSlabs[i + 1].min_pct}%` : ' and above'} earns ${s.rate_pct}%`
+              )).join('')}.
+            </Text>
+          )}
+          <Button type="primary" icon={<SaveOutlined />} loading={saveRules.isPending} onClick={() => saveRules.mutate()}>Save incentive rules</Button>
+        </Space>
+      </Card>
+
+      {dupes.length > 0 && (
+        <Card title={<Space><WarningOutlined style={{ color: '#fa8c16' }} />Duplicate salary slips ({dupes.length})</Space>}>
+          <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+            These employee-months were saved more than once, sometimes with different pay. Keep the right one and delete the other.
+            Saving a slip again now replaces the earlier one, so this can't grow.
+          </Text>
+          <Table
+            size="small" rowKey={(r) => `${r.user_email}-${r.month}`} dataSource={dupes} pagination={false}
+            columns={[
+              { title: 'Employee', dataIndex: 'user_name' },
+              { title: 'Month', dataIndex: 'month', width: 110, render: m => dayjs(`${m}-01`).format('MMM YYYY') },
+              { title: 'Saved copies', key: 'slips', render: (_, r) => (
+                <Space wrap>
+                  {r.slips.map(s => (
+                    <Popconfirm key={s.id} title="Delete this slip?" description="Only this copy is removed." okText="Delete" okButtonProps={{ danger: true }} onConfirm={() => deleteSlip.mutate(s.id)}>
+                      <Button size="small" icon={<DeleteOutlined />}>
+                        {fmtINR(s.net_salary)} · {dayjs(s.created_at).format('DD MMM, h:mm A')}
+                      </Button>
+                    </Popconfirm>
+                  ))}
+                </Space>
+              ) },
+            ]}
+          />
         </Card>
       )}
     </div>
@@ -1547,6 +1797,7 @@ export default function AttendancePage() {
     }
     if (!noPayroll) {
       items.push(
+        { key: 'payroll',  label: <Space><DollarOutlined />Payroll</Space>,      children: <PayrollPanel /> },
         { key: 'slips',    label: <Space><DollarOutlined />Salary Slips</Space>, children: <SalarySlips /> },
         { key: 'advances', label: <Space><DollarOutlined />Advances</Space>,     children: <AdvancesPanel /> },
       );

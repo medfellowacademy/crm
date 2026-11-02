@@ -127,6 +127,7 @@ from ai_assistant import ai_assistant
 from communication_service_v2 import whatsapp_service, email_service, comm_service
 from ai_chat import router as ai_chat_router
 from attendance import router as attendance_router
+from payroll_router import router as payroll_router
 from sheets_router import router as sheets_router
 from mbg_router import router as mbg_router
 from departments_router import router as departments_router
@@ -739,6 +740,7 @@ app.add_middleware(
 
 app.include_router(ai_chat_router)
 app.include_router(attendance_router)
+app.include_router(payroll_router)
 app.include_router(sheets_router)
 app.include_router(mbg_router)
 app.include_router(departments_router)

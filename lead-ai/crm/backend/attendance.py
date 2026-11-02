@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from logger_config import logger
 from auth import decode_access_token
 from supabase_data_layer import supabase_data
+import payroll
 import visibility as vis
 
 router = APIRouter(prefix="/api/attendance", tags=["attendance"])
@@ -576,13 +577,13 @@ class SalarySlipPayload(BaseModel):
     user_name: str
     month: str  # YYYY-MM
     gross_salary: float
-    working_days: int
+    working_days: int = 0
     days_present: int = 0
     days_late: int = 0
     days_left_early: int = 0
     days_absent: int = 0
-    paid_leaves_allowed: int = 0
-    effective_absent: int = 0
+    paid_leaves_allowed: float = 0
+    effective_absent: float = 0
     late_deduction_per_day: float = 0
     late_deduction_total: float = 0
     absent_deduction: float = 0
@@ -590,24 +591,75 @@ class SalarySlipPayload(BaseModel):
     paid_festival_days: int = 0
     incentive_amount: float = 0
     incentive_note: Optional[str] = None
-    net_salary: float
+    # how the incentive was worked out (from the sales data), kept on the slip for the record
+    incentive_revenue: Optional[float] = None
+    incentive_collected: Optional[float] = None
+    incentive_sales: Optional[int] = None
+    incentive_pct: Optional[float] = None
+    incentive_rate: Optional[float] = None
+    net_salary: float = 0
+    advance_deduction: float = 0
+    leave_opening: Optional[float] = None
+    leaves_used: Optional[float] = None
+    leave_closing: Optional[float] = None
+    leave_payout_days: float = 0
+    leave_payout_amt: float = 0
     notes: Optional[str] = None
+
+
+_INCENTIVE_DETAIL_COLUMNS = ("incentive_revenue", "incentive_collected", "incentive_sales", "incentive_pct", "incentive_rate")
 
 
 @router.post("/salary-slips")
 async def save_salary_slip(payload: SalarySlipPayload, request: Request):
+    """Save a slip. Every rupee figure is recomputed here from the observed inputs (attendance counts,
+    leaves, advance, incentive), so a slip can't disagree with itself. One slip per employee per month:
+    saving again replaces the earlier one instead of adding a second."""
     current = _current_user(request)
     if not _view_all(current, vis.HIDE_PAYROLL):
         raise HTTPException(status_code=403, detail="Admin role required to save salary slips")
+    if not payroll_month_ok(payload.month):
+        raise HTTPException(status_code=422, detail="month must be YYYY-MM")
+    leaves = payload.leaves_used if payload.leaves_used is not None else payload.paid_leaves_allowed
+    calc = payroll.compute_slip(payload.gross_salary, payload.month, payload.days_absent, payload.days_late, leaves,
+                                payload.late_deduction_per_day, payload.advance_deduction, payload.leave_payout_days,
+                                payload.incentive_amount)
+    data = payload.dict()
+    data.update({
+        "working_days": calc["working_days"], "effective_absent": int(round(calc["effective_absent"])),
+        "paid_leaves_allowed": int(round(leaves or 0)), "absent_deduction": calc["absent_deduction"],
+        "late_deduction_total": calc["late_deduction_total"], "advance_deduction": calc["advance_deduction"],
+        "leave_payout_amt": calc["leave_payout_amt"], "incentive_amount": calc["incentive_amount"],
+        "total_deduction": calc["total_deduction"], "net_salary": calc["net_salary"],
+    })
+    data = {k: v for k, v in data.items() if v is not None}
+    data["generated_by"] = current["email"]
+
+    def write(row: dict, existing_id: Optional[int]):
+        table = supabase_data.client.table("salary_slips")
+        return (table.update(row).eq("id", existing_id) if existing_id else table.insert(row)).execute()
+
     try:
-        data = payload.dict()
-        data["generated_by"] = current["email"]
-        resp = supabase_data.client.table("salary_slips").insert(data).execute()
-        logger.info("Salary slip saved for {} ({}) by {}", payload.user_email, payload.month, current["email"])
-        return resp.data[0] if resp.data else {}
+        found = (supabase_data.client.table("salary_slips").select("id").eq("user_email", payload.user_email)
+                 .eq("month", payload.month).order("created_at", desc=True).limit(1).execute().data or [])
+        existing_id = found[0]["id"] if found else None
+        try:
+            resp = write(data, existing_id)
+        except Exception as first:
+            if not any(c in str(first) for c in _INCENTIVE_DETAIL_COLUMNS):
+                raise
+            logger.warning("salary_slips is missing the incentive detail columns; saving without them: {}", first)
+            resp = write({k: v for k, v in data.items() if k not in _INCENTIVE_DETAIL_COLUMNS}, existing_id)
+        logger.info("Salary slip {} for {} ({}) by {}", "replaced" if existing_id else "saved",
+                    payload.user_email, payload.month, current["email"])
+        return {**(resp.data[0] if resp.data else {}), "replaced": bool(existing_id)}
     except Exception as e:
         logger.error("Failed to save salary slip: {}", e)
         raise HTTPException(status_code=500, detail="Failed to save salary slip")
+
+
+def payroll_month_ok(month: str) -> bool:
+    return bool(month) and len(month) == 7 and month[4] == "-" and month[:4].isdigit() and month[5:].isdigit() and 1 <= int(month[5:]) <= 12
 
 
 @router.get("/salary-slips")
