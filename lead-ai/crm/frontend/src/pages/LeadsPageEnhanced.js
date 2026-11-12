@@ -265,6 +265,7 @@ const LeadsPageEnhanced = () => {
 
   const [chatLead, setChatLead] = useState(null);
   const [repeatDrawerVisible, setRepeatDrawerVisible] = useState(false);
+  const [repeatRefreshing, setRepeatRefreshing] = useState(false);
   const [drawerVisible, setDrawerVisible] = useState(false);
   // Free-text search values for the "Course Interested" selects — lets a
   // user add a course that isn't in the predefined list instead of being
@@ -2715,13 +2716,16 @@ const LeadsPageEnhanced = () => {
         onClose={() => setRepeatDrawerVisible(false)}
         width={780}
         extra={
-          <Button size="small" icon={<ReloadOutlined />} onClick={async () => {
+          <Button size="small" icon={<ReloadOutlined />} loading={repeatRefreshing} disabled={repeatRefreshing} onClick={async () => {
+            setRepeatRefreshing(true);
             try {
-              await duplicatesAPI.refreshRepeated();
+              const res = await duplicatesAPI.refreshRepeated();
               queryClient.invalidateQueries({ queryKey: ['repeated-leads'] });
               queryClient.invalidateQueries({ queryKey: ['leads'] });
-              message.success('Repeated leads refreshed');
+              if (res?.data?.running) message.info('A refresh is already running - try again in a minute');
+              else message.success('Repeated leads refreshed');
             } catch { message.error('Refresh failed'); }
+            finally { setRepeatRefreshing(false); }
           }}>Refresh</Button>
         }
       >

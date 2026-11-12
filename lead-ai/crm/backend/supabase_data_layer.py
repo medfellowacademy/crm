@@ -615,38 +615,61 @@ class SupabaseDataLayer:
             # forward); touching all 6k+ one-by-one over REST is far too slow.
             multi = {lid: a for lid, a in agg.items() if a["cnt"] > 1}
 
-            # Also clear the flag on anything still marked repeated that no longer
-            # has multiple submissions.
+            # What is stored today for every lead currently flagged repeated (paged:
+            # a plain select stops at 1000 rows). Only rows that differ get written,
+            # so a refresh with nothing new is a handful of reads and zero writes.
+            current: dict = {}
             try:
-                flagged = (self.client.table('leads').select('id')
-                           .eq('is_repeated', True).execute().data) or []
-                for row in flagged:
-                    if row['id'] not in multi:
-                        self.client.table('leads').update({
-                            'is_repeated': False, 'submission_count': 1,
-                        }).eq('id', row['id']).execute()
+                off = 0
+                while True:
+                    rows = (self.client.table('leads')
+                            .select('id,submission_count,repeat_channels,first_submission_at,last_submission_at')
+                            .eq('is_repeated', True).range(off, off + page_size - 1).execute().data) or []
+                    for row in rows:
+                        current[row['id']] = row
+                    if len(rows) < page_size:
+                        break
+                    off += page_size
             except Exception as e:
-                logger.warning(f"refresh_repeated_marks: stale-flag cleanup failed: {e}")
+                logger.warning(f"refresh_repeated_marks: could not read current flags, rewriting all: {e}")
+                current = {}
+
+            # Clear the flag on anything still marked repeated that no longer
+            # has multiple submissions.
+            for lid in [i for i in current if i not in multi]:
+                try:
+                    self.client.table('leads').update({
+                        'is_repeated': False, 'submission_count': 1,
+                    }).eq('id', lid).execute()
+                except Exception as e:
+                    logger.warning(f"refresh_repeated_marks: stale-flag cleanup failed for lead id={lid}: {e}")
 
             repeated = 0
+            written = 0
             for lid, a in multi.items():
+                channels = sorted(a["channels"]) or None
                 patch = {
                     "submission_count": a["cnt"],
                     "is_repeated": True,
-                    "repeat_channels": sorted(a["channels"]) or None,
+                    "repeat_channels": channels,
                 }
                 if a["first"]:
                     patch["first_submission_at"] = a["first"]
                 if a["last"]:
                     patch["last_submission_at"] = a["last"]
                 patch = {k: v for k, v in patch.items() if v is not None}
+                have = current.get(lid)
+                if have and all(have.get(k) == v for k, v in patch.items() if k != "is_repeated"):
+                    repeated += 1
+                    continue
                 try:
                     self.client.table('leads').update(patch).eq('id', lid).execute()
                     repeated += 1
+                    written += 1
                 except Exception as e:
                     logger.warning(f"refresh_repeated_marks: update failed for lead id={lid}: {e}")
 
-            logger.info(f"refresh_repeated_marks: {repeated} repeated leads recomputed")
+            logger.info(f"refresh_repeated_marks: {repeated} repeated leads ({written} rewritten)")
             return repeated
         except Exception as e:
             logger.error(f"refresh_repeated_marks failed: {e}")

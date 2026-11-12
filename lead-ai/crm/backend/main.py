@@ -8667,18 +8667,27 @@ def get_repeated_leads(
         raise HTTPException(status_code=500, detail="Failed to fetch repeated leads")
 
 
+_refresh_repeated_lock = threading.Lock()
+
+
+# Plain `def` on purpose: FastAPI runs it in a worker thread. As `async def` this blocking
+# job froze the whole event loop for minutes and every other request queued behind it.
 @app.post("/api/leads/refresh-repeated")
-async def refresh_repeated_marks(current_user: dict = Depends(get_current_user)):
+def refresh_repeated_marks(current_user: dict = Depends(get_current_user)):
     """Re-scan all leads and update is_repeated flag based on phone/email matches."""
     role = (current_user.get("role") or "").lower()
     if role not in ("super admin", "admin", "manager", "team leader"):
         raise HTTPException(status_code=403, detail="Admin or Manager required")
+    if not _refresh_repeated_lock.acquire(blocking=False):
+        return {"marked": None, "running": True, "message": "A refresh is already running - try again in a minute"}
     try:
         count = supabase_data.refresh_repeated_marks()
         return {"marked": count, "message": f"{count} leads marked as repeated"}
     except Exception as e:
         logger.error(f"refresh_repeated_marks error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        _refresh_repeated_lock.release()
 
 
 @app.post("/api/leads/merge")
