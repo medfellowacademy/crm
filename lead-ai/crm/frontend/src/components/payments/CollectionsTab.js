@@ -33,7 +33,10 @@ export default function CollectionsTab({ data }) {
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col xs={12} md={6}><Card><Statistic title={`Collected — ${thisMonth ? dayjs(thisMonth.month + '-01').format('MMM YYYY') : ''}`} value={thisMonth?.collected || 0} formatter={fmt} valueStyle={{ color: '#389e0d' }} /></Card></Col>
         <Col xs={12} md={6}><Card><Statistic title="Expected this month" value={thisMonth?.expected || 0} formatter={fmt} /></Card></Col>
-        <Col xs={12} md={6}><Card><Statistic title="Total overdue" value={data?.overdue_total || 0} formatter={fmt} valueStyle={{ color: (data?.overdue_total || 0) > 0 ? '#cf1322' : undefined }} /></Card></Col>
+        <Col xs={12} md={6}><Card><Statistic title="Total overdue EMI" value={data?.overdue_total || 0} formatter={fmt} valueStyle={{ color: (data?.overdue_total || 0) > 0 ? '#cf1322' : undefined }} /></Card></Col>
+        {(data?.overdue_registration_total || 0) > 0 && (
+          <Col xs={12} md={6}><Card><Statistic title="Registration pending (to collect)" value={data.overdue_registration_total} formatter={fmt} valueStyle={{ color: '#d46b08' }} /></Card></Col>
+        )}
         <Col xs={12} md={6}>
           <Card>
             <Statistic title="Collection rate" value={data?.summary?.collection_rate || 0} suffix="%" />

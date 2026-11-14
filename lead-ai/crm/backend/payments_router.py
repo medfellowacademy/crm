@@ -107,13 +107,16 @@ def get_payments_overview(
         today = pa.today_ist()
         everything = scoped_enrolled(rbac.lead_scope_names(current_user))
         period = [l for l in everything if pa.in_period(l, date_from, date_to)]
-        overdue = pa.overdue_emis(everything, today)
+        overdue_all = pa.overdue_emis(everything, today)
+        # A registration balance is not an EMI: keep it out of the EMI overdue figures
+        overdue = [o for o in overdue_all if o.get("kind") != "registration"]
         return {
             "leads": period,
             "summary": pa.summary(period, today),
             "collections": pa.collections_by_month(everything, today.strftime("%Y-%m"), 12),
             "aging": pa.aging_buckets(overdue),
             "overdue_total": round(sum(o["amount"] for o in overdue), 2),
+            "overdue_registration_total": round(sum(o["amount"] for o in overdue_all if o.get("kind") == "registration"), 2),
             "due_soon": pa.due_soon(everything, today, 30),
             "by_counselor": pa.by_counselor(period, today),
             "data_quality": pa.data_quality(period),
@@ -156,7 +159,10 @@ def get_overdue_worklist(current_user: dict = Depends(get_current_user)):
             o["expected_date"] = mine["promised_date"] if mine else None
             st = newest(staged, o)
             o["followup_status"] = st["status"] if st else None
-        return {"items": overdue, "total": round(sum(o["amount"] for o in overdue), 2),
+        emi_total = round(sum(o["amount"] for o in overdue if o.get("kind") != "registration"), 2)
+        reg_total = round(sum(o["amount"] for o in overdue if o.get("kind") == "registration"), 2)
+        return {"items": overdue, "total": round(emi_total + reg_total, 2),
+                "emi_total": emi_total, "registration_total": reg_total,
                 "statuses": list(OVERDUE_STATUSES)}
     except Exception as e:
         logger.error(f"get_overdue_worklist error: {e}")

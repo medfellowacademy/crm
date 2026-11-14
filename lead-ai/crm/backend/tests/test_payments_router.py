@@ -338,3 +338,16 @@ def test_dropped_list_is_scoped_and_skips_students_who_never_paid(client):
     assert [i["lead_id"] for i in client.get("/api/payments/dropped").json()["items"]] == ["L1"]
     client.user.update({"role": "Counselor", "full_name": "Ravi"})
     assert client.get("/api/payments/dropped").json()["items"] == []
+
+
+def test_registration_balance_is_kept_out_of_the_emi_overdue_totals(client):
+    client.tables["leads"][0]["emi_details"] = [
+        {"date": "2026-01-01", "amount": 5000, "status": "pending"},
+        {"date": "2026-01-01", "amount": 8000, "status": "pending", "kind": "registration"},
+    ]
+    d = client.get("/api/payments/overdue").json()
+    assert d["emi_total"] == 5000 + 7000 and d["registration_total"] == 8000
+    assert {i["kind"] for i in d["items"]} == {"emi", "registration"}
+    o = client.get("/api/payments/enrolled").json()
+    assert o["overdue_total"] == 12000 and o["overdue_registration_total"] == 8000
+    assert sum(a["count"] for a in o["aging"]) == 2

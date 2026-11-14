@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Card, Table, Tag, Button, Space, Typography, Modal, Form, Input, DatePicker, message, Result, Empty, Statistic, Tooltip, Select } from 'antd';
+import { Card, Table, Tag, Button, Space, Typography, Modal, Form, Input, DatePicker, message, Result, Empty, Statistic, Tooltip, Select, Segmented } from 'antd';
 import { PhoneOutlined, CheckOutlined, MessageOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { paymentsAPI } from '../../api/api';
@@ -57,6 +57,7 @@ export default function OverdueTab({ onChanged }) {
   const [pay, setPay] = useState(null);
   const [follow, setFollow] = useState(null);
   const [statusFilter, setStatusFilter] = useState(null);
+  const [section, setSection] = useState('emi');
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['payments-overdue'],
@@ -74,16 +75,25 @@ export default function OverdueTab({ onChanged }) {
   }
 
   const statuses = data?.statuses || Object.keys(STATUS_COLOR);
-  const all = data?.items || [];
+  const everything = data?.items || [];
+  const isReg = (r) => r.kind === 'registration';
+  const regCount = everything.filter(isReg).length;
+  const emiCount = everything.length - regCount;
+  const all = everything.filter((r) => (section === 'registration' ? isReg(r) : !isReg(r)));
+  const noun = section === 'registration' ? 'registration balances' : 'EMIs';
   const items = statusFilter == null ? all
     : statusFilter === '__none' ? all.filter((r) => !r.followup_status)
       : all.filter((r) => r.followup_status === statusFilter);
   const countOf = (s) => all.filter((r) => r.followup_status === s).length;
   return (
     <div>
+      <Segmented
+        style={{ marginBottom: 16 }} value={section} onChange={(v) => { setSection(v); setStatusFilter(null); }}
+        options={[{ value: 'emi', label: `EMIs (${emiCount})` }, { value: 'registration', label: `Registration pending (${regCount})` }]}
+      />
       <Space size={24} style={{ marginBottom: 16 }} wrap>
-        <Statistic title="Overdue EMIs" value={items.length} />
-        <Statistic title="Total overdue" value={items.reduce((s, r) => s + (Number(r.amount) || 0), 0)} formatter={fmt} valueStyle={{ color: items.length ? '#cf1322' : undefined }} />
+        <Statistic title={section === 'registration' ? 'Registration pending' : 'Overdue EMIs'} value={items.length} />
+        <Statistic title={section === 'registration' ? 'Registration to collect' : 'Total overdue EMI'} value={items.reduce((s, r) => s + (Number(r.amount) || 0), 0)} formatter={fmt} valueStyle={{ color: items.length ? '#cf1322' : undefined }} />
         <div>
           <div style={{ color: 'rgba(0,0,0,.45)', fontSize: 14, marginBottom: 4 }}>Filter by status</div>
           <Select
@@ -99,7 +109,7 @@ export default function OverdueTab({ onChanged }) {
         <Table
           loading={isLoading} size="middle" rowKey={(r) => `${r.lead_id}-${r.emi_index}`}
           dataSource={items} pagination={{ pageSize: 15, hideOnSinglePage: true }} scroll={{ x: 'max-content' }}
-          locale={{ emptyText: <Empty description="No overdue EMIs — nice" /> }}
+          locale={{ emptyText: <Empty description={`No overdue ${noun} — nice`} /> }}
           columns={[
             { title: 'Lead', key: 'lead', render: (_, r) => (
               <div><div style={{ fontWeight: 600 }}>{r.name}</div><Text type="secondary" style={{ fontSize: 12 }}>{r.phone}</Text></div>

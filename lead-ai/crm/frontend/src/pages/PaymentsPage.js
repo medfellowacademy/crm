@@ -51,7 +51,7 @@ const ExpandedRow = ({ lead, onUpload, uploading, onMarkPaid }) => {
   const [showLog, setShowLog] = useState(false);
   const regPayments = safeParse(lead.registration_payments, []);
   const lmsModules  = safeParse(lead.lms_modules, []);
-  const { total, reg, emis, emiPaid, collected, balance: remaining, pct, overdueAmount, scheduledPending, unscheduled, overScheduled } = financeFor(lead);
+  const { total, reg, emis, emiPaid, collected, balance: remaining, pct, overdueAmount, regPendingAmount, scheduledPending, unscheduled, overScheduled } = financeFor(lead);
   const today = dayjs().startOf('day');
 
   return (
@@ -92,8 +92,13 @@ const ExpandedRow = ({ lead, onUpload, uploading, onMarkPaid }) => {
             <Descriptions.Item label="Remaining to collect">
               <Text strong style={{ color: remaining > 0 ? '#dc2626' : '#059669' }}>{fmt(remaining)}</Text>
             </Descriptions.Item>
+            {regPendingAmount > 0 && (
+              <Descriptions.Item label="Registration pending">
+                <Text strong style={{ color: '#d46b08' }}>{fmt(regPendingAmount)}</Text>
+              </Descriptions.Item>
+            )}
             {overdueAmount > 0 && (
-              <Descriptions.Item label="Overdue">
+              <Descriptions.Item label="Overdue EMI">
                 <Text strong style={{ color: '#dc2626' }}>
                   {fmt(overdueAmount)} <AlertTriangle size={13} style={{ verticalAlign: -2 }} />
                 </Text>
@@ -320,6 +325,8 @@ const PaymentsPage = () => {
   const totalCollected = finances.reduce((s, f) => s + f.collected, 0);
   const totalBalance   = finances.reduce((s, f) => s + f.balance,   0);
   const totalOverdue   = finances.reduce((s, f) => s + f.overdueAmount, 0);
+  const totalRegPending  = finances.reduce((s, f) => s + f.regPendingAmount, 0);
+  const regPendingCount  = finances.filter(f => f.regPendingAmount > 0).length;
   const totalScheduled   = finances.reduce((s, f) => s + f.scheduledPending, 0);
   const totalUnscheduled = finances.reduce((s, f) => s + f.unscheduled, 0);
   const overdueCount   = finances.filter(f => f.overdueAmount > 0).length;
@@ -439,7 +446,7 @@ const PaymentsPage = () => {
       title: 'Balance Due',
       key: 'balance',
       render: (_, r) => {
-        const { balance, overdueAmount, unscheduled } = financeFor(r);
+        const { balance, overdueAmount, regPendingAmount, unscheduled } = financeFor(r);
         if (balance <= 0) return <Tag color="green">Cleared</Tag>;
         return (
           <div>
@@ -449,7 +456,12 @@ const PaymentsPage = () => {
             )}
             {overdueAmount > 0 && (
               <div style={{ fontSize: 11, color: '#dc2626' }}>
-                {fmt(overdueAmount)} overdue
+                {fmt(overdueAmount)} overdue EMI
+              </div>
+            )}
+            {regPendingAmount > 0 && (
+              <div style={{ fontSize: 11, color: '#d46b08' }}>
+                {fmt(regPendingAmount)} registration pending
               </div>
             )}
           </div>
@@ -550,11 +562,14 @@ const PaymentsPage = () => {
     { label: 'Remaining to collect', value: fmt(totalBalance),
       sub: `${fmt(totalScheduled)} scheduled · ${fmt(totalUnscheduled)} not scheduled`,                         bg: 'linear-gradient(135deg,#f59e0b,#d97706)', Icon: FileText },
     {
-      label: 'Overdue', value: fmt(totalOverdue),
+      label: 'Overdue EMI', value: fmt(totalOverdue),
       sub: overdueCount > 0 ? `${overdueCount} lead${overdueCount > 1 ? 's' : ''}` : 'all on time',
       bg: totalOverdue > 0 ? 'linear-gradient(135deg,#ef4444,#dc2626)' : 'linear-gradient(135deg,#9ca3af,#6b7280)',
       Icon: AlertTriangle,
     },
+    { label: 'Registration pending', value: fmt(totalRegPending),
+      sub: regPendingCount > 0 ? `${regPendingCount} lead${regPendingCount > 1 ? 's' : ''} · to collect` : 'none pending',
+      bg: totalRegPending > 0 ? 'linear-gradient(135deg,#fa8c16,#d46b08)' : 'linear-gradient(135deg,#9ca3af,#6b7280)', Icon: AlertTriangle },
     { label: 'Total Enrolled', value: filtered.length, bg: 'linear-gradient(135deg,#3b82f6,#2563eb)', Icon: Users },
   ];
   const dq = overview?.data_quality || {};

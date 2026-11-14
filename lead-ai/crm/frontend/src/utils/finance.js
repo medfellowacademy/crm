@@ -41,7 +41,10 @@ export const financeFor = (lead) => {
   const overdueEmis = emis.filter(e =>
     e.status !== 'paid' && e.status !== 'cancelled' && e.date && dayjs(e.date).isBefore(today)
   );
-  const overdueAmount = overdueEmis.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  // A registration balance is not an EMI: it is reported on its own as "registration pending".
+  const sumOf = (list) => list.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const overdueAmount = sumOf(overdueEmis.filter(e => e.kind !== 'registration'));
+  const regPendingAmount = sumOf(overdueEmis.filter(e => e.kind === 'registration'));
 
   const collected = reg + emiPaid;
   const balance    = Math.max(0, total - collected);
@@ -57,11 +60,11 @@ export const financeFor = (lead) => {
 
   let paymentStatus;
   if (total > 0 && balance <= 0)      paymentStatus = 'paid';
-  else if (overdueAmount > 0)         paymentStatus = 'overdue';
+  else if (overdueAmount > 0 || regPendingAmount > 0) paymentStatus = 'overdue';
   else if (collected > 0)             paymentStatus = 'partial';
   else                                paymentStatus = 'not_started';
 
-  return { total, reg, emis, emiPaid, overdueEmis, overdueAmount, collected, balance, pct, paymentStatus,
+  return { total, reg, emis, emiPaid, overdueEmis, overdueAmount, regPendingAmount, collected, balance, pct, paymentStatus,
     scheduledPending, unscheduled, overScheduled };
 };
 
