@@ -3480,6 +3480,9 @@ def get_courses(
 
 _NOTIFICATION_PRIORITY = {"error": "high", "warning": "medium", "info": "low", "success": "low"}
 
+from lead_alerts import lead_response_overdue  # noqa: E402
+
+
 def _compute_raw_notifications(scope_names: Optional[list] = None) -> list:
     """Compute the current notification candidates: overdue follow-ups, stale hot
     leads, follow-ups due today, new leads. Shared by GET /api/notifications and
@@ -3609,7 +3612,7 @@ def _compute_raw_notifications(scope_names: Optional[list] = None) -> list:
     # respect the caller's scope.
     _fresh_q = (
         supabase_data.client.table('leads')
-        .select('id,lead_id,full_name,course_interested,source,created_at,assigned_to')
+        .select('id,lead_id,full_name,course_interested,source,created_at,assigned_to,last_contact_date')
         .eq('status', 'Fresh')
         .order('created_at', desc=True)
         .limit(40)
@@ -3626,6 +3629,20 @@ def _compute_raw_notifications(scope_names: Optional[list] = None) -> list:
         data = _fresh_rows
     fresh_resp = _R()
     for lead in fresh_resp.data or []:
+        _late = lead_response_overdue(lead, datetime.utcnow())
+        if _late:
+            notifications.append({
+                "type": "first_response_late",
+                "severity": "warning",
+                "title": f"No first response yet — {lead['full_name']}",
+                "message": f"Waiting {_late} min · {lead.get('source') or 'Unknown source'} · "
+                           f"{lead.get('course_interested') or 'No course'} · {lead.get('assigned_to') or 'Unassigned'}",
+                "lead_id": lead.get('id'),
+                "lead_string_id": lead.get('lead_id'),
+                "lead_name": lead['full_name'],
+                "event_time": lead.get('created_at'),
+            })
+            continue
         notifications.append({
             "type": "new_lead",
             "severity": "success",
@@ -3702,7 +3719,15 @@ def get_notifications(current_user: dict = Depends(get_current_user)):
     Scoped to the caller's lead visibility (Counselor: own; Manager / Team
     Leader: own + reporting subtree; Super Admin / Finance / Marketing: all)."""
     try:
-        notifications = _compute_raw_notifications(lead_scope_names(current_user))
+        # The same candidates serve everyone with the same visibility, and the bell polls often,
+        # so compute them once per scope per minute (cleared when leads change) instead of ~10
+        # queries per user per poll. Copies, because the loop below adds fields to each entry.
+        _nk = f"notifications_raw:{rbac.scope_cache_suffix(current_user)}"
+        _raw = STATS_CACHE.get(_nk)
+        if _raw is None:
+            _raw = _compute_raw_notifications(lead_scope_names(current_user))
+            STATS_CACHE[_nk] = _raw
+        notifications = [dict(n) for n in _raw]
         user_email = (current_user.get('email') or '').lower()
 
         state_by_key = {}

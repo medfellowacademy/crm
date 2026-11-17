@@ -107,6 +107,7 @@ const SmartNotifications = () => {
       emi_due: Clock,
       followup_today: Phone,
       new_lead: UserPlus,
+      first_response_late: Clock,
       // Legacy/aspirational types kept for forward-compat
       hot_lead_inactive: AlertCircle,
       payment_opened: CreditCard,
