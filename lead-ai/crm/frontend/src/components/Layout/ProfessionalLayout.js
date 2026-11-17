@@ -218,7 +218,7 @@ const ProfessionalLayout = ({ children }) => {
   // Counselors keep their day-to-day pages flat (no groups to dig through).
   const counselorItems = userRole === 'Counselor' ? [
     { key: '/attendance', icon: MapPin, label: 'Attendance' },
-    { key: '/followups', icon: CalendarClock, label: "Today's Follow-ups" },
+    { key: '/followups', icon: CalendarClock, label: 'Follow-ups' },
     { key: '/leads', icon: Users, label: 'Leads' },
     { key: '/pipeline', icon: GitBranch, label: 'Pipeline' },
     { key: '/payments', icon: DollarSign, label: 'Payments' },

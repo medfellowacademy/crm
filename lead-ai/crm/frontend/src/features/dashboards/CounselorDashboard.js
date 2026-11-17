@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import api, { userStatsAPI, dashboardAPI } from '../../api/api';
+import api, { userStatsAPI, dashboardAPI, followupsAPI } from '../../api/api';
 
 const CounselorDashboard = ({ user }) => {
   const navigate = useNavigate();
@@ -26,14 +26,24 @@ const CounselorDashboard = ({ user }) => {
     queryFn: () => userStatsAPI.getStats(user.id).then(res => res.data),
   });
 
-  // Fetch today's follow-ups. The endpoint expects the counselor's full_name
-  // (it filters leads.assigned_to, a name column) and returns
-  // {overdue, today, overdue_count, today_count} - not a bare array.
-  const { data: followUps = [], isLoading: followUpsLoading } = useQuery({
-    queryKey: ['today-followups', user.full_name],
-    queryFn: () => api.get('/api/leads/followups/today', { params: { assigned_to: user.full_name } })
-      .then(res => [...(res.data?.overdue || []), ...(res.data?.today || [])]),
+  // The few to call first (overdue, then due today) plus the true totals. The server scopes this to
+  // the signed-in counselor, so a long backlog never has to be downloaded to draw a short list.
+  const { data: followData, isLoading: followUpsLoading } = useQuery({
+    queryKey: ['dash-followups'],
+    queryFn: async () => {
+      const [late, today] = await Promise.all([
+        followupsAPI.list({ tab: 'overdue', limit: 5 }),
+        followupsAPI.list({ tab: 'today', limit: 5 }),
+      ]);
+      return {
+        items: [...late.data.items, ...today.data.items],
+        total: (late.data.counts?.overdue || 0) + (late.data.counts?.today || 0),
+      };
+    },
+    staleTime: 60 * 1000,
   });
+  const followUps = followData?.items || [];
+  const followUpTotal = followData?.total ?? 0;
 
   // Fetch performance trend (last 7 days)
   const { data: performanceTrend = [] } = useQuery({
@@ -41,9 +51,6 @@ const CounselorDashboard = ({ user }) => {
     queryFn: () => userStatsAPI.getPerformance(user.id, 7)
       .then(res => Array.isArray(res.data) ? res.data : []),
   });
-
-  // Ensure followUps is always an array
-  const safeFollowUps = Array.isArray(followUps) ? followUps : [];
 
   const statCards = [
     {
@@ -55,10 +62,10 @@ const CounselorDashboard = ({ user }) => {
     },
     {
       title: "Today's Follow-ups",
-      value: safeFollowUps.length,
+      value: followUpTotal,
       icon: Clock,
       color: '#f59e0b',
-      urgent: safeFollowUps.filter(f => (f.priority_score || 0) >= 50).length,
+      urgent: followUps.filter(f => (f.priority_score || 0) >= 50).length,
     },
     {
       title: 'Conversion Rate',
@@ -247,10 +254,10 @@ const CounselorDashboard = ({ user }) => {
         border: '1px solid var(--border-color)',
       }}>
         <h3 style={{ fontSize: 'var(--text-lg)', fontWeight: '600', marginBottom: 'var(--space-4)' }}>
-          Today's Follow-ups ({followUps.length})
+          Follow-ups to do ({followUpTotal})
         </h3>
         
-        {followUps.length === 0 ? (
+        {followUpTotal === 0 ? (
           <div style={{ textAlign: 'center', padding: 'var(--space-6)', color: 'var(--text-tertiary)' }}>
             <CheckCircle size={40} style={{ margin: '0 auto var(--space-3)', opacity: 0.3 }} />
             <p>All caught up! No follow-ups for today.</p>
@@ -313,6 +320,14 @@ const CounselorDashboard = ({ user }) => {
                 </div>
               </motion.div>
             ))}
+            {followUpTotal > followUps.length && (
+              <button
+                type="button" onClick={() => navigate('/followups')}
+                style={{ alignSelf: 'center', background: 'none', border: 'none', color: 'var(--color-primary)', cursor: 'pointer', fontWeight: 600, padding: '8px' }}
+              >
+                View all {followUpTotal} follow-ups
+              </button>
+            )}
           </div>
         )}
       </div>

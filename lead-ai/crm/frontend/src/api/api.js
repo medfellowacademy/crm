@@ -128,6 +128,11 @@ export const brochuresAPI = {
   delete: (id) => api.delete(`/api/brochures/${id}`),
 };
 
+// Follow-ups work list
+export const followupsAPI = {
+  list: (params) => api.get('/api/followups', { params }),
+};
+
 // Pipeline board
 export const pipelineAPI = {
   board: (params) => api.get('/api/pipeline/board', { params }),

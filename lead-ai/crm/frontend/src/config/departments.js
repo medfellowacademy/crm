@@ -33,7 +33,7 @@ export const DEPARTMENTS = {
     pages: [
       { key: '/leads',            icon: Users,         label: 'Leads' },
       { key: '/pipeline',         icon: GitBranch,     label: 'Pipeline' },
-      { key: '/followups',        icon: CalendarClock, label: "Today's Follow-ups" },
+      { key: '/followups',        icon: CalendarClock, label: 'Follow-ups' },
       { key: '/funnel',          icon: TrendingUp,    label: 'Funnel Reports' },
       { key: '/people',          icon: Trophy,        label: 'People Reports' },
       { key: '/lead-recovery',    icon: MessageCircleHeart, label: 'Lead Recovery' },

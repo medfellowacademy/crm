@@ -9,6 +9,7 @@ from supabase import create_client, Client
 from visibility import GuardedClient
 from dotenv import load_dotenv
 from logger_config import logger
+import http_pool
 
 # Load environment variables
 load_dotenv()
@@ -23,6 +24,7 @@ class SupabaseManager:
         
         if self.url and self.key:
             try:
+                http_pool.install()   # thread-safe HTTP/1.1 pool instead of one shared HTTP/2 connection
                 # GuardedClient hides ownerless leads from users restricted by a Super Admin
                 self.client = GuardedClient(create_client(self.url, self.key))
                 logger.info("✅ Supabase client initialized", extra={"system": "supabase"})

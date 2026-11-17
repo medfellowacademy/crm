@@ -74,6 +74,8 @@ import rbac
 import analytics_breakdown
 import note_images
 import pipeline
+import followups
+import cache as _cache_mod
 import repeat_leads
 import constants as _const
 from rbac import (
@@ -339,6 +341,17 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler"""
     # ---- Startup ----
     logger.info("🚀 Application startup initiated")
+
+    # Blocking endpoints run in a worker-thread pool (default 40). Each one holds a thread while it
+    # waits on the database, so a busy office can exhaust it and every later request queues. The
+    # work is I/O waiting, not CPU, so more threads are cheap. Override with THREADPOOL_SIZE.
+    try:
+        import anyio
+        _tokens = max(40, min(300, int(os.getenv("THREADPOOL_SIZE", "100"))))
+        anyio.to_thread.current_default_thread_limiter().total_tokens = _tokens
+        logger.info(f"🧵 request thread pool size = {_tokens}")
+    except Exception as e:
+        logger.warning(f"could not resize the request thread pool: {e}")
 
     # --- Fail-fast environment validation ---
     _required_env = {
@@ -4266,8 +4279,55 @@ def get_followups_today(request: Request, assigned_to: Optional[str] = None):
             "today_count": len(today_list),
         }
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise
         logger.error(f"Error fetching followups: {e}", exc_info=True)
-        return {"overdue": [], "today": [], "overdue_count": 0, "today_count": 0}
+        # An empty 200 here read as "no follow-ups, all clear" when the database had only timed out.
+        raise HTTPException(status_code=503, detail="Couldn't load follow-ups right now - please retry")
+
+
+# ── Follow-ups work list (tabs, true counts, paged cards) ────────────────────
+# Rows are kept 30 s per scope+tab and dropped the moment any lead changes, so what a counselor just
+# did shows immediately; between changes, many people opening the page cost one set of queries.
+_FOLLOWUP_ROWS = _cache_mod.TTLCache(maxsize=64, ttl=30)
+_FOLLOWUP_COUNTS = _cache_mod.TTLCache(maxsize=64, ttl=30)
+_cache_mod.on_lead_cache_cleared(_FOLLOWUP_ROWS.clear)
+_cache_mod.on_lead_cache_cleared(_FOLLOWUP_COUNTS.clear)
+
+
+@app.get("/api/followups")
+def followups_list(tab: str = "overdue", skip: int = Query(0, ge=0), limit: int = Query(25, ge=1, le=100),
+                   assigned_to: Optional[str] = None, search: str = "", sort: str = "priority",
+                   bucket: Optional[str] = None, status: Optional[str] = None, segment: Optional[str] = None,
+                   current_user: dict = Depends(current_active_user)):
+    """One tab of the follow-up work list, plus exact counts for every tab.
+
+    Scoped to the caller's visibility (a counselor sees their own, a manager their team)."""
+    if tab not in followups.TABS:
+        raise HTTPException(status_code=422, detail="tab must be overdue, today, upcoming or unscheduled")
+    if sort not in ("priority", "due", "oldest"):
+        raise HTTPException(status_code=422, detail="sort must be priority, due or oldest")
+    scope = resolve_assignee_filter(current_user, [assigned_to] if assigned_to else [])
+    scope_key = None if scope is None else tuple(sorted(scope))
+    win = followups.windows(datetime.utcnow())
+    try:
+        ckey = (scope_key, str(win["today"]))
+        counts = _FOLLOWUP_COUNTS.get(ckey)
+        if counts is None:
+            counts = followups.count_tabs(supabase_data.client, win, scope)
+            _FOLLOWUP_COUNTS[ckey] = counts
+        rkey = (tab, scope_key, str(win["today"]))
+        rows = _FOLLOWUP_ROWS.get(rkey)
+        if rows is None:
+            rows = followups.fetch_rows(supabase_data.client, tab, win, scope)
+            _FOLLOWUP_ROWS[rkey] = rows
+        out = followups.page(rows, win, skip=skip, limit=limit, sort=sort, search=search, status=status,
+                             segment=segment, bucket=bucket, tab=tab)
+        out.update({"tab": tab, "counts": counts, "today": str(win["today"])})
+        return out
+    except Exception as e:
+        logger.error(f"followups_list failed: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="Couldn't load follow-ups right now - please retry")
 
 
 def _fetch_all_leads(columns: str, filters: dict = None, date_from: str = None,
@@ -4903,7 +4963,6 @@ def delete_user(user_id: int, actor: dict = Depends(require_permission(P.DELETE_
 # ── Sales pipeline board ─────────────────────────────────────────────────────
 # The light rows behind the board, per visibility scope + filter set, kept 45 s and dropped the
 # moment any lead changes. Small on purpose (few keys): each entry is a few thousand short rows.
-import cache as _cache_mod
 _PIPELINE_ROWS = _cache_mod.TTLCache(maxsize=8, ttl=45)
 _cache_mod.on_lead_cache_cleared(_PIPELINE_ROWS.clear)
 
