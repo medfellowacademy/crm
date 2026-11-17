@@ -1872,7 +1872,7 @@ class LoginRequest(BaseModel):
 
 @app.post("/api/auth/login")
 @limiter.limit("10/minute")  # Brute-force protection: max 10 login attempts per minute per IP
-async def login(request: Request, body: LoginRequest):
+def login(request: Request, body: LoginRequest):
     """Login with username (email) and password - validates against Supabase users table"""
     
     
@@ -2005,7 +2005,7 @@ def root():
 # ============================================================================
 
 @app.post("/api/leads", response_model=LeadResponse)
-async def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, request: Request,
+def create_lead(lead: LeadCreate, background_tasks: BackgroundTasks, request: Request,
                       allow_duplicate: bool = False, _ingest_channel: str = "manual"):
     """Create a new lead with AI scoring - SUPABASE ONLY.
 
@@ -2204,7 +2204,7 @@ class WebsiteLeadPayload(BaseModel):
 
 
 @app.post("/api/public/website-lead", response_model=LeadResponse)
-async def create_website_lead(
+def create_website_lead(
     payload: WebsiteLeadPayload,
     background_tasks: BackgroundTasks,
     request: Request,
@@ -2233,7 +2233,7 @@ async def create_website_lead(
         source="Website",
         course_interested=payload.course_interested or "General Enquiry",
     )
-    created = await create_lead(lead=lead, background_tasks=background_tasks, request=request,
+    created = create_lead(lead=lead, background_tasks=background_tasks, request=request,
                                 _ingest_channel="website")
 
     # create_lead returns a JSONResponse when the contact already exists
@@ -2631,7 +2631,7 @@ _FILTER_OPT_KEYS = ("countries", "courses", "sources", "companies", "qualificati
 
 @app.get("/api/leads/filter-options")
 @cache_async_result(STATS_CACHE, "leads_filter_options")
-async def get_leads_filter_options():
+def get_leads_filter_options():
     """Distinct values for every Leads-page filter dropdown (country, course,
     source, company, qualification, assigned_to, UTM source/medium/campaign,
     ad name), computed from the FULL leads table — not just whatever page is
@@ -2718,7 +2718,7 @@ def get_lead(lead_id: str, request: Request):
         raise HTTPException(status_code=500, detail=f"Failed to retrieve lead: {str(e)}")
 
 @app.put("/api/leads/{lead_id}")
-async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, background_tasks: BackgroundTasks):
+def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, background_tasks: BackgroundTasks):
     """Update lead - Supabase only"""
 
     _scope_names = _request_lead_scope(request)   # None => unrestricted
@@ -2873,7 +2873,7 @@ async def update_lead(lead_id: str, lead_update: LeadUpdate, request: Request, b
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/leads/{lead_id}")
-async def delete_lead(lead_id: str, actor: dict = Depends(require_permission(P.DELETE_LEAD))):
+def delete_lead(lead_id: str, actor: dict = Depends(require_permission(P.DELETE_LEAD))):
     """Delete lead - requires delete_lead (Super Admin)."""
 
     # Check if lead exists
@@ -3053,7 +3053,7 @@ def add_note(lead_id: str, note: NoteCreate, request: Request, background_tasks:
     return db_note
 
 
-async def rescore_lead_supabase(lead_id: str) -> None:
+def rescore_lead_supabase(lead_id: str) -> None:
     """Re-score a single lead from Supabase and write the updated scores back.
     Runs as a BackgroundTask so it never blocks the API response."""
     try:
@@ -3373,7 +3373,7 @@ def _sync_hospital_primary_city(payload: dict) -> None:
 
 @app.post("/api/hospitals", response_model=HospitalResponse,
           dependencies=[Depends(require_team_leader_up)])
-async def create_hospital(hospital: HospitalCreate):
+def create_hospital(hospital: HospitalCreate):
     """Create hospital - SUPABASE ONLY"""
     
     try:
@@ -3392,7 +3392,7 @@ async def create_hospital(hospital: HospitalCreate):
         raise HTTPException(status_code=500, detail="Failed to create hospital.")
 
 @app.get("/api/hospitals", response_model=List[HospitalResponse])
-async def get_hospitals(
+def get_hospitals(
     skip: int = 0,
     limit: int = 100,
     country: Optional[str] = None,
@@ -3436,7 +3436,7 @@ async def get_hospitals(
 
 @app.post("/api/courses", response_model=CourseResponse,
           dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
-async def create_course(course: CourseCreate):
+def create_course(course: CourseCreate):
     """Create course - SUPABASE ONLY"""
     
     try:
@@ -3456,7 +3456,7 @@ async def create_course(course: CourseCreate):
 
 @app.get("/api/courses", response_model=List[CourseResponse])
 @cache_async_result(COURSE_CACHE, "courses_list")
-async def get_courses(
+def get_courses(
     skip: int = 0,
     limit: int = 100,
     category: Optional[str] = None,
@@ -4254,7 +4254,7 @@ def _fetch_all_leads(columns: str, filters: dict = None, date_from: str = None,
 
 @app.get("/api/dashboard/stats", response_model=DashboardStats)
 @cache_async_result(STATS_CACHE, "dashboard_stats")
-async def get_dashboard_stats(request: Request, created_from: Optional[str] = None, created_to: Optional[str] = None):
+def get_dashboard_stats(request: Request, created_from: Optional[str] = None, created_to: Optional[str] = None):
     """Get dashboard statistics (cached for 1 minute). Counselors see only their stats.
 
     created_from/created_to optionally scope total_leads/hot_leads/etc. to a
@@ -4723,7 +4723,7 @@ def get_user(user_id: int, actor: dict = Depends(current_active_user)):
     return sanitize_user(user)
 
 @app.post("/api/users", response_model=UserResponse)
-async def create_user(user: UserCreate, actor: dict = Depends(require_permission(P.CREATE_USER))):
+def create_user(user: UserCreate, actor: dict = Depends(require_permission(P.CREATE_USER))):
     """Create a user. Requires create_user. A non Super Admin cannot create a
     user at or above their own role (no privilege escalation)."""
     assert_can_administer_user(actor, user.role, action="create")
@@ -4764,7 +4764,7 @@ async def create_user(user: UserCreate, actor: dict = Depends(require_permission
         raise HTTPException(status_code=500, detail="Failed to create user")
 
 @app.put("/api/users/{user_id}", response_model=UserResponse)
-async def update_user(user_id: int, user: UserUpdate, actor: dict = Depends(require_permission(P.EDIT_USER))):
+def update_user(user_id: int, user: UserUpdate, actor: dict = Depends(require_permission(P.EDIT_USER))):
     """Update a user. Requires edit_user.
 
     Hierarchy guard-rails (enforced for everyone below Super Admin):
@@ -4824,7 +4824,7 @@ async def update_user(user_id: int, user: UserUpdate, actor: dict = Depends(requ
     return sanitize_user(updated)
 
 @app.delete("/api/users/{user_id}")
-async def delete_user(user_id: int, actor: dict = Depends(require_permission(P.DELETE_USER))):
+def delete_user(user_id: int, actor: dict = Depends(require_permission(P.DELETE_USER))):
     """Delete a user. Requires delete_user. Cannot delete yourself, cannot
     delete a user at/above your own role, cannot delete the last Super Admin."""
     db_user = supabase_data.get_user_by_id(user_id)
@@ -6078,7 +6078,7 @@ async def send_communication(
 
 
 @app.get("/api/communications/{lead_id}/history")
-async def get_communication_history(
+def get_communication_history(
     lead_id: str,
     type: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
@@ -6402,7 +6402,7 @@ async def upload_file(file: UploadFile = File(...)):
 @app.get("/api/admin/stats",
          dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
 @cache_async_result(STATS_CACHE, "admin_stats")
-async def get_admin_stats():
+def get_admin_stats():
     """Admin dashboard: total revenue, leads, conversion rate, trends - SUPABASE ONLY"""
 
     try:
@@ -6517,7 +6517,7 @@ _FUNNEL_STAGE_ORDER = ["Fresh", "Follow Up", "Warm", "Hot", "Enrolled"]
 @app.get("/api/admin/funnel-analysis",
          dependencies=[Depends(require_permission(P.VIEW_TEAM_ANALYTICS))])
 @cache_async_result(STATS_CACHE, "admin_funnel_analysis")
-async def get_funnel_analysis():
+def get_funnel_analysis():
     """Funnel analysis - SUPABASE ONLY.
 
     Returns both the raw per-status counts (`stages`) and an ordered funnel
@@ -6809,7 +6809,7 @@ def mark_all_notifications_read(current_user: dict = Depends(get_current_user)):
 
 @app.put("/api/hospitals/{hospital_id}", response_model=HospitalResponse,
          dependencies=[Depends(require_team_leader_up)])
-async def update_hospital(hospital_id: int, data: HospitalCreate):
+def update_hospital(hospital_id: int, data: HospitalCreate):
     """Update an existing hospital record - SUPABASE ONLY"""
     
     try:
@@ -6837,7 +6837,7 @@ async def update_hospital(hospital_id: int, data: HospitalCreate):
 
 @app.delete("/api/hospitals/{hospital_id}",
             dependencies=[Depends(require_team_leader_up)])
-async def delete_hospital(hospital_id: int):
+def delete_hospital(hospital_id: int):
     """Delete a hospital record - SUPABASE ONLY"""
     
     try:
@@ -7011,7 +7011,7 @@ def unlink_hospital_lead(hospital_id: int, lead_id: str):
 
 @app.put("/api/courses/{course_id}", response_model=CourseResponse,
          dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
-async def update_course(course_id: int, data: CourseCreate):
+def update_course(course_id: int, data: CourseCreate):
     """Update an existing course record - SUPABASE ONLY"""
     
     try:
@@ -7039,7 +7039,7 @@ async def update_course(course_id: int, data: CourseCreate):
 
 @app.delete("/api/courses/{course_id}",
             dependencies=[Depends(require_permission(P.MANAGE_SETTINGS))])
-async def delete_course(course_id: int):
+def delete_course(course_id: int):
     """Delete a course record - SUPABASE ONLY"""
     
     try:
@@ -9098,8 +9098,8 @@ async def _ingest_meta_leadgen(leadgen_id: str, change_value: dict,
         utm_medium=adset_name or None,
         utm_campaign=campaign_name or None,
     )
-    created = await create_lead(lead=lead, background_tasks=background_tasks,
-                                request=request, _ingest_channel="meta_ads")
+    created = await run_in_threadpool(create_lead, lead=lead, background_tasks=background_tasks,
+                                      request=request, _ingest_channel="meta_ads")
 
     lead_pk = None
     if isinstance(created, JSONResponse):
