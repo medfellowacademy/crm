@@ -135,6 +135,11 @@ export const uploadAPI = {
     form.append('file', file);
     return api.post('/api/upload', form, { headers: { 'Content-Type': 'multipart/form-data' } });
   },
+  uploadNoteImage: (leadId, file) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post(`/api/leads/${leadId}/note-images`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+  },
   uploadLeadDocument: (leadId, file, docType = 'document') => {
     const form = new FormData();
     form.append('file', file);

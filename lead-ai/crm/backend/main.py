@@ -72,6 +72,7 @@ from auth import (
 # Centralized RBAC (role hierarchy + permission matrix + dependencies)
 import rbac
 import analytics_breakdown
+import note_images
 import repeat_leads
 import constants as _const
 from rbac import (
@@ -3140,6 +3141,34 @@ def rescore_lead_supabase(lead_id: str) -> None:
 
     except Exception as e:
         logger.warning(f"Background re-score failed for {lead_id}: {e}")
+
+@app.post("/api/leads/{lead_id}/note-images")
+def upload_note_image(lead_id: str, request: Request, file: UploadFile = File(...)):
+    """Store one image for a lead note (Supabase Storage, crm-documents/notes/...) and return its URL.
+
+    The note itself keeps the image as a markdown link in its text, so nothing about how notes
+    are saved changes. Same visibility rule as adding a note: you can only attach to a lead you
+    may see. The type is checked from the file's bytes, and the stored name is random."""
+    lead = supabase_data.get_lead_by_id(lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    if _scope_blocks_lead(request, lead):
+        raise HTTPException(status_code=403, detail="Access denied: this lead is outside your team")
+    data = file.file.read(note_images.MAX_BYTES + 1)
+    kind, err = note_images.check(data)
+    if err:
+        raise HTTPException(status_code=err[0], detail=err[1])
+    ext, content_type = kind
+    import uuid as _uuid
+    path = f"{note_images.FOLDER}/{lead.get('lead_id') or lead_id}/{_uuid.uuid4().hex}.{ext}"
+    try:
+        supabase_data.client.storage.from_('crm-documents').upload(path, data, {'content-type': content_type})
+        url = supabase_data.client.storage.from_('crm-documents').get_public_url(path)
+    except Exception as e:
+        logger.error(f"note image upload failed: {e}")
+        raise HTTPException(status_code=503, detail="Couldn't store the image - please try again")
+    return {"url": url, "path": path}
+
 
 @app.get("/api/leads/{lead_id}/notes", response_model=List[NoteResponse])
 def get_notes(lead_id: str, request: Request):

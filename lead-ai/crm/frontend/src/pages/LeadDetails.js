@@ -39,9 +39,10 @@ import {
   DeleteOutlined,
   RetweetOutlined,
 } from '@ant-design/icons';
-import { leadsAPI, coursesAPI, counselorsAPI, usersAPI } from '../api/api';
+import { leadsAPI, coursesAPI, counselorsAPI, usersAPI, uploadAPI } from '../api/api';
 import { financeFor, safeParse, instalmentLabel, fmtBoth } from '../utils/finance';
-import { UserOutlined as NavUser, FileTextOutlined as NavNotes, CalendarOutlined as NavCalendar, HistoryOutlined as NavHistory } from '@ant-design/icons';
+import NoteContent, { imageMarkdown } from '../components/leads/NoteContent';
+import { UserOutlined as NavUser, FileTextOutlined as NavNotes, CalendarOutlined as NavCalendar, PictureOutlined as NavPicture, HistoryOutlined as NavHistory } from '@ant-design/icons';
 import { COUNTRIES } from '../config/countries';
 import { STATUS_OPTIONS, SOURCE_OPTIONS, STATUS_COLOR_MAP } from '../config/leadEnums';
 
@@ -161,6 +162,9 @@ const LeadDetails = () => {
   const [section, setSection] = useState(() => {
     try { return new URLSearchParams(window.location.search).get('tab') || 'overview'; } catch { return 'overview'; }
   });
+  const [noteImages, setNoteImages] = useState([]);       // [{ uid, file, preview }] waiting to be sent with the note
+  const [uploadingImages, setUploadingImages] = useState(false);
+  const fileInputRef = useRef(null);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleDate, setScheduleDate] = useState(null);
   const [editingRevField, setEditingRevField] = useState(null); // 'expected' | 'actual' | null
@@ -309,6 +313,7 @@ const LeadDetails = () => {
     onSuccess: () => {
       message.success('Note added successfully!');
       noteForm.resetFields();
+      clearNoteImages();
       setNoteType('manual');
       setCallNumber(null);
       setCallMainStatus(null);
@@ -345,7 +350,33 @@ const LeadDetails = () => {
     });
   };
 
-  const handleAddNote = (values) => {
+  const MAX_NOTE_IMAGES = 3;
+  const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+  const addNoteImages = (files) => {
+    const picked = Array.from(files || []).filter(f => f && f.type && f.type.startsWith('image/'));
+    if (!picked.length) return;
+    const room = MAX_NOTE_IMAGES - noteImages.length;
+    if (room <= 0) { message.warning(`You can attach up to ${MAX_NOTE_IMAGES} images to one note.`); return; }
+    const ok = [];
+    picked.slice(0, room).forEach(f => {
+      if (!/^image\/(png|jpe?g|gif|webp)$/.test(f.type)) { message.warning(`${f.name || 'Image'}: only PNG, JPG, GIF or WebP.`); return; }
+      if (f.size > MAX_IMAGE_BYTES) { message.warning(`${f.name || 'Image'} is over 5 MB.`); return; }
+      ok.push({ uid: `${Date.now()}-${Math.random().toString(36).slice(2)}`, file: f, preview: URL.createObjectURL(f) });
+    });
+    if (picked.length > room) message.warning(`Only ${MAX_NOTE_IMAGES} images fit on one note - extra ones were skipped.`);
+    if (ok.length) setNoteImages(prev => [...prev, ...ok]);
+  };
+  const removeNoteImage = (uid) => setNoteImages(prev => {
+    prev.filter(i => i.uid === uid).forEach(i => URL.revokeObjectURL(i.preview));
+    return prev.filter(i => i.uid !== uid);
+  });
+  const clearNoteImages = () => setNoteImages(prev => { prev.forEach(i => URL.revokeObjectURL(i.preview)); return []; });
+  const onNotePaste = (e) => {
+    const files = Array.from(e.clipboardData?.files || []).filter(f => f.type && f.type.startsWith('image/'));
+    if (files.length) { e.preventDefault(); addNoteImages(files); }   // text paste is left alone
+  };
+
+  const handleAddNote = async (values) => {
     let content = values.content || '';
     let channel = values.channel || 'manual';
 
@@ -359,9 +390,27 @@ const LeadDetails = () => {
       content = content ? `${header}\n${content}` : header;
     }
 
-    if (!content.trim()) {
+    if (!content.trim() && noteImages.length === 0) {
       message.warning('Please fill in the call details or enter a note.');
       return;
+    }
+
+    // Upload first; if any image fails nothing is saved and the note + pictures stay on screen to retry.
+    if (noteImages.length) {
+      setUploadingImages(true);
+      try {
+        const urls = [];
+        for (const img of noteImages) {
+          const res = await uploadAPI.uploadNoteImage(leadId, img.file);
+          urls.push(res.data.url);
+        }
+        content = [content.trim(), ...urls.map(imageMarkdown)].filter(Boolean).join('\n');
+      } catch (err) {
+        message.error(err?.response?.data?.detail || 'Could not upload the image - your note was not saved. Please try again.');
+        setUploadingImages(false);
+        return;
+      }
+      setUploadingImages(false);
     }
 
     addNoteMutation.mutate({ content, channel });
@@ -1017,9 +1066,10 @@ const LeadDetails = () => {
                 <>
                   <Form.Item
                     name="content"
-                    rules={noteType === 'manual' ? [{ required: true, message: 'Please enter a note' }] : []}
+                    rules={noteType === 'manual' && noteImages.length === 0 ? [{ required: true, message: 'Please enter a note' }] : []}
                   >
                     <TextArea
+                      onPaste={onNotePaste}
                       rows={3}
                       placeholder={
                         noteType === 'manual'
@@ -1028,6 +1078,35 @@ const LeadDetails = () => {
                       }
                     />
                   </Form.Item>
+
+                  {/* Attach images: paste into the box, or pick files */}
+                  <div style={{ marginBottom: 12 }}>
+                    <input
+                      ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple style={{ display: 'none' }}
+                      onChange={(e) => { addNoteImages(e.target.files); e.target.value = ''; }}
+                    />
+                    <Space wrap size={8}>
+                      <Button icon={<NavPicture />} onClick={() => fileInputRef.current?.click()} disabled={noteImages.length >= 3}>
+                        Upload image
+                      </Button>
+                      <span style={{ color: '#8c8c8c', fontSize: 12 }}>
+                        or paste with Ctrl+V · PNG, JPG, GIF or WebP · 5 MB each · up to 3 images
+                      </span>
+                    </Space>
+                    {noteImages.length > 0 && (
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                        {noteImages.map(img => (
+                          <div key={img.uid} style={{ position: 'relative', width: 72, height: 72 }}>
+                            <img src={img.preview} alt="attachment preview" style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 6, border: '1px solid #e5e7eb' }} />
+                            <button
+                              type="button" aria-label="Remove image" onClick={() => removeNoteImage(img.uid)}
+                              style={{ position: 'absolute', top: -6, right: -6, width: 20, height: 20, borderRadius: 10, border: 'none', background: '#ef4444', color: '#fff', cursor: 'pointer', lineHeight: '20px', padding: 0 }}
+                            >×</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
 
                   {/* Channel (manual notes only) */}
                   {noteType === 'manual' && (
@@ -1045,7 +1124,7 @@ const LeadDetails = () => {
                     type="primary"
                     htmlType="submit"
                     icon={<SaveOutlined />}
-                    loading={addNoteMutation.isPending}
+                    loading={addNoteMutation.isPending || uploadingImages}
                     style={noteType === 'call' ? { background: '#fa8c16', borderColor: '#fa8c16' } : {}}
                   >
                     {noteType === 'manual'
@@ -1137,7 +1216,7 @@ const LeadDetails = () => {
                       </div>
                     )}
                     {extraText && (
-                      <div style={{ whiteSpace: 'pre-wrap', color: '#595959' }}>{extraText}</div>
+                      <NoteContent content={extraText} textStyle={{ color: '#595959' }} />
                     )}
                   </Timeline.Item>
                 );
@@ -1173,7 +1252,7 @@ const LeadDetails = () => {
                           <b>{n.created_by || n.author || ''}</b>
                           <span style={{ color: '#8c8c8c', fontSize: 12 }}>{parseDate(n.created_at)?.format('DD MMM YYYY, hh:mm A')}</span>
                         </Space>
-                        <div style={{ whiteSpace: 'pre-wrap', marginTop: 4 }}>{n.content}</div>
+                        <div style={{ marginTop: 4 }}><NoteContent content={n.content} /></div>
                       </div>
                     ),
                   }))}

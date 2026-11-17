@@ -1,3 +1,4 @@
+import NoteContent from '../../components/leads/NoteContent';
 import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Sparkles, ChevronDown, Clock, User } from 'lucide-react';
@@ -240,7 +241,7 @@ const ActivityCard = ({ activity, index }) => {
             {activity.title || 'Status changed'}
           </span>
           {activity.content && (
-            <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{activity.content}</span>
+            <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}><NoteContent content={activity.content} /></span>
           )}
           <span style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginLeft: 'auto' }}>
             {formatRelative(activity.timestamp)}
@@ -335,7 +336,7 @@ const ActivityCard = ({ activity, index }) => {
         {/* body */}
         {activity.content && (
           <div style={{ padding: '10px 14px', fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-            {activity.content}
+            <NoteContent content={activity.content} />
           </div>
         )}
       </div>
