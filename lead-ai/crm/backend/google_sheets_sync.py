@@ -621,6 +621,7 @@ def get_synced_meta_ids() -> set:
                 client.table("leads")
                 .select("meta_lead_id,meta_submission_ids")
                 .not_.is_("meta_lead_id", "null")
+                .order("id")   # a stable order: unordered pages can repeat or skip rows between requests
                 .range(offset, offset + page_size - 1)
                 .execute()
             )
@@ -638,8 +639,11 @@ def get_synced_meta_ids() -> set:
             offset += page_size
         return ids
     except Exception as e:
-        logger.error(f"Failed to fetch synced meta IDs: {e}")
-        return set()
+        # NEVER carry on with an empty set: every row in the sheet would then look new, get matched
+        # to its existing lead again, and add another "re-submission" note on every run (this is how
+        # one lead collected 49,406 notes). Failing the run is safe; the next run simply retries.
+        logger.error(f"Failed to fetch synced meta IDs - aborting this sync run: {e}")
+        raise RuntimeError(f"could not load the already-synced Meta IDs: {e}") from e
 
 
 def _normalize(lead: Dict) -> Dict:
@@ -780,6 +784,16 @@ def sync_sheet_to_crm() -> Dict:
 
                 # Build the union of all meta IDs seen for this lead
                 prev_ids_str = existing.get('meta_submission_ids') or existing.get('meta_lead_id') or ''
+                _known_ids = {i.strip() for i in prev_ids_str.split(',') if i.strip()}
+                _known_ids.add((existing.get('meta_lead_id') or '').strip())
+                if meta_id in _known_ids:
+                    # This exact submission was already recorded on the lead: nothing new to write.
+                    # (Without this, a row re-read on every run re-added a note, an update and a
+                    # history check each time.)
+                    synced_ids.add(meta_id)
+                    skip_count += 1
+                    tab_skip += 1
+                    continue
                 all_ids = set(i.strip() for i in prev_ids_str.split(',') if i.strip())
                 all_ids.add(existing.get('meta_lead_id') or '')
                 all_ids.add(meta_id)

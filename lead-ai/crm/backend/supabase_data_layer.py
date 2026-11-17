@@ -932,21 +932,40 @@ class SupabaseDataLayer:
             logger.error(f"Error creating note: {e}")
             return None
     
+    SYSTEM_NOTES_SHOWN = 20   # automatic notes kept per lead; the page hides them anyway
+
     def get_notes_for_lead(self, lead_id: int) -> List[Dict[str, Any]]:
-        """Get all notes for a lead (by internal ID)"""
+        """Notes for a lead (by internal ID), newest first: every real note, plus only the latest few
+        automatic 'system' ones.
+
+        The old query loaded every note with no limit. The Sheet sync had written up to 49,406
+        automatic re-submission notes on a single lead, and the database returns at most 1,000 rows
+        per request, so for such leads a counselor's real notes could be pushed out of the result
+        entirely. Real notes are now fetched on their own so they can never be crowded out."""
         try:
-            response = (
+            real = (
                 self.client.table('notes')
                 .select("*")
                 .eq('lead_id', lead_id)
+                .or_('channel.is.null,channel.neq.system')
                 .order('created_at', desc=True)
+                .limit(1000)
                 .execute()
-            )
-            return response.data if response.data else []
+            ).data or []
+            system = (
+                self.client.table('notes')
+                .select("*")
+                .eq('lead_id', lead_id)
+                .eq('channel', 'system')
+                .order('id', desc=True)
+                .limit(self.SYSTEM_NOTES_SHOWN)
+                .execute()
+            ).data or []
+            return real + system
         except Exception as e:
             logger.error(f"Error fetching notes for lead {lead_id}: {e}")
             return []
-    
+
     def get_activities_for_lead(self, lead_id: int, activity_type: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get activities for a lead (by internal ID)"""
         try:
