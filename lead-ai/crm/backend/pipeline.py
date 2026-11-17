@@ -36,6 +36,18 @@ CARDS_FIRST = 20
 CARDS_MORE = 30
 
 
+EPOCH = datetime(1970, 1, 1)
+
+
+def _epoch(value) -> float:
+    """Seconds since 1970 for a stored timestamp; 0 when it is missing or unreadable.
+
+    Sorting must never call .timestamp() on datetime.min: that raises for a lead with no
+    `updated_at`, and one such lead took the whole board down with a 503."""
+    dt = _when(value)
+    return (dt - EPOCH).total_seconds() if dt else 0.0
+
+
 def _num(v) -> float:
     try:
         return float(v or 0)
@@ -91,13 +103,13 @@ def _sort_key(lead: dict, now: datetime):
     due = _when(lead.get("follow_up_date"))
     overdue = bool(due and due < now)
     return (0 if overdue else 1, due if overdue else datetime.max, -_num(lead.get("ai_score")),
-            -(_when(lead.get("updated_at")) or datetime.min).timestamp())
+            -_epoch(lead.get("updated_at")))
 
 
 def order(rows: Iterable[dict], stage_id: str, now: datetime) -> List[dict]:
     rows = list(rows)
     if stage_id in ("Enrolled", "Lost"):      # a finished deal: newest first
-        return sorted(rows, key=lambda r: -(_when(r.get("updated_at")) or datetime.min).timestamp())
+        return sorted(rows, key=lambda r: -_epoch(r.get("updated_at")))
     return sorted(rows, key=lambda r: _sort_key(r, now))
 
 

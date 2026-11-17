@@ -182,3 +182,12 @@ def test_a_database_failure_is_an_error_not_an_empty_all_clear(api, monkeypatch)
     monkeypatch.setattr(fu, "count_tabs", boom)
     r = api.get_("/api/followups?tab=overdue")
     assert r.status_code == 503 and "retry" in r.json()["detail"].lower()
+
+
+def test_follow_ups_with_missing_or_broken_dates_never_break_the_list():
+    rows = [lead(1, None), lead(2, "garbage"), lead(3, utc(2026, 11, 16, 9), created_at=None, last_contact_date=None),
+            lead(4, utc(2026, 11, 17, 9), ai_score=None, churn_risk=None)]
+    for mode in ("priority", "due", "oldest"):
+        p = fu.page(rows, WIN, skip=0, limit=10, sort=mode, tab="overdue")
+        assert p["total"] == 4
+    assert fu.item(rows[0], WIN)["days_overdue"] == 0

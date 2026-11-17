@@ -144,3 +144,16 @@ def test_stage_endpoint_pages_and_rejects_unknown_stage(api):
     assert api.get_("/api/pipeline/stage/Lost").json()["total"] == 1
     assert api.get_("/api/pipeline/stage/Nope").status_code == 404
     assert api.get("/api/pipeline/board").status_code == 401        # login required
+
+
+def test_leads_with_missing_or_broken_dates_never_break_the_board():
+    """Regression (production 503): real leads have no updated_at, and sorting them raised."""
+    rows = [lead(1, "Warm", updated_at=None), lead(2, "Warm", updated_at="not a date"),
+            lead(3, "Warm", updated_at="2026-11-10T00:00:00", follow_up_date=None, created_at=None),
+            lead(4, "Enrolled", updated_at=None), lead(5, "Hot", follow_up_date="garbage", last_contact_date="")]
+    board = pl.build_board(rows, 0, NOW)
+    by = {s["id"]: s for s in board["stages"]}
+    assert by["Warm"]["count"] == 3 and by["Enrolled"]["count"] == 1 and by["Hot"]["count"] == 1
+    assert by["Warm"]["cards"][0]["lead_id"] == "L3"           # the one with a real date sorts first
+    for stage in ("Warm", "Enrolled", "Hot", "Fresh"):
+        pl.stage_page(rows, stage, NOW, 0, 10)                   # no exception for any stage
