@@ -128,6 +128,12 @@ export const brochuresAPI = {
   delete: (id) => api.delete(`/api/brochures/${id}`),
 };
 
+// Pipeline board
+export const pipelineAPI = {
+  board: (params) => api.get('/api/pipeline/board', { params }),
+  stage: (stageId, params) => api.get(`/api/pipeline/stage/${encodeURIComponent(stageId)}`, { params }),
+};
+
 // Upload API
 export const uploadAPI = {
   uploadFile: (file) => {

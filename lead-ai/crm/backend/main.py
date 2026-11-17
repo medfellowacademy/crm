@@ -73,6 +73,7 @@ from auth import (
 import rbac
 import analytics_breakdown
 import note_images
+import pipeline
 import repeat_leads
 import constants as _const
 from rbac import (
@@ -4898,6 +4899,77 @@ def delete_user(user_id: int, actor: dict = Depends(require_permission(P.DELETE_
     _audit_event("user.delete", f"deleted user {db_user.get('email')} (role {db_user.get('role')})",
                  actor=actor, entity_type="user", entity_id=str(user_id))
     return {"message": "User deleted successfully"}
+
+# ── Sales pipeline board ─────────────────────────────────────────────────────
+# The light rows behind the board, per visibility scope + filter set, kept 45 s and dropped the
+# moment any lead changes. Small on purpose (few keys): each entry is a few thousand short rows.
+import cache as _cache_mod
+_PIPELINE_ROWS = _cache_mod.TTLCache(maxsize=8, ttl=45)
+_cache_mod.on_lead_cache_cleared(_PIPELINE_ROWS.clear)
+
+
+def _pipeline_rows(user: dict, filters: dict):
+    scope = rbac.lead_scope_names(user)
+    key = (rbac.scope_cache_suffix(user), tuple(sorted(filters.items())))
+    rows = _PIPELINE_ROWS.get(key)
+    if rows is None:
+        rows = pipeline.fetch_open_rows(supabase_data.client, scope, filters)
+        _PIPELINE_ROWS[key] = rows
+    return scope, rows
+
+
+def _pipeline_filters(assigned_to, course, country, source) -> dict:
+    return {k: v for k, v in (("assigned_to", assigned_to), ("course_interested", course),
+                              ("country", country), ("source", source)) if v}
+
+
+@app.get("/api/pipeline/board")
+def pipeline_board(assigned_to: Optional[str] = None, course: Optional[str] = None,
+                   country: Optional[str] = None, source: Optional[str] = None,
+                   search: str = "", overdue_only: bool = False,
+                   current_user: dict = Depends(current_active_user)):
+    """Every stage with its true count, value and overdue count, plus the first cards of each.
+
+    Scoped to the caller's visibility. Counts cover ALL matching leads (no 10,000 cap)."""
+    filters = _pipeline_filters(assigned_to, course, country, source)
+    now = datetime.utcnow()
+    try:
+        scope, rows = _pipeline_rows(current_user, filters)
+        lost = 0 if overdue_only else pipeline.count_lost(supabase_data.client, scope, filters, search)
+        board = pipeline.build_board(rows, lost, now, search, overdue_only)
+        if lost:
+            lost_stage = next(s for s in board["stages"] if s["id"] == "Lost")
+            lost_stage["cards"] = pipeline.lost_page(supabase_data.client, scope, filters, now, 0,
+                                                     pipeline.CARDS_FIRST, search)["cards"]
+        board["generated_at"] = now.isoformat() + "Z"
+        return board
+    except Exception as e:
+        logger.error(f"pipeline_board failed: {e}")
+        raise HTTPException(status_code=503, detail="Couldn't load the pipeline - please try again")
+
+
+@app.get("/api/pipeline/stage/{stage_id}")
+def pipeline_stage(stage_id: str, skip: int = Query(0, ge=0), limit: int = Query(30, ge=1, le=100),
+                   assigned_to: Optional[str] = None, course: Optional[str] = None,
+                   country: Optional[str] = None, source: Optional[str] = None,
+                   search: str = "", overdue_only: bool = False,
+                   current_user: dict = Depends(current_active_user)):
+    """More cards for one stage ("show more" at the end of a column)."""
+    if stage_id not in pipeline.STAGE_BY_ID:
+        raise HTTPException(status_code=404, detail="Unknown stage")
+    filters = _pipeline_filters(assigned_to, course, country, source)
+    now = datetime.utcnow()
+    try:
+        scope, rows = _pipeline_rows(current_user, filters)
+        if stage_id == "Lost":
+            if overdue_only:
+                return {"cards": [], "total": 0}
+            return pipeline.lost_page(supabase_data.client, scope, filters, now, skip, limit, search)
+        return pipeline.stage_page(rows, stage_id, now, skip, limit, search, overdue_only)
+    except Exception as e:
+        logger.error(f"pipeline_stage failed: {e}")
+        raise HTTPException(status_code=503, detail="Couldn't load more leads - please try again")
+
 
 @app.get("/api/analytics/breakdown",
          dependencies=[Depends(require_permission(P.VIEW_ANALYTICS))])
