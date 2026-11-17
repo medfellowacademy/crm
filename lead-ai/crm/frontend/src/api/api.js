@@ -164,6 +164,7 @@ export const dashboardAPI = {
 
 // Analytics API
 export const analyticsAPI = {
+  getBreakdown: (params) => api.get('/api/analytics/breakdown', { params }),
   getRevenueByCountry: (params) => api.get('/api/analytics/revenue-by-country', { params }),
   getConversionFunnel: (params) => api.get('/api/analytics/conversion-funnel', { params }),
 };

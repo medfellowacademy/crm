@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Row, Col, Card, Table, Spin, Tag, DatePicker, Space, Typography, Select, Avatar, Drawer, Button } from 'antd';
+import { Row, Col, Card, Table, Spin, Tag, DatePicker, Space, Typography, Select, Avatar, Drawer, Button, Alert } from 'antd';
 import {
   BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
@@ -74,14 +74,27 @@ const Rank = ({ n }) => {
   );
 };
 
+const DRILL_LIMIT = 1000;
+const OTHER_STATUSES = 'Will Enroll Later,Dropped,TMT No Response,Re-assigned Lead,Test Lead,PG-NEET';
+
 /* ── main ─────────────────────────────────────────────── */
 const AnalyticsPage = () => {
   const [sourceSort, setSourceSort] = useState('conversion_rate');
   const [dateRange, setDateRange] = useState([null, null]);
   const [selectedCounselor, setSelectedCounselor] = useState('all');
-  const [drawer, setDrawer] = useState({ open: false, title: '', leads: [] });
+  const [drawer, setDrawer] = useState({ open: false, title: '', leads: [], loading: false, capped: false });
 
-  const openDrawer = (title, leadsSubset) => setDrawer({ open: true, title, leads: leadsSubset });
+  // The table only has totals now; the actual leads behind a number are fetched when it is clicked.
+  const openDrawer = async (title, filters) => {
+    setDrawer({ open: true, title, leads: [], loading: true, capped: false });
+    try {
+      const res = await leadsAPI.getAll({ ...filters, ...dateParams, limit: DRILL_LIMIT, skip: 0 });
+      const rows = res.data?.leads || [];
+      setDrawer({ open: true, title, leads: rows, loading: false, capped: (res.data?.total || rows.length) > rows.length, total: res.data?.total });
+    } catch {
+      setDrawer({ open: true, title, leads: [], loading: false, capped: false, failed: true });
+    }
+  };
   const dateParams = dateRange[0] && dateRange[1] ? {
     created_from: dateRange[0].startOf('day').toISOString(),
     created_to: dateRange[1].endOf('day').toISOString(),
@@ -98,11 +111,11 @@ const AnalyticsPage = () => {
     queryFn: () => analyticsAPI.getConversionFunnel(dateParams).then(res => res.data),
   });
 
-  // Fetching up to 2000 leads for chart data (source & course distribution).
-  // These are lightweight columns only — no heavy AI text fields.
-  const { data: leads } = useQuery({
-    queryKey: ['analytics-leads-sample', ...dateKey],
-    queryFn: () => leadsAPI.getAll({ limit: 10000, skip: 0, ...dateParams }).then(res => res.data?.leads || []),
+  // Totals per counselor / source / course are counted on the server (a few KB), not by
+  // downloading every lead into the browser.
+  const { data: breakdown } = useQuery({
+    queryKey: ['analytics-breakdown', ...dateKey],
+    queryFn: () => analyticsAPI.getBreakdown(dateParams).then(res => res.data),
     staleTime: 5 * 60 * 1000,
   });
 
@@ -120,42 +133,7 @@ const AnalyticsPage = () => {
   // Compute counselor performance — every status tracked individually so counts always tally
   // Must be before any early return to satisfy React hooks rules
   const users = Array.isArray(usersData) ? usersData : (usersData?.users || []);
-  const counselorPerfRaw = useMemo(() => {
-    const perf = {};
-    (leads || []).forEach(lead => {
-      const name = lead.assigned_to;
-      if (!name) return;
-      if (!perf[name]) {
-        perf[name] = {
-          name,
-          total: 0,
-          fresh: 0, followUp: 0, warm: 0, hot: 0,
-          enrolled: 0,
-          notInterested: 0, notAnswering: 0, junk: 0,
-          other: 0,
-          revenue: 0,
-        };
-      }
-      const p = perf[name];
-      p.total++;
-      const s = lead.status;
-      if (s === 'Fresh')              p.fresh++;
-      else if (s === 'Follow Up')     p.followUp++;
-      else if (s === 'Warm')          p.warm++;
-      else if (s === 'Hot')           p.hot++;
-      else if (s === 'Enrolled')    { p.enrolled++; p.revenue += lead.potential_revenue || 0; }
-      else if (s === 'Not Interested') p.notInterested++;
-      else if (s === 'Not Answering')  p.notAnswering++;
-      else if (s === 'Junk')           p.junk++;
-      else                             p.other++;
-    });
-    return Object.values(perf).map(p => ({
-      ...p,
-      active: p.fresh + p.followUp + p.warm + p.hot,
-      lost:   p.notInterested + p.notAnswering + p.junk,
-      conversionRate: p.total > 0 ? ((p.enrolled / p.total) * 100).toFixed(1) : '0.0',
-    })).sort((a, b) => b.total - a.total);
-  }, [leads]);
+  const counselorPerfRaw = useMemo(() => breakdown?.counselors || [], [breakdown]);
 
   const counselorNames = counselorPerfRaw.map(c => c.name);
   const counselorPerf = selectedCounselor === 'all'
@@ -163,11 +141,11 @@ const AnalyticsPage = () => {
     : counselorPerfRaw.filter(c => c.name === selectedCounselor);
 
   // Helper: render a clickable count pill
-  const countPill = (n, color, title, subset) => (
+  const countPill = (n, color, title, filters) => (
     <span
       title="Click to view leads"
       style={{ cursor: n > 0 ? 'pointer' : 'default', background: color, color: '#fff', borderRadius: 12, padding: '2px 10px', fontWeight: 700, opacity: n === 0 ? 0.4 : 1 }}
-      onClick={() => n > 0 && openDrawer(title, subset)}
+      onClick={() => n > 0 && openDrawer(title, filters)}
     >{n}</span>
   );
 
@@ -198,7 +176,7 @@ const AnalyticsPage = () => {
       sorter: (a, b) => a.total - b.total,
       align: 'center',
       width: 80,
-      render: (n, r) => countPill(n, '#1d4ed8', `${r.name} — All Leads`, (leads || []).filter(l => l.assigned_to === r.name)),
+      render: (n, r) => countPill(n, '#1d4ed8', `${r.name} — All Leads`, { assigned_to: r.name }),
     },
     {
       title: 'Fresh',
@@ -207,7 +185,7 @@ const AnalyticsPage = () => {
       sorter: (a, b) => a.fresh - b.fresh,
       align: 'center',
       width: 75,
-      render: (n, r) => countPill(n, '#0891b2', `${r.name} — Fresh`, (leads || []).filter(l => l.assigned_to === r.name && l.status === 'Fresh')),
+      render: (n, r) => countPill(n, '#0891b2', `${r.name} — Fresh`, { assigned_to: r.name, status: 'Fresh' }),
     },
     {
       title: 'Follow Up',
@@ -216,7 +194,7 @@ const AnalyticsPage = () => {
       sorter: (a, b) => a.followUp - b.followUp,
       align: 'center',
       width: 90,
-      render: (n, r) => countPill(n, '#2563eb', `${r.name} — Follow Up`, (leads || []).filter(l => l.assigned_to === r.name && l.status === 'Follow Up')),
+      render: (n, r) => countPill(n, '#2563eb', `${r.name} — Follow Up`, { assigned_to: r.name, status: 'Follow Up' }),
     },
     {
       title: 'Warm',
@@ -225,7 +203,7 @@ const AnalyticsPage = () => {
       sorter: (a, b) => a.warm - b.warm,
       align: 'center',
       width: 75,
-      render: (n, r) => countPill(n, '#d97706', `${r.name} — Warm`, (leads || []).filter(l => l.assigned_to === r.name && l.status === 'Warm')),
+      render: (n, r) => countPill(n, '#d97706', `${r.name} — Warm`, { assigned_to: r.name, status: 'Warm' }),
     },
     {
       title: 'Hot',
@@ -234,7 +212,7 @@ const AnalyticsPage = () => {
       sorter: (a, b) => a.hot - b.hot,
       align: 'center',
       width: 65,
-      render: (n, r) => countPill(n, '#dc2626', `${r.name} — Hot`, (leads || []).filter(l => l.assigned_to === r.name && l.status === 'Hot')),
+      render: (n, r) => countPill(n, '#dc2626', `${r.name} — Hot`, { assigned_to: r.name, status: 'Hot' }),
     },
     {
       title: 'Enrolled',
@@ -243,7 +221,7 @@ const AnalyticsPage = () => {
       sorter: (a, b) => a.enrolled - b.enrolled,
       align: 'center',
       width: 85,
-      render: (n, r) => countPill(n, '#16a34a', `${r.name} — Enrolled`, (leads || []).filter(l => l.assigned_to === r.name && l.status === 'Enrolled')),
+      render: (n, r) => countPill(n, '#16a34a', `${r.name} — Enrolled`, { assigned_to: r.name, status: 'Enrolled' }),
     },
     {
       title: 'Not Interested',
@@ -252,7 +230,7 @@ const AnalyticsPage = () => {
       sorter: (a, b) => a.notInterested - b.notInterested,
       align: 'center',
       width: 110,
-      render: (n, r) => countPill(n, '#6b7280', `${r.name} — Not Interested`, (leads || []).filter(l => l.assigned_to === r.name && l.status === 'Not Interested')),
+      render: (n, r) => countPill(n, '#6b7280', `${r.name} — Not Interested`, { assigned_to: r.name, status: 'Not Interested' }),
     },
     {
       title: 'Not Answering',
@@ -261,7 +239,7 @@ const AnalyticsPage = () => {
       sorter: (a, b) => a.notAnswering - b.notAnswering,
       align: 'center',
       width: 110,
-      render: (n, r) => countPill(n, '#78716c', `${r.name} — Not Answering`, (leads || []).filter(l => l.assigned_to === r.name && l.status === 'Not Answering')),
+      render: (n, r) => countPill(n, '#78716c', `${r.name} — Not Answering`, { assigned_to: r.name, status: 'Not Answering' }),
     },
     {
       title: 'Junk',
@@ -270,7 +248,7 @@ const AnalyticsPage = () => {
       sorter: (a, b) => a.junk - b.junk,
       align: 'center',
       width: 70,
-      render: (n, r) => countPill(n, '#9ca3af', `${r.name} — Junk`, (leads || []).filter(l => l.assigned_to === r.name && l.status === 'Junk')),
+      render: (n, r) => countPill(n, '#9ca3af', `${r.name} — Junk`, { assigned_to: r.name, status: 'Junk' }),
     },
     {
       title: 'Other',
@@ -279,7 +257,7 @@ const AnalyticsPage = () => {
       sorter: (a, b) => a.other - b.other,
       align: 'center',
       width: 70,
-      render: (n, r) => countPill(n, '#a855f7', `${r.name} — Other`, (leads || []).filter(l => l.assigned_to === r.name && !['Fresh','Follow Up','Warm','Hot','Enrolled','Not Interested','Not Answering','Junk'].includes(l.status))),
+      render: (n, r) => countPill(n, '#a855f7', `${r.name} — Other`, { assigned_to: r.name, status_in: OTHER_STATUSES }),
     },
     {
       title: 'Conv %',
@@ -310,15 +288,10 @@ const AnalyticsPage = () => {
   }
 
   /* ── existing charts data ───────────────────────────── */
-  const sourceDistData = {};
-  leads?.forEach(lead => { sourceDistData[lead.source] = (sourceDistData[lead.source] || 0) + 1; });
-  const sourceDistChartData = Object.entries(sourceDistData).map(([name, value]) => ({ name, value }));
-
-  const courseData = {};
-  leads?.forEach(lead => { courseData[lead.course_interested] = (courseData[lead.course_interested] || 0) + 1; });
-  const courseChartData = Object.entries(courseData).map(([name, value]) => ({
+  const sourceDistChartData = (breakdown?.sources || []).map(({ name, count }) => ({ name, value: count }));
+  const courseChartData = (breakdown?.courses || []).map(({ name, count }) => ({
     name: name?.length > 20 ? name.substring(0, 20) + '…' : name,
-    value,
+    value: count,
   }));
 
   /* ── source analytics derived ───────────────────────── */
@@ -791,9 +764,13 @@ const AnalyticsPage = () => {
         open={drawer.open}
         onClose={() => setDrawer(d => ({ ...d, open: false }))}
         width={900}
-        extra={<span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{drawer.leads.length} leads</span>}
+        extra={<span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
+          {drawer.capped ? `showing first ${drawer.leads.length} of ${drawer.total}` : `${drawer.leads.length} leads`}
+        </span>}
       >
+        {drawer.failed && <Alert type="error" showIcon style={{ marginBottom: 12 }} message="Couldn't load these leads - close and try again." />}
         <Table
+          loading={drawer.loading}
           dataSource={drawer.leads}
           rowKey="id"
           size="small"

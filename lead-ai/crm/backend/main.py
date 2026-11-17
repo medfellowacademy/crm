@@ -71,6 +71,7 @@ from auth import (
 
 # Centralized RBAC (role hierarchy + permission matrix + dependencies)
 import rbac
+import analytics_breakdown
 import repeat_leads
 import constants as _const
 from rbac import (
@@ -4843,6 +4844,29 @@ def delete_user(user_id: int, actor: dict = Depends(require_permission(P.DELETE_
     _audit_event("user.delete", f"deleted user {db_user.get('email')} (role {db_user.get('role')})",
                  actor=actor, entity_type="user", entity_id=str(user_id))
     return {"message": "User deleted successfully"}
+
+@app.get("/api/analytics/breakdown",
+         dependencies=[Depends(require_permission(P.VIEW_ANALYTICS))])
+def analytics_breakdown_endpoint(created_from: Optional[str] = None, created_to: Optional[str] = None,
+                                 current_user: dict = Depends(current_active_user)):
+    """Per-counselor status counts + booked revenue, and lead counts by source and course.
+
+    Replaces the Analytics page downloading up to 10,000 whole leads to count them in the
+    browser. Scoped to the caller's visibility and cached per scope and date range."""
+    _scope = rbac.lead_scope_names(current_user)
+    _ck = f"analytics_breakdown:{rbac.scope_cache_suffix(current_user)}:{created_from}:{created_to}"
+    if _ck in STATS_CACHE:
+        return STATS_CACHE[_ck]
+    try:
+        leads = _fetch_all_leads(analytics_breakdown.COLUMNS, date_from=created_from, date_to=created_to,
+                                 assigned_to_in=_scope)
+        result = analytics_breakdown.breakdown(leads)
+        STATS_CACHE[_ck] = result
+        return result
+    except Exception as e:
+        logger.error(f"analytics_breakdown error: {e}")
+        raise HTTPException(status_code=503, detail="Couldn't load the analytics breakdown")
+
 
 @app.get("/api/analytics/revenue-by-country",
          dependencies=[Depends(require_permission(P.VIEW_ALL_REVENUE))])
