@@ -35,6 +35,9 @@ const ConsolidatedReportsPage   = lazy(() => import('./pages/ConsolidatedReports
 const VacancyBoardPage          = lazy(() => import('./pages/VacancyBoardPage'));
 const SalesTargetsPage          = lazy(() => import('./pages/SalesTargetsPage'));
 const OfficeScreenPage          = lazy(() => import('./pages/OfficeScreenPage'));
+const FunnelReportsPage         = lazy(() => import('./pages/FunnelReportsPage'));
+const PeopleReportsPage         = lazy(() => import('./pages/PeopleReportsPage'));
+const ActivityReportsPage       = lazy(() => import('./pages/ActivityReportsPage'));
 import { isFeatureEnabled } from './config/featureFlags';
 import ErrorBoundary from './components/ErrorBoundary';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -109,6 +112,9 @@ function AppRoutes() {
                     <Route path="/leads" element={<LeadsPageEnhanced />} />
                     <Route path="/leads/:leadId" element={<LeadDetails />} />
                     <Route path="/pipeline" element={<DragDropPipeline />} />
+                    <Route path="/funnel" element={<FunnelReportsPage />} />
+                    <Route path="/people" element={<PeopleReportsPage />} />
+                    <Route path="/activity" element={<ActivityReportsPage />} />
                     <Route path="/lead-analysis" element={<LeadAnalysisPage />} />
                     <Route path="/analytics" element={<AnalyticsPage />} />
                     <Route path="/hospitals" element={<HospitalsPage />} />
