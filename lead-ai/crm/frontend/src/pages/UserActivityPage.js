@@ -47,10 +47,15 @@ export default function UserActivityPage() {
   const [activeTab, setActiveTab]       = useState('overview');
 
   // ── Data fetching ──────────────────────────────────────────────────────────
+  // Only leads touched inside the chosen range are fetched (this page filters on updated_at).
+  const rangeFrom = dateRange?.[0]?.startOf('day').toISOString();
+  const rangeTo   = dateRange?.[1]?.endOf('day').toISOString();
   const { data: leadsResp, isLoading: leadsLoading, refetch: refetchLeads } = useQuery({
-    queryKey: ['user-activity-leads'],
-    queryFn: () => leadsAPI.getAll({ limit: 5000 }).then(r => r.data),
+    queryKey: ['user-activity-leads', rangeFrom, rangeTo],
+    queryFn: () => leadsAPI.getAll({ limit: 5000, updated_from: rangeFrom, updated_to: rangeTo }).then(r => r.data),
+    enabled: !!(rangeFrom && rangeTo),
     staleTime: 60_000,
+    placeholderData: (prev) => prev,
   });
 
   const { data: usersResp, isLoading: usersLoading, refetch: refetchUsers } = useQuery({

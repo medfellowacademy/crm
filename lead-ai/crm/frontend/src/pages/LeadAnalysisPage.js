@@ -83,9 +83,16 @@ const LeadAnalysisPage = () => {
   const openDrawer = (title, leadsSubset) => setDrawer({ open: true, title, leads: leadsSubset });
 
   // Fetch data
+  // Only the chosen date range is fetched (it used to be every lead ever, under the shared
+  // ['leads'] key, which other pages invalidate and refetch). The key is its own now.
+  const rangeFrom = dateRange?.[0]?.startOf('day').toISOString();
+  const rangeTo   = dateRange?.[1]?.endOf('day').toISOString();
   const { data: leadsData, isLoading: leadsLoading, refetch: refetchLeads } = useQuery({
-    queryKey: ['leads'],
-    queryFn: () => leadsAPI.getAll({ limit: 10000 }).then(res => res.data)
+    queryKey: ['lead-analysis-leads', rangeFrom, rangeTo],
+    queryFn: () => leadsAPI.getAll({ limit: 10000, created_from: rangeFrom, created_to: rangeTo }).then(res => res.data),
+    enabled: !!(rangeFrom && rangeTo),
+    staleTime: 2 * 60 * 1000,
+    placeholderData: (prev) => prev,
   });
 
   const { data: usersData, isLoading: usersLoading } = useQuery({
