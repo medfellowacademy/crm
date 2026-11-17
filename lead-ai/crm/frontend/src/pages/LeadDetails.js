@@ -23,6 +23,8 @@ import {
   Badge,
   Statistic,
   InputNumber,
+  Avatar,
+  Table,
 } from 'antd';
 import {
   ArrowLeftOutlined,
@@ -38,6 +40,8 @@ import {
   RetweetOutlined,
 } from '@ant-design/icons';
 import { leadsAPI, coursesAPI, counselorsAPI, usersAPI } from '../api/api';
+import { financeFor, safeParse, instalmentLabel, fmtBoth } from '../utils/finance';
+import { UserOutlined as NavUser, FileTextOutlined as NavNotes, CalendarOutlined as NavCalendar, HistoryOutlined as NavHistory } from '@ant-design/icons';
 import { COUNTRIES } from '../config/countries';
 import { STATUS_OPTIONS, SOURCE_OPTIONS, STATUS_COLOR_MAP } from '../config/leadEnums';
 
@@ -154,6 +158,11 @@ const LeadDetails = () => {
   const [pendingStatus, setPendingStatus] = useState(null);
   const [enrollmentModal, setEnrollmentModal] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [section, setSection] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get('tab') || 'overview'; } catch { return 'overview'; }
+  });
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduleDate, setScheduleDate] = useState(null);
   const [editingRevField, setEditingRevField] = useState(null); // 'expected' | 'actual' | null
   const [revInputVal, setRevInputVal]         = useState(null);
 
@@ -398,6 +407,30 @@ const LeadDetails = () => {
     );
   }
 
+  const setSectionTab = (k) => {
+    setSection(k);
+    try { window.history.replaceState(null, '', `${window.location.pathname}?tab=${k}`); } catch { /* ignore */ }
+  };
+  const show = (k) => ({ display: section === k ? 'block' : 'none' });
+  const noteList = (lead?.notes || []).filter(n => n.channel !== 'system');
+  const messageNotes = noteList.filter(n => n.channel === 'email' || n.channel === 'whatsapp');
+  const callCount = (lead?.notes || []).filter(n => /^\[(\d*(?:1st|2nd|3rd|\d+th) Call)\]/.test(n.content || '')).length;
+  const pay = financeFor(lead);
+  const emiAll = safeParse(lead?.emi_details, []);
+  const emiRows = emiAll.map((e, i) => ({
+    key: i, label: instalmentLabel(emiAll, i), date: e.date, amount: e.amount, status: e.status,
+    overdue: e.status !== 'paid' && e.status !== 'cancelled' && e.date && dayjs(e.date).isBefore(dayjs(), 'day'),
+  }));
+  const navItems = [
+    { key: 'overview', label: 'Overview', icon: <NavUser />, count: null },
+    { key: 'notes', label: 'Notes', icon: <NavNotes />, count: noteList.length },
+    { key: 'messages', label: 'Emails & WhatsApp', icon: <MailOutlined />, count: messageNotes.length },
+    { key: 'calls', label: 'Calls', icon: <PhoneOutlined />, count: callCount },
+    { key: 'payments', label: 'Payments', icon: <DollarOutlined />, count: emiAll.length },
+    { key: 'insights', label: 'AI & Insights', icon: <ThunderboltOutlined />, count: null },
+    { key: 'timeline', label: 'Timeline', icon: <NavHistory />, count: null },
+  ];
+
   return (
     <div>
       {/* Header */}
@@ -420,12 +453,7 @@ const LeadDetails = () => {
         </div>
 
         <Space>
-          <Button
-            icon={<PhoneOutlined />}
-            href={`tel:${lead?.phone}`}
-          >
-            Call
-          </Button>
+          {/* Call lives in the profile strip below (Click to call) */}
           <Button.Group>
             <Button
               icon={<WhatsAppOutlined />}
@@ -463,6 +491,45 @@ const LeadDetails = () => {
         </Space>
       </div>
 
+      {/* ── Profile strip ─────────────────────────────────────────────── */}
+      <Card style={{ marginBottom: 16 }} styles={{ body: { padding: 16 } }}>
+        <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 14, alignItems: 'center', minWidth: 260 }}>
+            <Avatar size={56} style={{ background: '#e0ecff', color: '#1d4ed8', fontWeight: 700, fontSize: 20 }}>
+              {(lead?.full_name || '?').split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase()}
+            </Avatar>
+            <div>
+              <div style={{ fontSize: 11, letterSpacing: 1, color: '#8c8c8c', fontWeight: 600 }}>LEAD DETAILS</div>
+              <div style={{ fontSize: 22, fontWeight: 700, lineHeight: 1.2 }}>{lead?.full_name}</div>
+              <div style={{ color: '#8c8c8c' }}>
+                {[lead?.course_interested, lead?.assigned_to].filter(Boolean).join(' · ') || '—'}
+              </div>
+            </div>
+          </div>
+          <Space direction="vertical" align="end" size={6}>
+            <Space wrap>
+              <Tag color={STATUS_COLOR_MAP?.[lead?.status] || 'blue'} style={{ fontSize: 13, padding: '2px 10px' }}>{lead?.status}</Tag>
+              <Button type="primary" icon={<PhoneOutlined />} href={`tel:${lead?.phone}`} style={{ background: '#15803d', borderColor: '#15803d' }}>
+                Click to call
+              </Button>
+              <Button type="primary" icon={<NavCalendar />} onClick={() => { setScheduleDate(parseDate(lead?.follow_up_date) || null); setScheduleOpen(true); }}>
+                Schedule a call
+              </Button>
+            </Space>
+            <span style={{ color: '#8c8c8c', fontSize: 12 }}>
+              {lead?.follow_up_date ? `Next call: ${parseDate(lead.follow_up_date).format('DD MMM YYYY, hh:mm A')}` : 'No call scheduled yet'}
+            </span>
+          </Space>
+        </div>
+        <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', marginTop: 12, color: '#374151' }}>
+          <span><PhoneOutlined /> <b>Phone</b> {lead?.phone || '—'}</span>
+          <span><MailOutlined /> <b>Email</b> {lead?.email || '—'}</span>
+          <span><b>Source</b> {lead?.source || '—'}</span>
+          {lead?.country && <span><b>Country</b> {lead.country}</span>}
+          <span style={{ color: '#8c8c8c' }}>{lead?.lead_id}</span>
+        </div>
+      </Card>
+
       {/* AI Insights Alert */}
       {lead?.next_action && (
         <Alert
@@ -485,8 +552,37 @@ const LeadDetails = () => {
       )}
 
       <Row gutter={[24, 24]}>
-        {/* Left Column */}
-        <Col xs={24} lg={16}>
+        {/* Left: related lists */}
+        <Col xs={24} lg={5}>
+          <Card styles={{ body: { padding: 12 } }} style={{ position: 'sticky', top: 12 }}>
+            <div style={{ fontSize: 11, letterSpacing: 1, color: '#8c8c8c', fontWeight: 700, padding: '4px 8px 8px' }}>RELATED LISTS</div>
+            {navItems.map(it => {
+              const active = section === it.key;
+              return (
+                <button
+                  key={it.key} type="button" onClick={() => setSectionTab(it.key)}
+                  aria-current={active ? 'page' : undefined}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '10px 12px', marginBottom: 2,
+                    border: 'none', borderRadius: 8, cursor: 'pointer', textAlign: 'left', fontSize: 14,
+                    background: active ? '#e6f0ff' : 'transparent', color: active ? '#1d4ed8' : '#374151', fontWeight: active ? 600 : 400,
+                  }}
+                >
+                  {it.icon}
+                  <span style={{ flex: 1 }}>{it.label}</span>
+                  {it.count !== null && (
+                    <span style={{ background: '#f1f5f9', color: '#475569', borderRadius: 10, padding: '0 8px', fontSize: 12 }}>{it.count}</span>
+                  )}
+                </button>
+              );
+            })}
+          </Card>
+        </Col>
+
+        {/* Right: the selected list. Every section stays mounted (hidden, not removed) so
+            forms and half-typed notes keep their state when switching. */}
+        <Col xs={24} lg={19}>
+          <div style={show('overview')}>
           {/* Lead Information */}
           <Card 
             title="Lead Information"
@@ -722,6 +818,63 @@ const LeadDetails = () => {
             </Form>
           </Card>
 
+          {/* Lead Profile Quality */}
+          {(() => {
+            const fields = [
+              { key: 'email',            label: 'Email',          val: lead?.email },
+              { key: 'phone',            label: 'Phone',          val: lead?.phone },
+              { key: 'whatsapp',         label: 'WhatsApp',       val: lead?.whatsapp },
+              { key: 'country',          label: 'Country',        val: lead?.country },
+              { key: 'source',           label: 'Source',         val: lead?.source },
+              { key: 'course_interested',label: 'Course',         val: lead?.course_interested },
+              { key: 'qualification',    label: 'Qualification',  val: lead?.qualification },
+              { key: 'company',          label: 'Company',        val: lead?.company },
+              { key: 'notes',            label: 'Notes',          val: lead?.notes?.length },
+            ];
+            const filled   = fields.filter(f => f.val);
+            const missing  = fields.filter(f => !f.val);
+            const pct      = Math.round((filled.length / fields.length) * 100);
+            const color    = pct >= 80 ? '#52c41a' : pct >= 50 ? '#faad14' : '#ff4d4f';
+            return (
+              <Card title="📋 Profile Quality" size="small" style={{ marginBottom: 24 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 12 }}>
+                  <Progress type="circle" percent={pct} strokeColor={color} width={64}
+                    format={p => <span style={{ fontSize: 14, fontWeight: 700, color }}>{p}%</span>} />
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{filled.length}/{fields.length} fields filled</div>
+                    <div style={{ fontSize: 11, color: '#8c8c8c' }}>
+                      {pct >= 80 ? 'Complete — high quality lead' : pct >= 50 ? 'Good — a few fields missing' : 'Incomplete — fill in more details'}
+                    </div>
+                  </div>
+                </div>
+                {missing.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Missing:</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                      {missing.map(f => (
+                        <Tag key={f.key} color="warning" style={{ cursor: 'pointer', fontSize: 11 }}
+                          onClick={() => { setIsEditing(true); }}>
+                          + {f.label}
+                        </Tag>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </Card>
+            );
+          })()}
+
+          {/* Recommended Script */}
+          {lead?.recommended_script && (
+            <Card title="Recommended Script" style={{ marginBottom: '24px' }}>
+              <div style={{ whiteSpace: 'pre-wrap', fontSize: '13px', lineHeight: '1.6' }}>
+                {lead.recommended_script}
+              </div>
+            </Card>
+          )}
+          </div>
+
+          <div style={show('notes')}>
           {/* Notes Section */}
           <Card title="Notes & Communication History">
             <Form form={noteForm} onFinish={handleAddNote} layout="vertical">
@@ -991,10 +1144,250 @@ const LeadDetails = () => {
               })}
             </Timeline>
           </Card>
-        </Col>
+          </div>
 
-        {/* Right Column - AI Insights */}
-        <Col xs={24} lg={8}>
+          <div style={show('messages')}>
+            <Card
+              title={<span><MailOutlined /> Emails & WhatsApp</span>}
+              extra={
+                <Space wrap>
+                  <Button icon={<WhatsAppOutlined />} style={{ background: '#25D366', borderColor: '#25D366', color: '#fff' }} onClick={() => setWhatsappModal(true)}>WhatsApp</Button>
+                  <Button onClick={() => setTemplateDrawer(true)}>Templates</Button>
+                  <Button type="primary" icon={<MailOutlined />} onClick={() => setEmailModal(true)}>New email</Button>
+                </Space>
+              }
+              style={{ marginBottom: 24 }}
+            >
+              {messageNotes.length === 0 ? (
+                <div style={{ color: '#8c8c8c', padding: '24px 0', textAlign: 'center' }}>
+                  No emails or WhatsApp messages logged for this lead yet.
+                </div>
+              ) : (
+                <Timeline
+                  items={messageNotes.map(n => ({
+                    color: n.channel === 'whatsapp' ? 'green' : 'blue',
+                    children: (
+                      <div>
+                        <Space size={8} wrap>
+                          <Tag color={n.channel === 'whatsapp' ? 'green' : 'blue'}>{n.channel}</Tag>
+                          <b>{n.created_by || n.author || ''}</b>
+                          <span style={{ color: '#8c8c8c', fontSize: 12 }}>{parseDate(n.created_at)?.format('DD MMM YYYY, hh:mm A')}</span>
+                        </Space>
+                        <div style={{ whiteSpace: 'pre-wrap', marginTop: 4 }}>{n.content}</div>
+                      </div>
+                    ),
+                  }))}
+                />
+              )}
+            </Card>
+          </div>
+
+          <div style={show('calls')}>
+          {/* Call Disposition Summary — shows latest note per call number */}
+          {(() => {
+            // Match any [Nth Call] format
+            const CALL_RE = /^\[(\d*(?:1st|2nd|3rd|\d+th) Call)\]\s*\|?\s*(.*)/;
+            const callNotes = (lead?.notes || []).filter(n => CALL_RE.test(n.content || ''));
+            if (!callNotes.length) return null;
+
+            // Group by call label, keep last note per group
+            const byLabel = {};
+            callNotes.forEach(n => {
+              const m = n.content.match(CALL_RE);
+              if (m) {
+                byLabel[m[1]] = byLabel[m[1]] || [];
+                byLabel[m[1]].push(n);
+              }
+            });
+
+            const CALL_COLORS = ['orange','green','purple','cyan','magenta','red','gold','lime','volcano','geekblue'];
+            const ordinalToNum = (label) => parseInt(label) || 1;
+
+            // Sort call labels by call number
+            const sortedLabels = Object.keys(byLabel).sort((a, b) => ordinalToNum(a) - ordinalToNum(b));
+
+            return (
+              <Card
+                title={<span>📞 Call Summary ({callNotes.length} call note{callNotes.length !== 1 ? 's' : ''} recorded)</span>}
+                size="small"
+                style={{ marginBottom: 24 }}
+              >
+                {sortedLabels.map((label, idx) => {
+                  const notes = byLabel[label];
+                  const latest = notes[notes.length - 1];
+                  const m = latest.content.match(CALL_RE);
+                  if (!m) return null;
+                  const rest = m[2] || '';
+                  const parts = rest.split('→').map(s => s.replace(/^\s*\|\s*/, '').trim()).filter(Boolean);
+                  const mainStatus = parts[0] || '';
+                  const subStatus  = parts[1] || '';
+                  const color = CALL_COLORS[idx % CALL_COLORS.length];
+                  return (
+                    <div key={label} style={{
+                      marginBottom: 10, padding: '8px 10px',
+                      background: '#fafafa', borderRadius: 8,
+                      border: '1px solid #f0f0f0',
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                        <Tag color={color} style={{ fontWeight: 700, margin: 0 }}>📞 {label}</Tag>
+                        {notes.length > 1 && (
+                          <span style={{ fontSize: 11, color: '#8c8c8c' }}>{notes.length} entries</span>
+                        )}
+                      </div>
+                      {mainStatus && <div style={{ fontSize: 12, fontWeight: 600, color: '#262626' }}>{mainStatus}</div>}
+                      {subStatus  && <div style={{ fontSize: 11, color: '#595959' }}>→ {subStatus}</div>}
+                      <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 2 }}>
+                        {parseDate(latest.created_at)?.format('MMM DD, hh:mm A')}
+                        {latest.created_by && ` · ${latest.created_by}`}
+                      </div>
+                    </div>
+                  );
+                })}
+              </Card>
+            );
+          })()}
+            {callCount === 0 && (
+              <Card style={{ marginBottom: 24 }}>
+                <div style={{ color: '#8c8c8c', textAlign: 'center', padding: '16px 0' }}>
+                  No calls logged yet. Add a Call Note from the Notes list to record one.
+                </div>
+              </Card>
+            )}
+          {/* Best Time to Call */}
+          <Card
+            title={
+              <span>
+                <PhoneOutlined style={{ marginRight: 8, color: '#10b981' }} />
+                Best Time to Call
+              </span>
+            }
+            style={{ marginBottom: '24px' }}
+          >
+            <CallTimeWidget country={lead?.country} />
+          </Card>
+          </div>
+
+          <div style={show('payments')}>
+          {/* Revenue Card — always inline-editable (click any value to edit) */}
+          <Card
+            title={<span><DollarOutlined /> Revenue</span>}
+            style={{ marginBottom: '24px' }}
+            extra={<span style={{ fontSize: 11, color: '#8c8c8c' }}>Click a value to edit</span>}
+          >
+            <Row gutter={[16, 16]}>
+              {/* Expected Revenue */}
+              <Col span={12}>
+                <div style={{ marginBottom: 4, fontSize: 12, color: '#8c8c8c' }}>Expected Revenue</div>
+                {editingRevField === 'expected' ? (
+                  <InputNumber
+                    autoFocus
+                    style={{ width: '100%' }}
+                    min={0}
+                    step={1000}
+                    value={revInputVal}
+                    formatter={v => `₹ ${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+                    parser={v => v.replace(/₹\s?|(,*)/g, '')}
+                    onChange={setRevInputVal}
+                    onPressEnter={() => {
+                      if (revInputVal != null) updateLeadMutation.mutate({ expected_revenue: Number(revInputVal) });
+                      setEditingRevField(null);
+                    }}
+                    onBlur={() => {
+                      if (revInputVal != null) updateLeadMutation.mutate({ expected_revenue: Number(revInputVal) });
+                      setEditingRevField(null);
+                    }}
+                  />
+                ) : (
+                  <div
+                    onClick={() => { setEditingRevField('expected'); setRevInputVal(lead?.expected_revenue || 0); }}
+                    style={{
+                      cursor: 'pointer', fontSize: 24, fontWeight: 700,
+                      color: '#faad14', padding: '4px 0',
+                      borderBottom: '1px dashed #faad14',
+                      display: 'inline-block',
+                    }}
+                    title="Click to edit"
+                  >
+                    ₹{(lead?.expected_revenue || 0).toLocaleString('en-IN')}
+                    <span style={{ fontSize: 12, marginLeft: 6, color: '#8c8c8c' }}>✏️</span>
+                  </div>
+                )}
+              </Col>
+
+              {/* Actual Revenue */}
+              <Col span={12}>
+                <div style={{ marginBottom: 4, fontSize: 12, color: '#8c8c8c' }}>
+                  Actual Revenue{lead?.status !== 'Enrolled' && <span style={{ color: '#faad14', marginLeft: 4 }}>(fill when enrolled)</span>}
+                </div>
+                {editingRevField === 'actual' ? (
+                  <InputNumber
+                    autoFocus
+                    style={{ width: '100%' }}
+                    min={0}
+                    step={1000}
+                    value={revInputVal}
+                    formatter={v => `₹ ${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+                    parser={v => v.replace(/₹\s?|(,*)/g, '')}
+                    onChange={setRevInputVal}
+                    onPressEnter={() => {
+                      if (revInputVal != null) updateLeadMutation.mutate({ actual_revenue: Number(revInputVal) });
+                      setEditingRevField(null);
+                    }}
+                    onBlur={() => {
+                      if (revInputVal != null) updateLeadMutation.mutate({ actual_revenue: Number(revInputVal) });
+                      setEditingRevField(null);
+                    }}
+                  />
+                ) : (
+                  <div
+                    onClick={() => { setEditingRevField('actual'); setRevInputVal(lead?.actual_revenue || 0); }}
+                    style={{
+                      cursor: 'pointer', fontSize: 24, fontWeight: 700,
+                      color: lead?.status === 'Enrolled' ? '#52c41a' : '#bfbfbf',
+                      padding: '4px 0',
+                      borderBottom: `1px dashed ${lead?.status === 'Enrolled' ? '#52c41a' : '#bfbfbf'}`,
+                      display: 'inline-block',
+                    }}
+                    title="Click to edit"
+                  >
+                    ₹{(lead?.actual_revenue || 0).toLocaleString('en-IN')}
+                    <span style={{ fontSize: 12, marginLeft: 6, color: '#8c8c8c' }}>✏️</span>
+                  </div>
+                )}
+              </Col>
+            </Row>
+          </Card>
+            <Card title={<span><DollarOutlined /> Payment schedule</span>} style={{ marginBottom: 24 }}
+              extra={<Button onClick={() => navigate('/payments')}>Open Payments</Button>}>
+              {emiRows.length === 0 && !pay.reg ? (
+                <div style={{ color: '#8c8c8c', textAlign: 'center', padding: '16px 0' }}>
+                  No registration or EMI schedule recorded for this lead.
+                </div>
+              ) : (
+                <>
+                  <Row gutter={[16, 16]} style={{ marginBottom: 12 }}>
+                    <Col xs={12} md={6}><Statistic title="Total fee" value={pay.total} formatter={fmtBoth} /></Col>
+                    <Col xs={12} md={6}><Statistic title="Received" value={pay.collected} formatter={fmtBoth} valueStyle={{ color: '#389e0d' }} /></Col>
+                    <Col xs={12} md={6}><Statistic title="Remaining" value={pay.balance} formatter={fmtBoth} valueStyle={{ color: pay.balance > 0 ? '#cf1322' : undefined }} /></Col>
+                    <Col xs={12} md={6}><Statistic title="Overdue EMI" value={pay.overdueAmount} formatter={fmtBoth} valueStyle={{ color: pay.overdueAmount > 0 ? '#cf1322' : undefined }} />
+                      {pay.regPendingAmount > 0 && <div style={{ color: '#d46b08', fontSize: 12 }}>{fmtBoth(pay.regPendingAmount)} registration pending</div>}
+                    </Col>
+                  </Row>
+                  <Table
+                    size="small" pagination={false} rowKey={(r) => r.key} dataSource={emiRows}
+                    columns={[
+                      { title: 'Instalment', dataIndex: 'label' },
+                      { title: 'Due', dataIndex: 'date', render: (d) => (d ? dayjs(d).format('DD MMM YYYY') : '—') },
+                      { title: 'Amount', dataIndex: 'amount', align: 'right', render: (v) => fmtBoth(v) },
+                      { title: 'Status', dataIndex: 'status', render: (s, r) => <Tag color={r.overdue ? 'red' : s === 'paid' ? 'green' : s === 'cancelled' ? 'default' : 'blue'}>{r.overdue ? 'overdue' : s || 'pending'}</Tag> },
+                    ]}
+                  />
+                </>
+              )}
+            </Card>
+          </div>
+
+          <div style={show('insights')}>
           {/* AI Assistant (Claude-powered) */}
           <AIAssistantPanel leadId={leadId} />
 
@@ -1133,229 +1526,9 @@ const LeadDetails = () => {
               />
             </div>
           </Card>
+          </div>
 
-          {/* Call Disposition Summary — shows latest note per call number */}
-          {(() => {
-            // Match any [Nth Call] format
-            const CALL_RE = /^\[(\d*(?:1st|2nd|3rd|\d+th) Call)\]\s*\|?\s*(.*)/;
-            const callNotes = (lead?.notes || []).filter(n => CALL_RE.test(n.content || ''));
-            if (!callNotes.length) return null;
-
-            // Group by call label, keep last note per group
-            const byLabel = {};
-            callNotes.forEach(n => {
-              const m = n.content.match(CALL_RE);
-              if (m) {
-                byLabel[m[1]] = byLabel[m[1]] || [];
-                byLabel[m[1]].push(n);
-              }
-            });
-
-            const CALL_COLORS = ['orange','green','purple','cyan','magenta','red','gold','lime','volcano','geekblue'];
-            const ordinalToNum = (label) => parseInt(label) || 1;
-
-            // Sort call labels by call number
-            const sortedLabels = Object.keys(byLabel).sort((a, b) => ordinalToNum(a) - ordinalToNum(b));
-
-            return (
-              <Card
-                title={<span>📞 Call Summary ({callNotes.length} call note{callNotes.length !== 1 ? 's' : ''} recorded)</span>}
-                size="small"
-                style={{ marginBottom: 24 }}
-              >
-                {sortedLabels.map((label, idx) => {
-                  const notes = byLabel[label];
-                  const latest = notes[notes.length - 1];
-                  const m = latest.content.match(CALL_RE);
-                  if (!m) return null;
-                  const rest = m[2] || '';
-                  const parts = rest.split('→').map(s => s.replace(/^\s*\|\s*/, '').trim()).filter(Boolean);
-                  const mainStatus = parts[0] || '';
-                  const subStatus  = parts[1] || '';
-                  const color = CALL_COLORS[idx % CALL_COLORS.length];
-                  return (
-                    <div key={label} style={{
-                      marginBottom: 10, padding: '8px 10px',
-                      background: '#fafafa', borderRadius: 8,
-                      border: '1px solid #f0f0f0',
-                    }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                        <Tag color={color} style={{ fontWeight: 700, margin: 0 }}>📞 {label}</Tag>
-                        {notes.length > 1 && (
-                          <span style={{ fontSize: 11, color: '#8c8c8c' }}>{notes.length} entries</span>
-                        )}
-                      </div>
-                      {mainStatus && <div style={{ fontSize: 12, fontWeight: 600, color: '#262626' }}>{mainStatus}</div>}
-                      {subStatus  && <div style={{ fontSize: 11, color: '#595959' }}>→ {subStatus}</div>}
-                      <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 2 }}>
-                        {parseDate(latest.created_at)?.format('MMM DD, hh:mm A')}
-                        {latest.created_by && ` · ${latest.created_by}`}
-                      </div>
-                    </div>
-                  );
-                })}
-              </Card>
-            );
-          })()}
-
-          {/* Revenue Card — always inline-editable (click any value to edit) */}
-          <Card
-            title={<span><DollarOutlined /> Revenue</span>}
-            style={{ marginBottom: '24px' }}
-            extra={<span style={{ fontSize: 11, color: '#8c8c8c' }}>Click a value to edit</span>}
-          >
-            <Row gutter={[16, 16]}>
-              {/* Expected Revenue */}
-              <Col span={12}>
-                <div style={{ marginBottom: 4, fontSize: 12, color: '#8c8c8c' }}>Expected Revenue</div>
-                {editingRevField === 'expected' ? (
-                  <InputNumber
-                    autoFocus
-                    style={{ width: '100%' }}
-                    min={0}
-                    step={1000}
-                    value={revInputVal}
-                    formatter={v => `₹ ${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
-                    parser={v => v.replace(/₹\s?|(,*)/g, '')}
-                    onChange={setRevInputVal}
-                    onPressEnter={() => {
-                      if (revInputVal != null) updateLeadMutation.mutate({ expected_revenue: Number(revInputVal) });
-                      setEditingRevField(null);
-                    }}
-                    onBlur={() => {
-                      if (revInputVal != null) updateLeadMutation.mutate({ expected_revenue: Number(revInputVal) });
-                      setEditingRevField(null);
-                    }}
-                  />
-                ) : (
-                  <div
-                    onClick={() => { setEditingRevField('expected'); setRevInputVal(lead?.expected_revenue || 0); }}
-                    style={{
-                      cursor: 'pointer', fontSize: 24, fontWeight: 700,
-                      color: '#faad14', padding: '4px 0',
-                      borderBottom: '1px dashed #faad14',
-                      display: 'inline-block',
-                    }}
-                    title="Click to edit"
-                  >
-                    ₹{(lead?.expected_revenue || 0).toLocaleString('en-IN')}
-                    <span style={{ fontSize: 12, marginLeft: 6, color: '#8c8c8c' }}>✏️</span>
-                  </div>
-                )}
-              </Col>
-
-              {/* Actual Revenue */}
-              <Col span={12}>
-                <div style={{ marginBottom: 4, fontSize: 12, color: '#8c8c8c' }}>
-                  Actual Revenue{lead?.status !== 'Enrolled' && <span style={{ color: '#faad14', marginLeft: 4 }}>(fill when enrolled)</span>}
-                </div>
-                {editingRevField === 'actual' ? (
-                  <InputNumber
-                    autoFocus
-                    style={{ width: '100%' }}
-                    min={0}
-                    step={1000}
-                    value={revInputVal}
-                    formatter={v => `₹ ${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
-                    parser={v => v.replace(/₹\s?|(,*)/g, '')}
-                    onChange={setRevInputVal}
-                    onPressEnter={() => {
-                      if (revInputVal != null) updateLeadMutation.mutate({ actual_revenue: Number(revInputVal) });
-                      setEditingRevField(null);
-                    }}
-                    onBlur={() => {
-                      if (revInputVal != null) updateLeadMutation.mutate({ actual_revenue: Number(revInputVal) });
-                      setEditingRevField(null);
-                    }}
-                  />
-                ) : (
-                  <div
-                    onClick={() => { setEditingRevField('actual'); setRevInputVal(lead?.actual_revenue || 0); }}
-                    style={{
-                      cursor: 'pointer', fontSize: 24, fontWeight: 700,
-                      color: lead?.status === 'Enrolled' ? '#52c41a' : '#bfbfbf',
-                      padding: '4px 0',
-                      borderBottom: `1px dashed ${lead?.status === 'Enrolled' ? '#52c41a' : '#bfbfbf'}`,
-                      display: 'inline-block',
-                    }}
-                    title="Click to edit"
-                  >
-                    ₹{(lead?.actual_revenue || 0).toLocaleString('en-IN')}
-                    <span style={{ fontSize: 12, marginLeft: 6, color: '#8c8c8c' }}>✏️</span>
-                  </div>
-                )}
-              </Col>
-            </Row>
-          </Card>
-
-          {/* Lead Profile Quality */}
-          {(() => {
-            const fields = [
-              { key: 'email',            label: 'Email',          val: lead?.email },
-              { key: 'phone',            label: 'Phone',          val: lead?.phone },
-              { key: 'whatsapp',         label: 'WhatsApp',       val: lead?.whatsapp },
-              { key: 'country',          label: 'Country',        val: lead?.country },
-              { key: 'source',           label: 'Source',         val: lead?.source },
-              { key: 'course_interested',label: 'Course',         val: lead?.course_interested },
-              { key: 'qualification',    label: 'Qualification',  val: lead?.qualification },
-              { key: 'company',          label: 'Company',        val: lead?.company },
-              { key: 'notes',            label: 'Notes',          val: lead?.notes?.length },
-            ];
-            const filled   = fields.filter(f => f.val);
-            const missing  = fields.filter(f => !f.val);
-            const pct      = Math.round((filled.length / fields.length) * 100);
-            const color    = pct >= 80 ? '#52c41a' : pct >= 50 ? '#faad14' : '#ff4d4f';
-            return (
-              <Card title="📋 Profile Quality" size="small" style={{ marginBottom: 24 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 12 }}>
-                  <Progress type="circle" percent={pct} strokeColor={color} width={64}
-                    format={p => <span style={{ fontSize: 14, fontWeight: 700, color }}>{p}%</span>} />
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>{filled.length}/{fields.length} fields filled</div>
-                    <div style={{ fontSize: 11, color: '#8c8c8c' }}>
-                      {pct >= 80 ? 'Complete — high quality lead' : pct >= 50 ? 'Good — a few fields missing' : 'Incomplete — fill in more details'}
-                    </div>
-                  </div>
-                </div>
-                {missing.length > 0 && (
-                  <div>
-                    <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Missing:</div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                      {missing.map(f => (
-                        <Tag key={f.key} color="warning" style={{ cursor: 'pointer', fontSize: 11 }}
-                          onClick={() => { setIsEditing(true); }}>
-                          + {f.label}
-                        </Tag>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </Card>
-            );
-          })()}
-
-          {/* Best Time to Call */}
-          <Card
-            title={
-              <span>
-                <PhoneOutlined style={{ marginRight: 8, color: '#10b981' }} />
-                Best Time to Call
-              </span>
-            }
-            style={{ marginBottom: '24px' }}
-          >
-            <CallTimeWidget country={lead?.country} />
-          </Card>
-
-          {/* Recommended Script */}
-          {lead?.recommended_script && (
-            <Card title="Recommended Script" style={{ marginBottom: '24px' }}>
-              <div style={{ whiteSpace: 'pre-wrap', fontSize: '13px', lineHeight: '1.6' }}>
-                {lead.recommended_script}
-              </div>
-            </Card>
-          )}
-
+          <div style={show('timeline')}>
           {/* Submission History — first submission + every repeat */}
           <Card
             title={<span><RetweetOutlined /> Submission History</span>}
@@ -1373,8 +1546,20 @@ const LeadDetails = () => {
               <ActivityTimeline leadId={leadId} />
             </Card>
           )}
+          </div>
         </Col>
       </Row>
+
+      {/* Schedule a call: sets the follow-up date and time */}
+      <Modal
+        title="Schedule a call" open={scheduleOpen} okText="Save" onCancel={() => setScheduleOpen(false)}
+        okButtonProps={{ disabled: !scheduleDate, loading: updateLeadMutation.isPending }}
+        onOk={() => { updateLeadMutation.mutate({ follow_up_date: scheduleDate.toISOString() }); setScheduleOpen(false); }}
+      >
+        <p style={{ color: '#6b7280' }}>This sets the lead's follow-up date, so it shows in Today's Follow-ups and reminders.</p>
+        <DatePicker showTime={{ format: 'hh:mm A', use12Hours: true }} format="DD MMM YYYY, hh:mm A" value={scheduleDate}
+          onChange={setScheduleDate} style={{ width: '100%' }} />
+      </Modal>
 
       {/* WhatsApp Modal */}
       <Modal
