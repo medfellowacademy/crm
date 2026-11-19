@@ -27,6 +27,7 @@ const WebsiteLeadsPage          = lazy(() => import('./pages/WebsiteLeadsPage'))
 const AIChatPage                = lazy(() => import('./pages/AIChatPage'));
 const TeamPerformancePage       = lazy(() => import('./pages/TeamPerformancePage'));
 const AttendancePage            = lazy(() => import('./pages/AttendancePage'));
+const CallsPage                 = lazy(() => import('./pages/CallsPage'));
 const DepartmentsPage           = lazy(() => import('./pages/DepartmentsPage'));
 const BrochuresPage             = lazy(() => import('./pages/BrochuresPage'));
 const LeadRecoveryPage          = lazy(() => import('./pages/LeadRecoveryPage'));
@@ -108,6 +109,7 @@ function AppRoutes() {
                     <Route path="/vacancy" element={<VacancyBoardPage />} />
                     <Route path="/targets" element={<SalesTargetsPage />} />
                     <Route path="/attendance" element={<AttendancePage />} />
+                    <Route path="/calls" element={<CallsPage />} />
                     <Route path="/followups" element={<FollowupTodayPage />} />
                     <Route path="/leads" element={<LeadsPageEnhanced />} />
                     <Route path="/leads/:leadId" element={<LeadDetails />} />

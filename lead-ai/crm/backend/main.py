@@ -133,6 +133,7 @@ from communication_service_v2 import whatsapp_service, email_service, comm_servi
 from ai_chat import router as ai_chat_router
 from attendance import router as attendance_router
 from payroll_router import router as payroll_router
+from calls_router import router as calls_router
 from sheets_router import router as sheets_router
 from mbg_router import router as mbg_router
 from departments_router import router as departments_router
@@ -462,6 +463,9 @@ _PUBLIC_PATHS = {
     "/api/whatsapp/webhook",
     "/api/interakt/webhook",
     "/api/meta/leads-webhook",
+    # The Android call-log app has no login: it sends its pairing token in X-Device-Token,
+    # which calls_router.sync_calls checks against call_devices.
+    "/api/calls/sync",
 }
 
 from fastapi import Request
@@ -757,6 +761,7 @@ app.add_middleware(
 app.include_router(ai_chat_router)
 app.include_router(attendance_router)
 app.include_router(payroll_router)
+app.include_router(calls_router)
 app.include_router(sheets_router)
 app.include_router(mbg_router)
 app.include_router(departments_router)

@@ -129,6 +129,13 @@ export const brochuresAPI = {
 };
 
 // Follow-ups work list
+export const callsAPI = {
+  summary: (params) => api.get('/api/calls/summary', { params }),
+  devices: () => api.get('/api/calls/devices'),
+  pair: (label) => api.post('/api/calls/devices', { label }),
+  revoke: (id) => api.delete(`/api/calls/devices/${id}`),
+};
+
 export const followupsAPI = {
   list: (params) => api.get('/api/followups', { params }),
 };

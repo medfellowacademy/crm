@@ -11,6 +11,7 @@ import {
   GitBranch,
   DollarSign,
   MapPin,
+  Phone,
   Search,
   LogOut,
   ClipboardList,
@@ -218,6 +219,7 @@ const ProfessionalLayout = ({ children }) => {
   // Counselors keep their day-to-day pages flat (no groups to dig through).
   const counselorItems = userRole === 'Counselor' ? [
     { key: '/attendance', icon: MapPin, label: 'Attendance' },
+    { key: '/calls', icon: Phone, label: 'Calls' },
     { key: '/followups', icon: CalendarClock, label: 'Follow-ups' },
     { key: '/leads', icon: Users, label: 'Leads' },
     { key: '/pipeline', icon: GitBranch, label: 'Pipeline' },

@@ -192,7 +192,7 @@ export const ROUTE_PERMISSIONS = {
 // data). Anything not listed here AND not in ROUTE_PERMISSIONS is denied.
 const PUBLIC_ROUTES = new Set([
   '/', '/login', '/logout', '/profile', '/unauthorized', '/dashboard',
-  '/hospitals', '/courses', '/attendance', '/whatsapp',
+  '/hospitals', '/courses', '/attendance', '/calls', '/whatsapp',
 ]);
 
 export const canAccessRoute = (userRole, route) => {

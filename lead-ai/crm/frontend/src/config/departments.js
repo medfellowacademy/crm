@@ -19,7 +19,7 @@ import {
   LayoutDashboard, Users, Hospital, BookOpen, BarChart3, TrendingUp,
   GitBranch, UserPlus, Activity, Shield, CalendarClock, DollarSign,
   Settings, Timer, Users2, ClipboardList,
-  Share2, Globe, Bot, Trophy, MapPin, Building2, Megaphone, Wallet,
+  Share2, Globe, Bot, Trophy, MapPin, Phone, Building2, Megaphone, Wallet,
   Settings2, FileText, MessageCircleHeart, Award, LayoutGrid, Target,
 } from 'lucide-react';
 
@@ -72,6 +72,7 @@ export const DEPARTMENTS = {
       { key: '/hospitals',            icon: Hospital,      label: 'Hospitals' },
       { key: '/courses',              icon: BookOpen,      label: 'Courses' },
       { key: '/attendance',           icon: MapPin,        label: 'Attendance' },
+      { key: '/calls',                icon: Phone,         label: 'Calls' },
       { key: '/activity',             icon: Activity,      label: 'Activity' },
     ],
   },
@@ -107,7 +108,7 @@ export const GENERAL_PAGES = [
 
 // Pages counselors need day-to-day even though they belong to Sales/Finance
 // department groups — counselors keep them without any department grant.
-export const COUNSELOR_PAGES = ['/attendance', '/followups', '/leads', '/pipeline', '/payments', '/lead-update-activity'];
+export const COUNSELOR_PAGES = ['/attendance', '/calls', '/followups', '/leads', '/pipeline', '/payments', '/lead-update-activity'];
 
 // Even inside a granted department, these remain Super Admin-only.
 export const ADMIN_ONLY_PAGES = ['/users', '/audit-logs'];
