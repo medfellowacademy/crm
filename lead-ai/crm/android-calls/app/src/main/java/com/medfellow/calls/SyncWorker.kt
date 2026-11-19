@@ -14,6 +14,7 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
 
     override suspend fun doWork(): Result {
         val result = syncNow(applicationContext)
+        Prefs(applicationContext).lastMessage = result.message
         return if (result.ok) Result.success() else if (result.retry) Result.retry() else Result.failure()
     }
 
@@ -50,6 +51,30 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
             prefs.lastSyncMillis = System.currentTimeMillis()
             return Outcome(true, false, "Sent $sent calls")
         }
+
+        /** Today's totals as this phone sees them (same 5-second rule as the CRM), shown on the app screen. */
+        data class Today(val made: Int, val connected: Int, val received: Int, val missed: Int)
+
+        fun todayStats(ctx: Context): Today? {
+            if (ctx.checkSelfPermission(android.Manifest.permission.READ_CALL_LOG)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) return null
+            val midnight = java.util.Calendar.getInstance().apply {
+                set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0)
+                set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+            }.timeInMillis
+            var made = 0; var connected = 0; var received = 0; var missed = 0
+            for (c in readCalls(ctx, midnight - 1)) {
+                when (c.direction) {
+                    "outgoing" -> { made++; if (c.duration >= MIN_CONNECTED) connected++ }
+                    "incoming" -> if (c.duration >= MIN_CONNECTED) received++ else missed++
+                    else -> missed++
+                }
+            }
+            return Today(made, connected, received, missed)
+        }
+
+        private const val MIN_CONNECTED = 5
 
         private data class Call(val phone: String, val direction: String, val duration: Int, val date: Long)
 

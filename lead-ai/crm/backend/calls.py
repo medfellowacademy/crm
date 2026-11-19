@@ -2,11 +2,14 @@
 
 Definitions (one place, so every screen agrees):
   made           outgoing calls dialled
-  connected      outgoing calls that were answered (duration > 0)
-  not_connected  outgoing calls nobody picked up (duration 0)
-  received       incoming calls answered
+  connected      outgoing calls that were answered: talk time of at least MIN_CONNECTED_SEC
+                 (a 1-3 second "call" is a hang-up or an operator message, not a conversation)
+  not_connected  every other outgoing call
+  received       incoming calls answered (same threshold)
   missed         incoming calls not answered (missed or rejected)
   talk_seconds   total conversation time, outgoing + incoming
+  lead_calls     outgoing calls to a number that belongs to a CRM lead (the rest are personal/other calls)
+  unique_leads   different leads that were dialled
 """
 
 import hashlib
@@ -16,6 +19,8 @@ from typing import Iterable, List, Optional
 
 DIRECTIONS = ("outgoing", "incoming", "missed", "rejected")
 MAX_BATCH = 500
+MIN_CONNECTED_SEC = 5
+IST = timezone(timedelta(hours=5, minutes=30))
 MAX_DURATION = 6 * 3600          # a six-hour call is a phone glitch, not a conversation
 TOKEN_BYTES = 32
 
@@ -76,40 +81,102 @@ def clean_calls(raw: Iterable[dict], user_email: str, device_id: int, now: Optio
 
 
 def blank() -> dict:
-    return {"made": 0, "connected": 0, "not_connected": 0, "received": 0, "missed": 0, "talk_seconds": 0}
+    return {"made": 0, "connected": 0, "not_connected": 0, "received": 0, "missed": 0, "talk_seconds": 0,
+            "lead_calls": 0, "unique_leads": 0, "answered_talk": 0}
 
 
-def add_call(totals: dict, call: dict) -> None:
+def is_connected(call: dict) -> bool:
+    return int(call.get("duration_sec") or 0) >= MIN_CONNECTED_SEC
+
+
+def add_call(totals: dict, call: dict, leads_seen: Optional[set] = None) -> None:
     direction, duration = call.get("direction"), int(call.get("duration_sec") or 0)
     if direction == "outgoing":
         totals["made"] += 1
-        totals["connected" if duration > 0 else "not_connected"] += 1
+        totals["connected" if is_connected(call) else "not_connected"] += 1
         totals["talk_seconds"] += duration
-    elif direction == "incoming":
-        if duration > 0:
-            totals["received"] += 1
-            totals["talk_seconds"] += duration
-        else:
-            totals["missed"] += 1
-    else:                                                          # missed / rejected
+        if is_connected(call):
+            totals["answered_talk"] += duration
+        if call.get("lead_id"):
+            totals["lead_calls"] += 1
+            if leads_seen is not None:
+                leads_seen.add(call["lead_id"])
+    elif direction == "incoming" and is_connected(call):
+        totals["received"] += 1
+        totals["talk_seconds"] += duration
+        totals["answered_talk"] += duration
+    else:                                                          # unanswered incoming, missed, rejected
         totals["missed"] += 1
 
 
+def build_lead_index(leads: Iterable[dict]) -> dict:
+    """last-10-digits -> [lead, ...] over both the phone and the WhatsApp number."""
+    index: dict = {}
+    for lead in leads:
+        for field in ("phone", "whatsapp"):
+            key = phone_key(lead.get(field))
+            if len(key) >= 7:
+                bucket = index.setdefault(key, [])
+                if all(x["id"] != lead["id"] for x in bucket):
+                    bucket.append({"id": lead["id"], "name": lead.get("full_name"), "assigned_to": lead.get("assigned_to")})
+    return index
+
+
+def match_lead(index: dict, key: str, owner_name: Optional[str] = None) -> Optional[dict]:
+    """The lead a number belongs to. If two leads share it, the one assigned to the caller wins."""
+    found = index.get(key) or []
+    if not found:
+        return None
+    mine = [x for x in found if owner_name and str(x.get("assigned_to") or "").strip().lower() == owner_name.strip().lower()]
+    return (mine or found)[0]
+
+
+def attach_leads(rows: List[dict], index: dict, owner_name: Optional[str]) -> List[dict]:
+    for r in rows:
+        hit = match_lead(index, r["phone_key"], owner_name)
+        r["lead_id"] = hit["id"] if hit else None
+    return rows
+
+
+def _ist(value) -> Optional[datetime]:
+    dt = _when(value)
+    return dt.astimezone(IST) if dt else None
+
+
 def summarize(calls: Iterable[dict], people: Iterable[dict]) -> dict:
-    """Counts per person (everyone listed in `people` appears, even with zero calls) plus the team total."""
-    rows = {}
+    """Counts per person (everyone in `people` appears, even with zero calls), the team total,
+    a day-by-day trend and an hour-of-day pattern (both on the IST clock)."""
+    rows, seen = {}, {}
     for p in people:
         rows[p["email"]] = {"email": p["email"], "name": p.get("name") or p["email"], **blank()}
+    trend, hourly = {}, {h: {"hour": h, "made": 0, "connected": 0} for h in range(24)}
+    team_leads: set = set()
     for c in calls:
         email = c.get("user_email")
         if email not in rows:
             rows[email] = {"email": email, "name": email, **blank()}
-        add_call(rows[email], c)
+        add_call(rows[email], c, seen.setdefault(email, set()))
+        if c.get("direction") == "outgoing":
+            when = _ist(c.get("started_at"))
+            if when:
+                day = trend.setdefault(str(when.date()), {"date": str(when.date()), "made": 0, "connected": 0})
+                day["made"] += 1
+                hourly[when.hour]["made"] += 1
+                if is_connected(c):
+                    day["connected"] += 1
+                    hourly[when.hour]["connected"] += 1
+            if c.get("lead_id"):
+                team_leads.add(c["lead_id"])
     people_rows = sorted(rows.values(), key=lambda r: (-r["made"], str(r["name"]).casefold()))
     team = blank()
     for r in people_rows:
+        r["unique_leads"] = len(seen.get(r["email"], ()))
         for k in team:
-            team[k] += r[k]
+            if k != "unique_leads":
+                team[k] += r[k]
+    team["unique_leads"] = len(team_leads)
     for r in people_rows + [team]:
         r["connect_rate"] = round(100 * r["connected"] / r["made"], 1) if r["made"] else 0.0
-    return {"people": people_rows, "team": team}
+        r["avg_talk_seconds"] = round(r["answered_talk"] / (r["connected"] + r["received"])) if (r["connected"] + r["received"]) else 0
+    return {"people": people_rows, "team": team, "trend": [trend[k] for k in sorted(trend)],
+            "hourly": [h for h in hourly.values()]}

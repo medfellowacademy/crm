@@ -90,9 +90,21 @@ class MainActivity : Activity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        render("")
+    }
+
     private fun render(message: String) {
         val last = prefs.lastSyncMillis
         val lastText = if (last > 0) DateFormat.format("dd MMM, h:mm a", Date(last)).toString() else "never"
-        status.text = listOf(message, "Last successful sync: $lastText").filter { it.isNotBlank() }.joinToString("\n")
+        val today = SyncWorker.todayStats(this)
+        val todayText = if (today == null) "" else
+            "Today on this phone: ${today.made} made, ${today.connected} connected, ${today.received} received, ${today.missed} missed"
+        val paired = if (prefs.token.isBlank()) "Not paired yet. Get a code from CRM > Calls > Pair a phone." else "Paired"
+        status.text = listOf(
+            paired, message.ifBlank { prefs.lastMessage }, "Last successful sync: $lastText", todayText,
+            "Tip: set this app's battery to \"No restrictions\" so syncing keeps running."
+        ).filter { it.isNotBlank() }.joinToString("\n\n")
     }
 }

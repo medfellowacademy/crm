@@ -42,7 +42,7 @@ def test_counting_rules():
     people = [{"email": "a@x.in", "name": "Asha"}, {"email": "b@x.in", "name": "Ravi"}]
     log = [
         {"user_email": "a@x.in", "direction": "outgoing", "duration_sec": 60},
-        {"user_email": "a@x.in", "direction": "outgoing", "duration_sec": 0},
+        {"user_email": "a@x.in", "direction": "outgoing", "duration_sec": 3},       # a hang-up, not a conversation
         {"user_email": "a@x.in", "direction": "outgoing", "duration_sec": 30},
         {"user_email": "a@x.in", "direction": "incoming", "duration_sec": 20},
         {"user_email": "a@x.in", "direction": "incoming", "duration_sec": 0},
@@ -52,7 +52,7 @@ def test_counting_rules():
     asha = s["people"][0]
     assert asha["email"] == "a@x.in"
     assert (asha["made"], asha["connected"], asha["not_connected"], asha["received"], asha["missed"]) == (3, 2, 1, 1, 2)
-    assert asha["talk_seconds"] == 110 and asha["connect_rate"] == 66.7
+    assert asha["talk_seconds"] == 113 and asha["connect_rate"] == 66.7 and asha["avg_talk_seconds"] == 37
     ravi = s["people"][1]
     assert ravi["made"] == 0 and ravi["connect_rate"] == 0.0              # listed even with no calls
     assert s["team"]["made"] == 3
@@ -70,6 +70,7 @@ class Q:
     def upsert(self, rows, **k): self.op, self.payload = "upsert", rows; return self
     def update(self, vals): self.op, self.payload = "update", vals; return self
     def eq(self, c, v): self.rows = [r for r in self.rows if r.get(c) == v]; return self
+    def is_(self, c, v): self.rows = [r for r in self.rows if r.get(c) is None]; return self
     def gte(self, c, v): self.rows = [r for r in self.rows if r.get(c) >= v]; return self
     def lt(self, c, v): self.rows = [r for r in self.rows if r.get(c) < v]; return self
     def order(self, *a, **k): return self
@@ -95,13 +96,17 @@ class Q:
 
 class DB:
     def __init__(self):
-        self.tables = {"call_devices": [], "call_logs": []}
+        self.tables = {"call_devices": [], "call_logs": [], "leads": [
+            {"id": 11, "full_name": "Dr Priya", "phone": "+91 98765 43210", "whatsapp": None, "assigned_to": "Asha"},
+            {"id": 12, "full_name": "Dr Kumar", "phone": "9000000001", "whatsapp": "+91 90000 00002", "assigned_to": "Ravi"}]}
 
     def table(self, name): return Q(self, name)
 
 
 @pytest.fixture()
 def api(monkeypatch):
+    calls_router._index_cache.update(at=0.0, index={})
+    calls_router._SUMMARY.clear()
     db = DB()
     monkeypatch.setattr(main.supabase_data, "client", db, raising=False)
     me = {"email": "asha@x.in", "role": "Telecaller"}
@@ -134,7 +139,7 @@ def test_pairing_token_is_stored_hashed_and_sync_needs_it(api):
     assert api.post("/api/calls/sync", json=body).status_code == 401                         # no token
     assert api.post("/api/calls/sync", json=body, headers={"X-Device-Token": "wrong"}).status_code == 401
     ok = api.post("/api/calls/sync", json=body, headers={"X-Device-Token": tok})
-    assert ok.status_code == 200 and ok.json() == {"received": 1, "stored": 1}
+    assert ok.status_code == 200 and ok.json() == {"received": 1, "stored": 1, "matched_leads": 1}
     assert api.db.tables["call_logs"][0]["user_email"] == "asha@x.in"        # the owner comes from the token, never the body
 
 
@@ -179,3 +184,58 @@ def test_sync_route_is_the_only_public_calls_path():
     assert "/api/calls/sync" in main._PUBLIC_PATHS
     assert not any(p.startswith("/api/calls/") and p != "/api/calls/sync" for p in main._PUBLIC_PATHS)
     assert calls_router.router.prefix == "/api/calls"
+
+
+# -- lead matching, trend, drill-down ------------------------------------------
+
+def test_lead_index_matches_phone_and_whatsapp_and_prefers_the_callers_own_lead():
+    idx = calls.build_lead_index([
+        {"id": 1, "full_name": "A", "phone": "+91 98765 43210", "assigned_to": "Asha"},
+        {"id": 2, "full_name": "B", "phone": "09876543210", "whatsapp": "9111111111", "assigned_to": "Ravi"},
+        {"id": 3, "full_name": "C", "phone": "123"},                       # too short to trust
+    ])
+    assert calls.match_lead(idx, "9111111111")["id"] == 2                    # found through the WhatsApp number
+    assert calls.match_lead(idx, "9876543210", "Ravi")["id"] == 2            # shared number: caller's own lead wins
+    assert calls.match_lead(idx, "9876543210", "Asha")["id"] == 1
+    assert calls.match_lead(idx, "5555555555") is None and "123" not in idx
+
+
+def test_sync_links_calls_to_leads_and_counts_personal_calls_apart(api):
+    tok = pair(api)["token"]
+    body = {"calls": [
+        {"phone": "09876543210", "direction": "outgoing", "duration_sec": 40, "started_at": "2026-11-19T04:00:00Z"},   # lead 11
+        {"phone": "9000000002", "direction": "outgoing", "duration_sec": 0, "started_at": "2026-11-19T04:05:00Z"},     # lead 12 via whatsapp
+        {"phone": "9444444444", "direction": "outgoing", "duration_sec": 60, "started_at": "2026-11-19T04:10:00Z"},   # a personal call
+    ]}
+    r = api.post("/api/calls/sync", json=body, headers={"X-Device-Token": tok}).json()
+    assert r["stored"] == 3 and r["matched_leads"] == 2
+    s = api.get_("/api/calls/summary?start=2026-11-19").json()
+    t = s["team"]
+    assert (t["made"], t["lead_calls"], t["unique_leads"]) == (3, 2, 2)
+    only = api.get_("/api/calls/summary?start=2026-11-19&leads_only=true").json()["team"]
+    assert only["made"] == 2 and only["connected"] == 1
+
+
+def test_trend_and_hourly_follow_the_ist_clock():
+    log = [{"user_email": "a@x.in", "direction": "outgoing", "duration_sec": 30, "started_at": "2026-11-19T04:00:00+00:00"},   # 09:30 IST
+           {"user_email": "a@x.in", "direction": "outgoing", "duration_sec": 0, "started_at": "2026-11-18T19:00:00+00:00"}]    # 00:30 IST on the 19th
+    s = calls.summarize(log, [{"email": "a@x.in", "name": "Asha"}])
+    assert s["trend"] == [{"date": "2026-11-19", "made": 2, "connected": 1}]
+    assert s["hourly"][9] == {"hour": 9, "made": 1, "connected": 1} and s["hourly"][0]["made"] == 1
+
+
+def test_lead_call_history_endpoint_and_rematch(api, monkeypatch):
+    api.db.tables["call_logs"] += [
+        {"id": 1, "user_email": "asha@x.in", "direction": "outgoing", "duration_sec": 45, "started_at": "2026-11-19T04:00:00+00:00", "lead_id": 11},
+        {"id": 2, "user_email": "ravi@x.in", "direction": "outgoing", "duration_sec": 0, "started_at": "2026-11-19T05:00:00+00:00", "lead_id": 11},
+        {"id": 3, "user_email": "asha@x.in", "direction": "outgoing", "duration_sec": 9, "started_at": "2026-11-19T06:00:00+00:00",
+         "lead_id": None, "phone_key": "9000000001"},
+    ]
+    api.me.update(email="boss@x.in", role="Super Admin")
+    h = api.get_("/api/calls/lead/11").json()
+    assert len(h["calls"]) == 2 and h["totals"]["connected"] == 1
+    assert api.get_("/api/calls/lead/999").status_code == 404
+    assert api.post("/api/calls/rematch", headers={"Authorization": "Bearer t"}).json() == {"linked": 1}
+    assert api.db.tables["call_logs"][2]["lead_id"] == 12
+    api.me.update(email="asha@x.in", role="Counselor")
+    assert api.post("/api/calls/rematch", headers={"Authorization": "Bearer t"}).status_code == 403

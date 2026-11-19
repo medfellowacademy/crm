@@ -134,6 +134,8 @@ export const callsAPI = {
   devices: () => api.get('/api/calls/devices'),
   pair: (label) => api.post('/api/calls/devices', { label }),
   revoke: (id) => api.delete(`/api/calls/devices/${id}`),
+  forLead: (leadId) => api.get(`/api/calls/lead/${leadId}`),
+  rematch: () => api.post('/api/calls/rematch'),
 };
 
 export const followupsAPI = {

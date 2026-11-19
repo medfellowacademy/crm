@@ -22,6 +22,10 @@ class Prefs(ctx: Context) {
         get() = p.getLong("last_sync", 0L)
         set(v) = p.edit().putLong("last_sync", v).apply()
 
+    var lastMessage: String
+        get() = p.getString("last_message", "") ?: ""
+        set(v) = p.edit().putString("last_message", v).apply()
+
     companion object {
         // The CRM's API address (same host the web app calls). Editable on the pairing screen.
         const val DEFAULT_SERVER = "https://medfellow-crm-api.onrender.com"

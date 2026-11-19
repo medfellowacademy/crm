@@ -31,3 +31,7 @@ create index if not exists idx_call_logs_started on public.call_logs (started_at
 -- The backend uses the service role (RLS bypassed; rbac is the gate). Lock the tables for anon/authenticated.
 alter table public.call_devices enable row level security;
 alter table public.call_logs enable row level security;
+
+-- Link each call to the CRM lead whose number it is (NULL = a personal / unknown number).
+alter table public.call_logs add column if not exists lead_id bigint;
+create index if not exists idx_call_logs_lead on public.call_logs (lead_id, started_at desc) where lead_id is not null;

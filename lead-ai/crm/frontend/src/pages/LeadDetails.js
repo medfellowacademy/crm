@@ -136,6 +136,7 @@ const parseDate = (s) => {
 
 import ActivityTimeline from '../features/activity/ActivityTimeline';
 import SubmissionTimeline from '../components/leads/SubmissionTimeline';
+import CallHistory from '../components/leads/CallHistory';
 import AIAssistantPanel from '../features/ai/AIAssistantPanel';
 import CallTimeWidget from '../components/leads/CallTimeWidget';
 import WhatsAppTemplateDrawer from '../components/whatsapp/WhatsAppTemplateDrawer';
@@ -924,6 +925,9 @@ const LeadDetails = () => {
           </div>
 
           <div style={show('notes')}>
+          {/* Calls logged by the counselors' phone app */}
+          <CallHistory leadId={lead?.id} />
+
           {/* Notes Section */}
           <Card title="Notes & Communication History">
             <Form form={noteForm} onFinish={handleAddNote} layout="vertical">
