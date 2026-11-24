@@ -208,8 +208,22 @@ def public_base() -> str:
     return os.getenv("PUBLIC_API_URL", "https://medfellow-crm-api.onrender.com").rstrip("/")
 
 
+def _table_missing(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "42p01" in text or "does not exist" in text or "could not find the table" in text or "pgrst205" in text
+
+
 def is_opted_out(email: str) -> bool:
-    rows = _db().table("email_optouts").select("email").eq("email", (email or "").strip().lower()).limit(1).execute().data or []
+    """True if this address unsubscribed. Before the migration that creates the list has been run there is
+    nobody on it, so a missing table means "not opted out"; any other database error stops the send
+    (never guess about an unsubscribe)."""
+    try:
+        rows = _db().table("email_optouts").select("email").eq("email", (email or "").strip().lower()).limit(1).execute().data or []
+    except Exception as e:  # noqa: BLE001
+        if _table_missing(e):
+            logger.warning("email_optouts table is missing: run migration 20261126_email_attachments_bulk_tracking.sql")
+            return False
+        raise
     return bool(rows)
 
 

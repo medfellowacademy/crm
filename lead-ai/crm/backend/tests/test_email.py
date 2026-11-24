@@ -543,6 +543,25 @@ def test_tracking_endpoints_cannot_be_abused(api):
     assert api.get("/api/email/t/c/22222222-2222-2222-2222-222222222222?u=https://evil.com", follow_redirects=False).status_code == 404
 
 
+def test_sending_still_works_before_the_unsubscribe_table_exists_but_other_errors_stop_it(api, monkeypatch):
+    connect(api)
+    original_table = api.db.table
+
+    def table(name):
+        if name == "email_optouts":
+            raise RuntimeError('relation "public.email_optouts" does not exist (42P01)')
+        return original_table(name)
+    monkeypatch.setattr(api.db, "table", table)
+    assert api.post_("/api/leads/L7/send-email", {"subject": "S", "body": "Hi"}).status_code == 200      # table missing: not opted out
+
+    def broken(name):
+        if name == "email_optouts":
+            raise RuntimeError("connection reset")
+        return original_table(name)
+    monkeypatch.setattr(api.db, "table", broken)
+    assert api.post_("/api/leads/L7/send-email", {"subject": "S", "body": "Hi"}).status_code >= 500      # unknown error: never guess
+
+
 def test_untracked_email_has_no_pixel_and_unsubscribe_blocks_all_further_email(api):
     connect(api)
     api.post_("/api/leads/L7/send-email", {"subject": "S", "body": "Hi"})
