@@ -28,6 +28,7 @@ import {
   STATUS_OPTIONS, SOURCE_OPTIONS, STATUS_COLOR_MAP,
   isTerminalStatus, normalizeSource,
 } from '../config/leadEnums';
+import EmailComposeModal from '../components/email/EmailComposeModal';
 import { leadsAPI, coursesAPI, counselorsAPI, usersAPI, duplicatesAPI, decayAPI, exportAPI, preferencesAPI } from '../api/api';
 import { useAuth } from '../context/AuthContext';
 import dayjs from 'dayjs';
@@ -320,6 +321,8 @@ const LeadsPageEnhanced = () => {
     try { return sessionStorage.getItem('leadsEnhanced_searchText') || ''; } catch { return ''; }
   });
   const [selectedRows, setSelectedRows] = useState([]);
+  const [bulkEmailOpen, setBulkEmailOpen] = useState(false);
+  const [emailLead, setEmailLead] = useState(null);
   const searchTimeoutRef = useRef(null);
   const [quickFilter, setQuickFilter] = useState(() => {
     try { return sessionStorage.getItem('leadsEnhanced_quickFilter') || 'all'; } catch { return 'all'; }
@@ -1164,7 +1167,7 @@ const LeadsPageEnhanced = () => {
       { key: 'edit', icon: <EditOutlined />, label: 'Edit', onClick: () => { form.setFieldsValue({ lead_id: record.lead_id, ...record, qualification: record.qualification || null, company: record.company || null, utm_source: record.utm_source || null, utm_medium: record.utm_medium || null, utm_campaign: record.utm_campaign || null, follow_up_date: record.follow_up_date ? parseDate(record.follow_up_date) : null }); setDrawerVisible(true); } },
       { key: 'whatsapp', icon: <WhatsAppOutlined />, label: 'WhatsApp', onClick: () => window.open(`https://wa.me/${record.phone?.replace(/[^0-9]/g, '')}`) },
       { key: 'wa-template', icon: <span>📋</span>, label: 'Send Template', onClick: () => setTemplateLead(record) },
-      { key: 'email', icon: <MailOutlined />, label: 'Email', onClick: () => { window.location.href = `mailto:${record.email}`; } },
+      { key: 'email', icon: <MailOutlined />, label: 'Email', onClick: () => setEmailLead(record) },
       { type: 'divider' },
       { key: 'delete', icon: <DeleteOutlined />, label: 'Delete', danger: true, onClick: () => deleteMutation.mutate(record.lead_id) },
     ],
@@ -1810,6 +1813,7 @@ const LeadsPageEnhanced = () => {
                 <Button size="small" onClick={() => setSelectedRows(filteredLeads.map(l => l.lead_id))}>Select All {filteredLeads.length}</Button>
                 <Button size="small" onClick={() => setSelectedRows([])}>Clear</Button>
                 <Button size="small" type="primary" onClick={() => setBulkDrawerVisible(true)}>Bulk Update</Button>
+                <Button size="small" icon={<MailOutlined />} onClick={() => setBulkEmailOpen(true)}>Email</Button>
                 <Button size="small" danger onClick={() => {
                   Modal.confirm({
                     title: `Delete ${selectedRows.length} leads?`,
@@ -2333,6 +2337,10 @@ const LeadsPageEnhanced = () => {
       {/* ══════════════════════════════════════════════════════════════════════
           BULK UPDATE DRAWER
       ══════════════════════════════════════════════════════════════════════ */}
+      {/* Email one lead from the row menu, or all selected leads from the bulk bar */}
+      <EmailComposeModal open={!!emailLead} onClose={() => setEmailLead(null)} lead={emailLead} leadId={emailLead?.lead_id} />
+      <EmailComposeModal open={bulkEmailOpen} onClose={() => setBulkEmailOpen(false)} leadIds={selectedRows} />
+
       <Drawer
         title={`✏️ Bulk Update — ${selectedRows.length} leads`}
         width={440}

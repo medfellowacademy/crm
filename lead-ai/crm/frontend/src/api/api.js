@@ -95,7 +95,7 @@ export const leadsAPI = {
 
   // Communication
   sendWhatsApp: (leadId, message) => api.post(`/api/leads/${leadId}/send-whatsapp`, { message }),
-  sendEmail: (leadId, subject, body, bodyHtml) => api.post(`/api/leads/${leadId}/send-email`, { subject, body, body_html: bodyHtml }),
+  sendEmail: (leadId, subject, body, bodyHtml, extra = {}) => api.post(`/api/leads/${leadId}/send-email`, { subject, body, body_html: bodyHtml, ...extra }),
 
   // Automation sequences
   triggerWelcome: (leadId) => api.post(`/api/leads/${leadId}/trigger-welcome`),
@@ -139,6 +139,15 @@ export const emailAPI = {
   schedule: (data) => api.post('/api/email/schedule', data),
   scheduled: (leadId) => api.get('/api/email/scheduled', { params: { lead_id: leadId } }),
   cancelScheduled: (id) => api.delete(`/api/email/scheduled/${id}`),
+  uploadAttachment: (file) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post('/api/email/attachments', form, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120000 });
+  },
+  removeAttachment: (id) => api.delete(`/api/email/attachments/${id}`),
+  bulkPreview: (leadIds) => api.post('/api/email/bulk/preview', { lead_ids: leadIds }),
+  bulk: (data) => api.post('/api/email/bulk', data),
+  batch: (id) => api.get(`/api/email/batches/${id}`),
 };
 
 export const callsAPI = {

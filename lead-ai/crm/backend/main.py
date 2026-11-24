@@ -348,7 +348,7 @@ async def _scheduled_email_loop():
     await _asyncio.sleep(30)
     while True:
         try:
-            await run_in_threadpool(email_router_mod.process_due)
+            await run_in_threadpool(email_router_mod.drain, 5)
         except _asyncio.CancelledError:
             break
         except Exception as e:  # never let this loop die
@@ -514,6 +514,10 @@ async def _verify_token(request: Request) -> None:
     # Office TV feed: the secret in the URL is the credential and the handler
     # verifies it (sales_targets_router.display_feed) - the TV has no login.
     if request.url.path.startswith("/api/display/"):
+        return
+    # Email open/click tracking and the unsubscribe page: recipients have no login. The handlers only act on
+    # unguessable ids stored when the email was sent (see email_router).
+    if request.url.path.startswith(("/api/email/t/", "/api/email/unsubscribe/")):
         return
 
     auth_header = request.headers.get("Authorization", "")
@@ -5225,7 +5229,8 @@ def send_email(
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     assert_can_view_lead(actor, lead)
-    return email_router_mod.send_to_lead(actor, lead, request.subject, request.body, request.body_html)
+    return email_router_mod.send_to_lead(actor, lead, request.subject, request.body, request.body_html,
+                                         attachments=request.attachments, track=request.track)
 
 @app.post("/api/leads/{lead_id}/trigger-welcome")
 async def trigger_welcome(lead_id: str,

@@ -338,6 +338,8 @@ class EmailRequest(BaseModel):
     subject: str
     body: str = ''
     body_html: Optional[str] = None     # rich text from the editor (sanitised on the server)
+    attachments: Optional[List[dict]] = None   # [{"id": ..., "source": "upload" | "brochure"}]
+    track: bool = False                 # add the open/click tracking
     template: Optional[str] = None
 
 class CommunicationsSendRequest(BaseModel):
