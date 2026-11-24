@@ -134,6 +134,8 @@ from ai_chat import router as ai_chat_router
 from attendance import router as attendance_router
 from payroll_router import router as payroll_router
 from calls_router import router as calls_router
+import email_router as email_router_mod
+from email_router import router as email_router
 from sheets_router import router as sheets_router
 from mbg_router import router as mbg_router
 from departments_router import router as departments_router
@@ -762,6 +764,7 @@ app.include_router(ai_chat_router)
 app.include_router(attendance_router)
 app.include_router(payroll_router)
 app.include_router(calls_router)
+app.include_router(email_router)
 app.include_router(sheets_router)
 app.include_router(mbg_router)
 app.include_router(departments_router)
@@ -5185,61 +5188,18 @@ async def send_whatsapp(
         raise HTTPException(status_code=500, detail=result.get("error", "Failed to send WhatsApp"))
 
 @app.post("/api/leads/{lead_id}/send-email")
-async def send_email(
+def send_email(
     lead_id: str,
     request: EmailRequest,
     actor: dict = Depends(require_permission(P.SEND_WHATSAPP)),
 ):
-    """Send email via Resend - SUPABASE ONLY.
-    Requires outbound-comms permission + access to the lead."""
-
+    """Email a lead from the caller's own connected mailbox (see email_router.send_to_lead).
+    Sync `def`: the SMTP exchange runs in the thread pool and never blocks the event loop."""
     lead = supabase_data.get_lead_by_id(lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
-
     assert_can_view_lead(actor, lead)
-
-    if not lead.get('email'):
-        raise HTTPException(status_code=400, detail="Lead has no email address")
-    
-    # Send email
-    from communication_service import comm_service
-    
-    variables = {
-        "name": lead.get('full_name') or "there",
-        "course": lead.get('course_interested') or "our courses",
-        "counselor": lead.get('assigned_to') or "Your counselor",
-        "subject": request.subject,
-        "body": request.body
-    }
-    
-    result = await comm_service.send(
-        channel="email",
-        to=lead['email'],
-        message=request.body,
-        template=request.template,
-        variables=variables
-    )
-    
-    # Log in database
-    lead_internal_id = lead.get('id')
-    if lead_internal_id:
-        supabase_data.create_note(
-            lead_id=lead_internal_id,
-            content=f"[Email {'Sent' if result['success'] else 'Failed'}] Subject: {request.subject}\n\n{request.body}",
-            channel="email",
-            created_by="System"
-        )
-    
-    if result["success"]:
-        return {
-            "success": True,
-            "message": "Email sent successfully",
-            "message_id": result.get("message_id"),
-            "to": lead['email']
-        }
-    else:
-        raise HTTPException(status_code=500, detail=result.get("error", "Failed to send email"))
+    return email_router_mod.send_to_lead(actor, lead, request.subject, request.body)
 
 @app.post("/api/leads/{lead_id}/trigger-welcome")
 async def trigger_welcome(lead_id: str,

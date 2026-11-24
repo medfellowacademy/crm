@@ -137,6 +137,7 @@ const parseDate = (s) => {
 import ActivityTimeline from '../features/activity/ActivityTimeline';
 import SubmissionTimeline from '../components/leads/SubmissionTimeline';
 import CallHistory from '../components/leads/CallHistory';
+import EmailComposeModal from '../components/email/EmailComposeModal';
 import AIAssistantPanel from '../features/ai/AIAssistantPanel';
 import CallTimeWidget from '../components/leads/CallTimeWidget';
 import WhatsAppTemplateDrawer from '../components/whatsapp/WhatsAppTemplateDrawer';
@@ -1670,35 +1671,8 @@ const LeadDetails = () => {
         </Form>
       </Modal>
 
-      {/* Email Modal */}
-      <Modal
-        title={<span><MailOutlined /> Send Email</span>}
-        open={emailModal}
-        onCancel={() => setEmailModal(false)}
-        footer={null}
-        width={600}
-      >
-        <Form
-          onFinish={(values) => {
-            leadsAPI.sendEmail(leadId, values.subject, values.body)
-              .then(() => {
-                message.success('Email queued!');
-                setEmailModal(false);
-              })
-              .catch(() => message.error('Failed to send email'));
-          }}
-        >
-          <Form.Item name="subject" label="Subject" rules={[{ required: true }]}>
-            <Input placeholder="Email subject" />
-          </Form.Item>
-          <Form.Item name="body" label="Message" rules={[{ required: true }]}>
-            <TextArea rows={8} placeholder="Email message..." />
-          </Form.Item>
-          <Button type="primary" htmlType="submit" block>
-            Send Email
-          </Button>
-        </Form>
-      </Modal>
+      {/* Email Modal: sends from the user's own connected mailbox */}
+      <EmailComposeModal open={emailModal} onClose={() => setEmailModal(false)} lead={lead} leadId={leadId} />
 
       {/* WhatsApp Template Drawer */}
       <WhatsAppTemplateDrawer

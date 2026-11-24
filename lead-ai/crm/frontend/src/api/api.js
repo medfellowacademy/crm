@@ -129,6 +129,15 @@ export const brochuresAPI = {
 };
 
 // Follow-ups work list
+export const emailAPI = {
+  account: () => api.get('/api/email/account'),
+  save: (data) => api.put('/api/email/account', data),
+  test: () => api.post('/api/email/account/test'),
+  disconnect: () => api.delete('/api/email/account'),
+  templates: () => api.get('/api/email/templates'),
+  forLead: (leadId) => api.get(`/api/email/lead/${leadId}`),
+};
+
 export const callsAPI = {
   summary: (params) => api.get('/api/calls/summary', { params }),
   devices: () => api.get('/api/calls/devices'),

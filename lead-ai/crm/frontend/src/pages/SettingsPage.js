@@ -6,6 +6,7 @@ import { SalesAvatar } from '../components/targets/SalesAvatar';
 import { fileToAvatarDataUrl } from '../utils/imageResize';
 import { useMutation } from '@tanstack/react-query';
 import { featureFlags } from '../config/featureFlags';
+import EmailSetup from '../components/email/EmailSetup';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://medfellow-crm-api.onrender.com';
 
@@ -344,6 +345,11 @@ const SettingsPage = () => {
           </Card>
         </div>
       ),
+    },
+    {
+      key: 'email',
+      label: 'Email',
+      children: <EmailSetup />,
     },
   ];
 
