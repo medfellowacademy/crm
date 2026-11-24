@@ -7,15 +7,20 @@ Email to leads from the user's own mailbox - `/api/email/*`.
   DELETE /account          disconnect my mailbox
   GET    /templates        ready-made messages with {name} {course} {counselor}
   GET    /lead/{id}        emails sent to one lead
+  POST   /schedule         write an email now, send it later (the server sends it at the chosen time)
+  GET    /scheduled        scheduled emails (mine, or for one lead)
+  DELETE /scheduled/{id}   cancel a scheduled email that has not gone out yet
+  POST   /run-scheduled    send everything that is due (cron job with X-Cron-Secret; the server also runs it every minute)
 
 Sending itself is `send_to_lead`, used by `POST /api/leads/{lead_id}/send-email` in main.py.
 """
 
+import hmac
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
 import mailer
@@ -31,6 +36,14 @@ SENDER = rbac.require_permission(P.SEND_WHATSAPP)      # the same "may contact l
 
 def _db():
     return supabase_data.client
+
+
+class ScheduleBody(BaseModel):
+    lead_id: str = Field(max_length=100)
+    subject: str = Field(max_length=300)
+    body: str = Field(default="", max_length=mailer.BODY_MAX)
+    body_html: Optional[str] = Field(default=None, max_length=mailer.BODY_MAX * 3)
+    send_at: datetime
 
 
 class AccountBody(BaseModel):
@@ -151,7 +164,7 @@ def templates(user: dict = Depends(SENDER)):
 
 # -- sending ----------------------------------------------------------------
 
-def send_to_lead(actor: dict, lead: dict, subject: str, body: str) -> dict:
+def send_to_lead(actor: dict, lead: dict, subject: str, body: str, body_html: Optional[str] = None) -> dict:
     """Send one email to a lead's own address, from the actor's mailbox (or the shared company one), and log it.
 
     Blocking (SMTP): callers run it in a thread. The recipient is always the lead's stored address, never
@@ -178,8 +191,12 @@ def send_to_lead(actor: dict, lead: dict, subject: str, body: str) -> dict:
             raise HTTPException(status_code=429, detail=f"Daily limit of {cred['limit']} emails reached. Try again tomorrow.")
         counselor = actor.get("full_name") or ""
         subject, body = mailer.render(subject, lead, counselor), mailer.render(body, lead, counselor)
+        body_html = mailer.render(body_html, lead, counselor) if body_html else None
         msg = mailer.build_message(from_address=cred["from_address"], from_name=cred["from_name"], to_address=to_address,
-                                   subject=subject, body=body, signature=cred["signature"], reply_to=cred["reply_to"])
+                                   subject=subject, body=body, signature=cred["signature"], reply_to=cred["reply_to"],
+                                   body_html=body_html)
+        if body_html:                                       # log the text that was really sent, without the signature
+            body = mailer.html_to_text(mailer.sanitize_html(body_html))
         error = None
         try:
             mailer.send(cred["host"], cred["port"], cred["user"], cred["password"], msg, cred["provider"])
@@ -190,9 +207,11 @@ def send_to_lead(actor: dict, lead: dict, subject: str, body: str) -> dict:
 
     status = "failed" if error else "sent"
     try:
-        _db().table("email_logs").insert({"lead_id": lead["id"], "user_email": actor["email"], "from_address": cred["from_address"],
-                                          "to_address": to_address, "subject": msg["Subject"], "body": body, "status": status,
-                                          "error": error}).execute()
+        log = {"lead_id": lead["id"], "user_email": actor["email"], "from_address": cred["from_address"],
+               "to_address": to_address, "subject": msg["Subject"], "body": body, "status": status, "error": error}
+        if body_html:
+            log["body_html"] = mailer.sanitize_html(body_html)
+        _db().table("email_logs").insert(log).execute()
         supabase_data.create_note(lead_id=lead["id"], channel="email", created_by=actor.get("full_name") or actor["email"],
                                   content=f"[Email {'sent' if not error else 'FAILED'}] To: {to_address}\nSubject: {msg['Subject']}\n\n{body}")
     except Exception as e:                           # the email already went out; never report it as failed because the log did
@@ -211,3 +230,136 @@ def lead_history(lead_id: str, user: dict = Depends(SENDER)):
     rows = (_db().table("email_logs").select("id,user_email,from_address,to_address,subject,status,error,created_at")
             .eq("lead_id", lead["id"]).order("created_at", desc=True).limit(50).execute().data or [])
     return {"emails": rows, "to": lead.get("email")}
+
+
+# -- scheduled sending ------------------------------------------------------
+
+MAX_AHEAD = timedelta(days=90)
+MIN_AHEAD = timedelta(seconds=20)
+EXPIRE_AFTER = timedelta(hours=24)        # a due email that still cannot go out (e.g. daily limit) is dropped after a day
+STUCK_AFTER = timedelta(minutes=15)
+
+
+def _utc(value) -> datetime:
+    """A datetime (or ISO string) as aware UTC; a value with no timezone is read as Indian time."""
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return value.replace(tzinfo=IST).astimezone(timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+def _sender_ready(email: str) -> bool:
+    return bool(get_account(email) or shared_sender())
+
+
+@router.post("/schedule")
+def schedule(body: ScheduleBody, user: dict = Depends(SENDER)):
+    lead = supabase_data.get_lead_by_id(body.lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    rbac.assert_can_view_lead(user, lead)
+    if not (lead.get("email") or "").strip():
+        raise HTTPException(status_code=400, detail="This lead has no email address")
+    if not _sender_ready(user["email"]):
+        raise HTTPException(status_code=400, detail="Connect your email first (Settings > Email), then schedule again.")
+    send_at, now = _utc(body.send_at), datetime.now(timezone.utc)
+    if send_at < now + MIN_AHEAD:
+        raise HTTPException(status_code=422, detail="Choose a time in the future.")
+    if send_at > now + MAX_AHEAD:
+        raise HTTPException(status_code=422, detail="You can schedule up to 90 days ahead.")
+    try:                                             # reject an empty or invalid message now, not at send time
+        mailer.build_message(from_address="check@example.com", from_name="", to_address=lead["email"].strip(),
+                             subject=body.subject, body=body.body, body_html=body.body_html)
+    except mailer.MailError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    row = {"lead_id": lead["id"], "user_email": user["email"], "subject": mailer.clean_subject(body.subject), "body": body.body,
+           "send_at": send_at.isoformat(), "status": "pending"}
+    if body.body_html:
+        row["body_html"] = mailer.sanitize_html(body.body_html)
+    saved = _db().table("scheduled_emails").insert(row).execute().data
+    return {"scheduled": True, "id": (saved or [{}])[0].get("id"), "send_at": send_at.isoformat(), "to": lead["email"]}
+
+
+@router.get("/scheduled")
+def scheduled(lead_id: Optional[str] = None, user: dict = Depends(SENDER)):
+    q = (_db().table("scheduled_emails").select("id,lead_id,user_email,subject,send_at,status,error,sent_at")
+         .order("send_at", desc=True).limit(100))
+    if lead_id:
+        lead = supabase_data.get_lead_by_id(lead_id)
+        if not lead:
+            raise HTTPException(status_code=404, detail="Lead not found")
+        rbac.assert_can_view_lead(user, lead)
+        q = q.eq("lead_id", lead["id"])
+    if user.get("role") != "Super Admin":
+        q = q.eq("user_email", user["email"])
+    return {"scheduled": q.execute().data or []}
+
+
+@router.delete("/scheduled/{item_id}")
+def cancel(item_id: int, user: dict = Depends(SENDER)):
+    q = _db().table("scheduled_emails").update({"status": "cancelled"}).eq("id", item_id).eq("status", "pending")
+    if user.get("role") != "Super Admin":
+        q = q.eq("user_email", user["email"])
+    if not q.execute().data:
+        raise HTTPException(status_code=404, detail="This email can no longer be cancelled (it was already sent, or does not exist).")
+    return {"cancelled": True}
+
+
+def _finish(item_id: int, status: str, error: Optional[str] = None) -> None:
+    vals = {"status": status, "error": error}
+    if status == "sent":
+        vals["sent_at"] = datetime.now(timezone.utc).isoformat()
+    _db().table("scheduled_emails").update(vals).eq("id", item_id).execute()
+
+
+def process_due(now: Optional[datetime] = None, limit: int = 25) -> dict:
+    """Send every scheduled email whose time has come. Safe to run from several places at once:
+    each email is claimed with an atomic pending -> sending update, so it goes out exactly once."""
+    now = now or datetime.now(timezone.utc)
+    out = {"sent": 0, "failed": 0, "deferred": 0}
+    # an email stuck in 'sending' (the server died mid-send) is not retried: it may already have gone out
+    for st in (_db().table("scheduled_emails").select("id,send_at").eq("status", "sending").limit(50).execute().data or []):
+        if _utc(st["send_at"]) < now - STUCK_AFTER:
+            _finish(st["id"], "failed", "Interrupted while sending. Check the lead's email history before sending again.")
+    due = (_db().table("scheduled_emails").select("*").eq("status", "pending").lte("send_at", now.isoformat())
+           .order("send_at").limit(limit).execute().data or [])
+    for item in due:
+        claimed = (_db().table("scheduled_emails").update({"status": "sending"}).eq("id", item["id"]).eq("status", "pending")
+                   .execute().data)
+        if not claimed:
+            continue                                  # another worker took it
+        try:
+            leads = _db().table("leads").select("*").eq("id", item["lead_id"]).limit(1).execute().data or []
+            user = supabase_data.get_user_by_email(item["user_email"])
+            if not leads:
+                raise HTTPException(status_code=404, detail="The lead no longer exists.")
+            if not user or not user.get("is_active", True) or not rbac.has_permission(rbac.get_role(user), P.SEND_WHATSAPP):
+                raise HTTPException(status_code=403, detail="The sender can no longer send email.")
+            send_to_lead(user, leads[0], item["subject"], item["body"], item.get("body_html"))
+            _finish(item["id"], "sent")
+            out["sent"] += 1
+        except HTTPException as e:
+            overdue = now - _utc(item["send_at"])
+            if e.status_code == 429 and overdue < EXPIRE_AFTER:
+                _db().table("scheduled_emails").update({"status": "pending"}).eq("id", item["id"]).execute()    # try again later
+                out["deferred"] += 1
+            else:
+                _finish(item["id"], "failed", str(e.detail)[:300])
+                out["failed"] += 1
+        except Exception as e:  # noqa: BLE001 - one bad email must never stop the rest
+            logger.warning("scheduled email {} failed: {}", item["id"], e)
+            _finish(item["id"], "failed", "The email could not be sent.")
+            out["failed"] += 1
+    if any(out.values()):
+        logger.info("scheduled email run: {}", out)
+    return out
+
+
+@router.post("/run-scheduled")
+def run_scheduled(x_cron_secret: str = Header(default="")):
+    """For a cron job or uptime pinger (no login): keeps scheduled emails going even when nobody has the CRM open."""
+    secret = os.getenv("CRON_SECRET", "")
+    if len(secret) < 16:
+        raise HTTPException(status_code=404, detail="Not enabled")
+    if not hmac.compare_digest(x_cron_secret.encode(), secret.encode()):
+        raise HTTPException(status_code=401, detail="Invalid secret")
+    return process_due()

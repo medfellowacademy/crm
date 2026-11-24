@@ -15,6 +15,7 @@ import re
 import smtplib
 import socket
 import ssl
+from html.parser import HTMLParser
 from email.message import EmailMessage
 from email.utils import formataddr, formatdate, make_msgid
 from typing import Dict, Optional
@@ -99,11 +100,108 @@ def valid_address(address: str) -> bool:
     return bool(re.fullmatch(r"[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+", str(address or "")))
 
 
+# -- rich text ---------------------------------------------------------------
+
+_ALLOWED_TAGS = {"p", "br", "div", "b", "strong", "i", "em", "u", "ul", "ol", "li", "a"}
+_BLOCK_TAGS = {"p", "div", "li", "ul", "ol"}
+_DROP_WITH_CONTENT = {"script", "style", "iframe", "object", "embed", "head", "title", "svg", "math"}
+_SAFE_HREF = re.compile(r"^(https?://|mailto:)", re.I)
+
+
+class _Cleaner(HTMLParser):
+    """Keeps a small set of formatting tags, throws away attributes (except a safe link) and everything else."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out, self.skip, self.open_a = [], 0, 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _DROP_WITH_CONTENT:
+            self.skip += 1
+            return
+        if self.skip or tag not in _ALLOWED_TAGS:
+            return
+        if tag == "br":
+            self.out.append("<br>")
+        elif tag == "a":
+            href = dict(attrs).get("href") or ""
+            if _SAFE_HREF.match(href.strip()):
+                self.out.append('<a href="' + html.escape(href.strip(), quote=True) + '" rel="noopener noreferrer">')
+                self.open_a += 1
+        else:
+            self.out.append("<" + tag + ">")
+
+    def handle_endtag(self, tag):
+        if tag in _DROP_WITH_CONTENT:
+            self.skip = max(0, self.skip - 1)
+            return
+        if self.skip or tag not in _ALLOWED_TAGS or tag == "br":
+            return
+        if tag == "a":
+            if self.open_a:
+                self.open_a -= 1
+                self.out.append("</a>")
+        else:
+            self.out.append("</" + tag + ">")
+
+    def handle_data(self, data):
+        if not self.skip:
+            self.out.append(html.escape(data, quote=False))
+
+
+def sanitize_html(raw: str) -> str:
+    """Safe HTML from whatever the browser sent. Never trust the editor: scripts, styles, event handlers,
+    javascript: links and unknown tags are removed; text is escaped."""
+    cleaner = _Cleaner()
+    cleaner.feed(str(raw or ""))
+    cleaner.close()
+    cleaned = "".join(cleaner.out)
+    cleaned += "</a>" * cleaner.open_a                      # never leave a link open
+    return cleaned.strip()
+
+
+class _Text(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts, self.skip = [], 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _DROP_WITH_CONTENT:
+            self.skip += 1
+        elif tag == "br":
+            self.parts.append("\n")
+        elif tag == "li":
+            self.parts.append("\n- ")
+        elif tag in _BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in _DROP_WITH_CONTENT:
+            self.skip = max(0, self.skip - 1)
+        elif tag in ("p", "div"):
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if not self.skip:
+            self.parts.append(data)
+
+
+def html_to_text(raw: str) -> str:
+    p = _Text()
+    p.feed(str(raw or ""))
+    p.close()
+    return re.sub(r"\n{3,}", "\n\n", "".join(p.parts)).strip()
+
+
 def build_message(*, from_address: str, from_name: Optional[str], to_address: str, subject: str, body: str,
-                  signature: Optional[str] = None, reply_to: Optional[str] = None) -> EmailMessage:
+                  signature: Optional[str] = None, reply_to: Optional[str] = None,
+                  body_html: Optional[str] = None) -> EmailMessage:
     subject = clean_subject(subject)
     if not subject:
         raise MailError("Please enter a subject.")
+    rich = sanitize_html(body_html) if body_html else ""
+    if rich:
+        body = html_to_text(rich)                          # the plain-text part is derived from what is actually sent
     body = str(body or "").strip()
     if not body:
         raise MailError("Please write a message.")
@@ -121,8 +219,10 @@ def build_message(*, from_address: str, from_name: Optional[str], to_address: st
     if reply_to and valid_address(reply_to):
         msg["Reply-To"] = reply_to
     msg.set_content(text)
-    msg.add_alternative("<div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.5\">"
-                        + html.escape(text).replace("\n", "<br>") + "</div>", subtype="html")
+    sig_html = ("<br><br>--<br>" + html.escape(signature.strip()).replace("\n", "<br>")) if signature and signature.strip() else ""
+    inner = rich if rich else html.escape(body).replace("\n", "<br>")
+    msg.add_alternative('<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5">' + inner + sig_html + "</div>",
+                        subtype="html")
     return msg
 
 

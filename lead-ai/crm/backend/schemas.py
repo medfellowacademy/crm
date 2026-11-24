@@ -336,7 +336,8 @@ class WhatsAppRequest(BaseModel):
 
 class EmailRequest(BaseModel):
     subject: str
-    body: str
+    body: str = ''
+    body_html: Optional[str] = None     # rich text from the editor (sanitised on the server)
     template: Optional[str] = None
 
 class CommunicationsSendRequest(BaseModel):

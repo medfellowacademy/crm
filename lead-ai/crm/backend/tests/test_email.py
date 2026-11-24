@@ -107,8 +107,10 @@ class Q:
     def select(self, cols, count=None): self.cm = bool(count); return self
     def eq(self, c, v): self.rows = [r for r in self.rows if r.get(c) == v]; return self
     def gte(self, c, v): self.rows = [r for r in self.rows if str(r.get(c)) >= v]; return self
+    def lte(self, c, v): self.rows = [r for r in self.rows if str(r.get(c)) <= v]; return self
     def order(self, *a, **k): return self
     def limit(self, n): return self
+    def update(self, vals): self.op, self.payload = "update", vals; return self
     def insert(self, row): self.op, self.payload = "insert", row; return self
     def upsert(self, row, on_conflict=None): self.op, self.payload, self.key = "upsert", row, on_conflict; return self
     def delete(self): self.op = "delete"; return self
@@ -116,8 +118,14 @@ class Q:
     def execute(self):
         t = self.db.tables[self.name]
         if self.op == "insert":
-            t.append(dict(self.payload))
-        elif self.op == "upsert":
+            row = {"id": len(t) + 1, **self.payload}
+            t.append(row)
+            return type("R", (), {"data": [row], "count": None})()
+        if self.op == "update":
+            for r in self.rows:
+                r.update(self.payload)
+            return type("R", (), {"data": list(self.rows), "count": None})()
+        if self.op == "upsert":
             t[:] = [r for r in t if r.get(self.key) != self.payload.get(self.key)] + [dict(self.payload)]
         elif self.op == "delete":
             for r in self.rows:
@@ -127,7 +135,7 @@ class Q:
 
 class DB:
     def __init__(self):
-        self.tables = {"email_accounts": [], "email_logs": []}
+        self.tables = {"email_accounts": [], "email_logs": [], "scheduled_emails": [], "leads": [dict(LEAD)]}
 
     def table(self, name): return Q(self, name)
 
@@ -150,6 +158,7 @@ def api(monkeypatch):
     monkeypatch.setattr(main.supabase_data, "get_lead_by_id", lambda lid: leads.get(lid))
     notes = []
     monkeypatch.setattr(main.supabase_data, "create_note", lambda **k: notes.append(k))
+    monkeypatch.setattr(email_router.supabase_data, "client", db, raising=False)
     c = TestClient(main.app)
     c.db, c.me, c.notes = db, me, notes
     H = {"Authorization": "Bearer t"}
@@ -248,3 +257,132 @@ def test_requires_login_and_the_contact_permission(api):
     assert api.get("/api/email/account").status_code == 401
     assert api.post("/api/leads/L7/send-email", json={"subject": "S", "body": "B"}).status_code == 401
     assert email_router.SENDER is not None
+
+
+# -- rich text ---------------------------------------------------------------------
+
+DIRTY = ('<p onclick="x()">Hi <b>Dr</b> <script>alert(1)</script><a href="javascript:alert(1)">bad</a> '
+         '<a href="https://ok.in/x?a=1&b=2">good</a><img src=x onerror=y><style>p{}</style></p><ul><li>One</li></ul>')
+
+
+def test_sanitiser_keeps_formatting_and_removes_everything_dangerous():
+    out = mailer.sanitize_html(DIRTY)
+    for bad in ("script", "onclick", "javascript:", "<img", "onerror", "<style", "alert"):
+        assert bad not in out
+    assert "<b>Dr</b>" in out and "<li>One</li>" in out and 'href="https://ok.in/x?a=1&amp;b=2"' in out
+    assert mailer.sanitize_html('<a href="https://x.in">open') .endswith("</a>")             # a link is never left open
+    assert mailer.html_to_text(out).startswith("Hi Dr bad good")
+
+
+def test_rich_email_is_sent_as_clean_html_with_a_matching_text_part(api):
+    connect(api)
+    r = api.post_("/api/leads/L7/send-email", {"subject": "S", "body": "", "body_html": "<p>Hi <b>{name}</b></p>" + DIRTY})
+    assert r.status_code == 200
+    msg = FakeSMTP.sent[0]
+    html_part, text_part = msg.get_body(("html",)).get_content(), msg.get_body(("plain",)).get_content()
+    assert "<b>Dr Priya</b>" in html_part and "script" not in html_part and "onclick" not in html_part
+    assert "Hi Dr Priya" in text_part and "<b>" not in text_part
+    assert "script" not in api.db.tables["email_logs"][0]["body_html"]
+
+
+# -- scheduling --------------------------------------------------------------------
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+
+def iso(delta):
+    return (datetime.now(timezone.utc) + delta).isoformat()
+
+
+def schedule(api, delta=timedelta(hours=2), **kw):
+    return api.post_("/api/email/schedule", {"lead_id": "L7", "subject": "Hello {name}", "body": "Hi {name}", "send_at": iso(delta), **kw})
+
+
+def test_schedule_validates_time_lead_sender_and_message(api):
+    assert schedule(api).status_code == 400                                              # no mailbox yet
+    connect(api)
+    assert schedule(api, timedelta(minutes=-5)).status_code == 422                       # in the past
+    assert schedule(api, timedelta(days=120)).status_code == 422                         # too far ahead
+    assert api.post_("/api/email/schedule", {"lead_id": "L8", "subject": "S", "body": "B", "send_at": iso(timedelta(hours=1))}).status_code == 400   # lead has no email
+    assert api.post_("/api/email/schedule", {"lead_id": "NOPE", "subject": "S", "body": "B", "send_at": iso(timedelta(hours=1))}).status_code == 404
+    assert schedule(api, subject="  ").status_code == 400 and schedule(api, body="  ").status_code == 400
+    assert api.db.tables["scheduled_emails"] == [] and FakeSMTP.sent == []               # nothing queued, nothing sent
+    ok = schedule(api)
+    assert ok.status_code == 200 and ok.json()["scheduled"] is True
+    row = api.db.tables["scheduled_emails"][0]
+    assert (row["status"], row["user_email"], row["lead_id"]) == ("pending", "asha@x.in", 7)
+    assert FakeSMTP.sent == []                                                           # scheduling never sends
+
+
+def test_a_naive_time_is_read_as_indian_time(api):
+    connect(api)
+    ist_now = datetime.now(timezone(timedelta(hours=5, minutes=30))).replace(tzinfo=None)
+    r = api.post_("/api/email/schedule", {"lead_id": "L7", "subject": "S", "body": "B",
+                                          "send_at": (ist_now + timedelta(hours=1)).isoformat()})
+    assert r.status_code == 200
+    stored = datetime.fromisoformat(api.db.tables["scheduled_emails"][0]["send_at"])
+    gap = stored - datetime.now(timezone.utc)
+    assert timedelta(minutes=55) < gap < timedelta(minutes=65)                           # one hour away, not 6.5 hours
+
+
+def test_due_emails_are_sent_once_future_ones_wait_and_cancelled_ones_never_go(api):
+    connect(api)
+    schedule(api, timedelta(minutes=1)); schedule(api, timedelta(days=1)); schedule(api, timedelta(minutes=1))
+    api.db.tables["scheduled_emails"][2]["status"] = "pending"
+    assert api.delete("/api/email/scheduled/3", headers={"Authorization": "Bearer t"}).status_code == 200      # cancel the third
+    assert api.delete("/api/email/scheduled/3", headers={"Authorization": "Bearer t"}).status_code == 404      # only once
+    later = datetime.now(timezone.utc) + timedelta(minutes=5)
+    assert email_router.process_due(now=later) == {"sent": 1, "failed": 0, "deferred": 0}
+    assert [e["To"] for e in FakeSMTP.sent] == ["priya@gmail.com"] and FakeSMTP.sent[0]["Subject"] == "Hello Dr Priya"
+    assert [r["status"] for r in api.db.tables["scheduled_emails"]] == ["sent", "pending", "cancelled"]
+    assert email_router.process_due(now=later) == {"sent": 0, "failed": 0, "deferred": 0}                      # never twice
+    assert len(FakeSMTP.sent) == 1 and api.db.tables["email_logs"][0]["status"] == "sent"
+    assert api.notes[0]["created_by"] == "Asha"
+
+
+def test_an_email_another_worker_already_claimed_is_not_sent_again(api, monkeypatch):
+    connect(api)
+    schedule(api, timedelta(minutes=1))
+    api.db.tables["scheduled_emails"][0]["status"] = "sending"                          # claimed elsewhere
+    assert email_router.process_due(now=datetime.now(timezone.utc) + timedelta(minutes=5)) == {"sent": 0, "failed": 0, "deferred": 0}
+    assert FakeSMTP.sent == []
+    # a send that was interrupted long ago is marked failed, never retried (it may already have gone out)
+    stale = api.db.tables["scheduled_emails"][0]
+    stale["send_at"] = iso(timedelta(hours=-1))
+    email_router.process_due()
+    assert stale["status"] == "failed" and "Interrupted" in stale["error"] and FakeSMTP.sent == []
+
+
+def test_failures_are_recorded_and_the_daily_limit_defers_then_expires(api):
+    connect(api, daily_limit=1)
+    schedule(api, timedelta(minutes=1)); schedule(api, timedelta(minutes=1))
+    now = datetime.now(timezone.utc) + timedelta(minutes=5)
+    out = email_router.process_due(now=now)
+    assert out == {"sent": 1, "failed": 0, "deferred": 1}                                # the limit holds the second one back
+    second = api.db.tables["scheduled_emails"][1]
+    assert second["status"] == "pending"
+    out = email_router.process_due(now=now + timedelta(hours=30))                        # still blocked a day later: give up
+    assert out["failed"] == 1 and second["status"] == "failed" and "limit" in second["error"].lower()
+    FakeSMTP.fail_send = smtplib.SMTPRecipientsRefused({"x": (550, b"no")})
+    connect(api, daily_limit=50)
+    schedule(api, timedelta(minutes=1))
+    email_router.process_due(now=now + timedelta(hours=31))
+    third = api.db.tables["scheduled_emails"][2]
+    assert third["status"] == "failed" and "refused" in third["error"]
+
+
+def test_scheduled_list_is_private_to_the_sender_and_cron_endpoint_needs_its_secret(api, monkeypatch):
+    connect(api)
+    schedule(api)
+    api.db.tables["scheduled_emails"].append({"id": 99, "lead_id": 7, "user_email": "other@x.in", "subject": "x",
+                                              "send_at": iso(timedelta(hours=1)), "status": "pending"})
+    api.me.update(role="Counselor")
+    mine = api.get_("/api/email/scheduled?lead_id=L7").json()["scheduled"]
+    assert [m["user_email"] for m in mine] == ["asha@x.in"]
+    assert api.delete("/api/email/scheduled/99", headers={"Authorization": "Bearer t"}).status_code == 404   # not theirs
+    assert api.post("/api/email/run-scheduled").status_code == 404                                           # disabled without CRON_SECRET
+    monkeypatch.setenv("CRON_SECRET", "cron-secret-0123456789")
+    assert api.post("/api/email/run-scheduled", headers={"X-Cron-Secret": "wrong"}).status_code == 401
+    assert api.post("/api/email/run-scheduled", headers={"X-Cron-Secret": "cron-secret-0123456789"}).json() == \
+        {"sent": 0, "failed": 0, "deferred": 0}
+    assert "/api/email/run-scheduled" in main._PUBLIC_PATHS

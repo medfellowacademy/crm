@@ -95,7 +95,7 @@ export const leadsAPI = {
 
   // Communication
   sendWhatsApp: (leadId, message) => api.post(`/api/leads/${leadId}/send-whatsapp`, { message }),
-  sendEmail: (leadId, subject, body) => api.post(`/api/leads/${leadId}/send-email`, { subject, body }),
+  sendEmail: (leadId, subject, body, bodyHtml) => api.post(`/api/leads/${leadId}/send-email`, { subject, body, body_html: bodyHtml }),
 
   // Automation sequences
   triggerWelcome: (leadId) => api.post(`/api/leads/${leadId}/trigger-welcome`),
@@ -136,6 +136,9 @@ export const emailAPI = {
   disconnect: () => api.delete('/api/email/account'),
   templates: () => api.get('/api/email/templates'),
   forLead: (leadId) => api.get(`/api/email/lead/${leadId}`),
+  schedule: (data) => api.post('/api/email/schedule', data),
+  scheduled: (leadId) => api.get('/api/email/scheduled', { params: { lead_id: leadId } }),
+  cancelScheduled: (id) => api.delete(`/api/email/scheduled/${id}`),
 };
 
 export const callsAPI = {

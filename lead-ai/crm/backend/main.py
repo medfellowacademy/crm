@@ -338,6 +338,27 @@ async def _log_memory_loop():
             logger.debug(f"memory watchdog: {e}")
 
 
+_mail_task: "_asyncio.Task | None" = None
+
+
+async def _scheduled_email_loop():
+    """Every minute send the scheduled emails that are due (see email_router.process_due).
+    Runs in the thread pool so the SMTP exchange never blocks the event loop; each email is claimed
+    atomically in the database, so a cron ping running at the same time cannot send it twice."""
+    await _asyncio.sleep(30)
+    while True:
+        try:
+            await run_in_threadpool(email_router_mod.process_due)
+        except _asyncio.CancelledError:
+            break
+        except Exception as e:  # never let this loop die
+            logger.warning(f"scheduled email loop: {e}")
+        try:
+            await _asyncio.sleep(60)
+        except _asyncio.CancelledError:
+            break
+
+
 # Lifespan context manager for startup/shutdown
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -404,8 +425,11 @@ async def lifespan(app: FastAPI):
 
     # Lightweight memory watchdog so an OOM shows up in the logs before the
     # process is killed (Render/most PaaS don't surface RSS otherwise).
-    global _mem_task
+    global _mem_task, _mail_task
     _mem_task = _asyncio.create_task(_log_memory_loop())
+    if len(os.getenv("EMAIL_SECRET_KEY", "").strip()) >= 16 and os.getenv("DISABLE_EMAIL_SCHEDULER", "") != "1":
+        _mail_task = _asyncio.create_task(_scheduled_email_loop())
+        logger.info("Scheduled-email sender started (checks every minute)")
 
     # Auto-seed Supabase only in non-production environments (guard against wiping prod)
     _env = os.getenv("ENVIRONMENT", "development").lower()
@@ -431,7 +455,7 @@ async def lifespan(app: FastAPI):
 
     # ---- Shutdown ----
     logger.info("👋 Application shutdown initiated")
-    for _t in (_decay_task, _mem_task):
+    for _t in (_decay_task, _mem_task, _mail_task):
         if _t and not _t.done():
             _t.cancel()
             try:
@@ -468,6 +492,8 @@ _PUBLIC_PATHS = {
     # The Android call-log app has no login: it sends its pairing token in X-Device-Token,
     # which calls_router.sync_calls checks against call_devices.
     "/api/calls/sync",
+    # Cron / uptime ping that sends due scheduled emails: guarded by the X-Cron-Secret header inside the handler.
+    "/api/email/run-scheduled",
 }
 
 from fastapi import Request
@@ -5199,7 +5225,7 @@ def send_email(
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     assert_can_view_lead(actor, lead)
-    return email_router_mod.send_to_lead(actor, lead, request.subject, request.body)
+    return email_router_mod.send_to_lead(actor, lead, request.subject, request.body, request.body_html)
 
 @app.post("/api/leads/{lead_id}/trigger-welcome")
 async def trigger_welcome(lead_id: str,
