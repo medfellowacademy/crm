@@ -123,7 +123,7 @@ class Q:
             made = []
             for item in (self.payload if isinstance(self.payload, list) else [self.payload]):
                 new_id = str(uuid.uuid4()) if self.name == "email_attachments" else len(t) + 1
-                row = {"id": new_id, "created_at": "2026-11-24T00:00:00+00:00", **item}
+                row = {"id": new_id, "created_at": datetime.now(timezone.utc).isoformat(), **item}
                 t.append(row)
                 made.append(row)
             return type("R", (), {"data": made, "count": None})()

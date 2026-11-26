@@ -356,12 +356,14 @@ def _emi_status(emi: dict, today: date) -> str:
 
 def emi_rows(leads: list, month: str, today: date) -> list:
     """Every EMI scheduled (due) in `month`: scheduled value vs what was actually
-    received, status, and payment details. Soonest due first."""
+    received, status, and payment details. Soonest due first.
+    A registration balance is not an EMI, so it is not listed or counted here (it shows under
+    Overdue as "registration pending"). Numbering and indexes still refer to the full schedule."""
     out = []
     for lead in leads or []:
         for i, e in enumerate(emis_of(lead)):
             d = _day(e.get("date"))
-            if not d or _month(d) != month or e.get("status") == "cancelled":
+            if not d or _month(d) != month or e.get("status") == "cancelled" or e.get("kind") == "registration":
                 continue
             status = _emi_status(e, today)
             out.append({
@@ -392,13 +394,13 @@ def emi_month_summary(rows: list) -> dict:
 
 
 def emi_trend(leads: list, end_month: str, months: int = 12) -> list:
-    """Per DUE month: scheduled EMI value vs actually received on those EMIs."""
+    """Per DUE month: scheduled EMI value vs actually received on those EMIs (registration balances excluded)."""
     wanted = [_shift_month(end_month, -(months - 1) + i) for i in range(months)]
     scheduled, received = defaultdict(float), defaultdict(float)
     for lead in leads or []:
         for e in emis_of(lead):
             d = _day(e.get("date"))
-            if not d or e.get("status") == "cancelled":
+            if not d or e.get("status") == "cancelled" or e.get("kind") == "registration":
                 continue
             m = _month(d)
             scheduled[m] += _num(e.get("amount"))

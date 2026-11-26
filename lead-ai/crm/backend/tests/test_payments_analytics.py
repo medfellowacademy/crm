@@ -263,6 +263,17 @@ class TestEmiMonthReport:
         assert (s["paid_count"], s["pending_count"], s["overdue_count"]) == (1, 1, 1)
         assert s["overdue_amount"] == 5000 and s["collection_rate"] == 40.9
 
+    def test_registration_balances_are_left_out_of_the_month_the_totals_and_the_trend(self):
+        l = lead(total=100000, reg=10000, emis=[emi("2026-10-02", 40000, kind="registration"),
+                                                emi("2026-10-10", 25000),
+                                                emi("2026-10-20", 15000, "paid", paid_date="2026-10-20", kind="registration")])
+        rows = pa.emi_rows([l], "2026-10", TODAY)
+        assert [(r["scheduled"], r["label"], r["emi_index"]) for r in rows] == [(25000, "EMI 1", 1)]   # index still points at the real slot
+        s = pa.emi_month_summary(rows)
+        assert (s["count"], s["scheduled"], s["received"], s["outstanding"], s["overdue_amount"]) == (1, 25000, 0, 25000, 25000)
+        t = {r["month"]: r for r in pa.emi_trend([l], "2026-10", 1)}["2026-10"]
+        assert (t["scheduled"], t["received"]) == (25000, 0)
+
     def test_empty_month(self):
         s = pa.emi_month_summary([])
         assert s["count"] == 0 and s["collection_rate"] == 0.0
@@ -373,6 +384,6 @@ class TestScheduledVersusUnscheduled:
         l = lead(total=100000, reg=50000, emis=[reg_balance])
         assert pa.finance_for(l, TODAY)["scheduled_pending"] == 50000
         assert pa.due_soon([l], TODAY, 60)[0]["kind"] == "registration"
-        assert pa.emi_rows([l], "2026-11", TODAY)[0]["kind"] == "registration"
+        assert pa.emi_rows([l], "2026-11", TODAY) == []            # not an EMI: absent from "EMIs by month"
         late = lead(total=100000, reg=50000, emis=[emi("2026-10-01", 50000, kind="registration")])
         assert pa.overdue_emis([late], TODAY)[0]["kind"] == "registration"
