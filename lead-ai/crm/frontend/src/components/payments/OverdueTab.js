@@ -16,7 +16,7 @@ function FollowupModal({ target, statuses, onClose, onDone }) {
   const [form] = Form.useForm();
   const save = useMutation({
     mutationFn: (v) => paymentsAPI.addFollowup(target.lead_id, {
-      note: v.note?.trim() || (v.promised_date ? `Expected payment on ${v.promised_date.format('DD MMM YYYY')}` : `Status: ${v.status}`),
+      note: v.note?.trim() || (v.promised_date ? `Expected payment on ${v.promised_date.format('DD/MM/YYYY')}` : `Status: ${v.status}`),
       emi_index: target.emi_index,
       promised_date: v.promised_date ? v.promised_date.format('YYYY-MM-DD') : undefined,
       status: v.status || undefined,
@@ -42,7 +42,7 @@ function FollowupModal({ target, statuses, onClose, onDone }) {
             validator: (_, v) => (v || getFieldValue('note')?.trim() || getFieldValue('status')
               ? Promise.resolve() : Promise.reject(new Error('Pick a status, an expected date, or add a note'))),
           })]}>
-          <DatePicker style={{ width: '100%' }} format="DD MMM YYYY" />
+          <DatePicker style={{ width: '100%' }} format="DD/MM/YYYY" />
         </Form.Item>
         <Form.Item name="note" label="Comment (optional when a status or date is set)" dependencies={['promised_date', 'status']}>
           <Input.TextArea rows={3} maxLength={1000} placeholder="e.g. Called, will pay after salary" />
@@ -116,7 +116,7 @@ export default function OverdueTab({ onChanged }) {
             ) },
             { title: 'Counselor', dataIndex: 'counselor' },
             { title: 'Instalment', dataIndex: 'label', render: (l, r) => l || `EMI ${r.emi_index + 1}` },
-            { title: 'Due', dataIndex: 'due_date', render: (d) => dayjs(d).format('DD MMM YYYY') },
+            { title: 'Due', dataIndex: 'due_date', render: (d) => dayjs(d).format('DD/MM/YYYY') },
             { title: 'Overdue', dataIndex: 'days_overdue', sorter: (a, b) => a.days_overdue - b.days_overdue, defaultSortOrder: 'descend',
               render: (d) => <Tag color={ageColor(d)}>{d} day{d !== 1 ? 's' : ''}</Tag> },
             { title: 'Amount', dataIndex: 'amount', align: 'right', render: (v) => <Text strong style={{ color: '#cf1322' }}>{fmt(v)}</Text> },
@@ -133,7 +133,7 @@ export default function OverdueTab({ onChanged }) {
                 return (
                   <Tooltip title="Change the expected date">
                     <Tag color={color} style={{ cursor: 'pointer' }} onClick={() => setFollow(r)}>
-                      {dayjs(r.expected_date).format('DD MMM')} · {hint}
+                      {dayjs(r.expected_date).format('DD/MM')} · {hint}
                     </Tag>
                   </Tooltip>
                 );
@@ -144,7 +144,7 @@ export default function OverdueTab({ onChanged }) {
               return (
                 <div style={{ fontSize: 12 }}>
                   <div>{f.note}</div>
-                  <Text type="secondary">{f.created_by} · {dayjs(f.created_at).format('DD MMM')}{f.promised_date ? ` · promised ${dayjs(f.promised_date).format('DD MMM')}` : ''}</Text>
+                  <Text type="secondary">{f.created_by} · {dayjs(f.created_at).format('DD/MM')}{f.promised_date ? ` · promised ${dayjs(f.promised_date).format('DD/MM')}` : ''}</Text>
                 </div>
               );
             } },

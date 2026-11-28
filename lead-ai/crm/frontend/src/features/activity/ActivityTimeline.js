@@ -29,7 +29,7 @@ const formatRelative = (ts) => {
   if (m < 60) return `${m}m ago`;
   if (h < 24) return `${h}h ago`;
   if (d < 7) return `${d}d ago`;
-  return safeDate(ts).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+  return safeDate(ts).toLocaleDateString('en-GB');
 };
 
 const formatTime = (ts) =>
@@ -40,7 +40,7 @@ const dateBucket = (ts) => {
   if (d === 0) return 'Today';
   if (d === 1) return 'Yesterday';
   if (d < 7) return `${d} days ago`;
-  return safeDate(ts).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+  return safeDate(ts).toLocaleDateString('en-GB');
 };
 
 /* ─── per-type config ─────────────────────────────────────── */

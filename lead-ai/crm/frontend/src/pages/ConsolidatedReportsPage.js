@@ -122,7 +122,7 @@ function LeadsDrawer({ monthStr, drill, onClose, onChange }) {
       key: 'date',
       render: (_, r) => {
         const d = drill?.kind === 'closed' ? (r.enrolled_at || r.updated_at) : r.created_at;
-        return d ? dayjs(d).format('DD MMM YYYY') : '—';
+        return d ? dayjs(d).format('DD/MM/YYYY') : '—';
       },
     },
     ...(drill?.kind === 'closed'

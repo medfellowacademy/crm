@@ -179,7 +179,7 @@ export default function LeadUpdateActivityPage() {
       render: d => (
         <Text strong style={{ color: '#6366f1' }}>
           <CalendarOutlined style={{ marginRight: 4 }} />
-          {dayjs(d).format('DD MMM YYYY')}
+          {dayjs(d).format('DD/MM/YYYY')}
         </Text>
       ),
     },
@@ -344,7 +344,7 @@ export default function LeadUpdateActivityPage() {
           <DatePicker.RangePicker
             value={dateRange}
             onChange={v => setDateRange(v || [dayjs().subtract(6, 'day'), dayjs()])}
-            format="DD MMM YYYY"
+            format="DD/MM/YYYY"
             allowClear={false}
             presets={[
               { label: 'Today',        value: [dayjs(), dayjs()] },
@@ -538,7 +538,7 @@ export default function LeadUpdateActivityPage() {
                   <Space wrap size={4}>
                     {dates.map(d => (
                       <Tag key={d} style={{ fontSize: 11, margin: 0, background: '#6366f110', color: '#6366f1', border: '1px solid #6366f130' }}>
-                        {dayjs(d).format('DD MMM')}
+                        {dayjs(d).format('DD/MM')}
                       </Tag>
                     ))}
                   </Space>
@@ -559,7 +559,7 @@ export default function LeadUpdateActivityPage() {
             <Space>
               <UserOutlined style={{ color: '#6366f1' }} />
               <span style={{ fontWeight: 700, color: '#1e1b4b' }}>{drawerRow.user}</span>
-              <Tag color="purple">{dayjs(drawerRow.date).format('DD MMM YYYY')}</Tag>
+              <Tag color="purple">{dayjs(drawerRow.date).format('DD/MM/YYYY')}</Tag>
               <Tag color="green">{drawerRow.leads_updated} leads</Tag>
               <Tag color="blue">{drawerRow.total_events} events</Tag>
             </Space>

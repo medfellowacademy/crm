@@ -42,7 +42,7 @@ export default function CallHistory({ leadId }) {
                 <Tag color={c.connected ? 'green' : (c.direction === 'outgoing' ? 'red' : 'orange')}>
                   {LABEL[c.direction] || c.direction}{c.direction === 'outgoing' ? (c.connected ? ' · connected' : ' · not connected') : ''}
                 </Tag>
-                <Text>{dayjs(c.started_at).format('DD MMM YYYY, h:mm A')}</Text>
+                <Text>{dayjs(c.started_at).format('DD/MM/YYYY, h:mm A')}</Text>
                 {c.connected && <Text type="secondary">{secs(c.duration_sec)}</Text>}
                 <Text type="secondary">{c.user_email}</Text>
               </Space>

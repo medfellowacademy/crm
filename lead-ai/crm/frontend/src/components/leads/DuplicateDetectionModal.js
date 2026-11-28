@@ -74,7 +74,7 @@ const DuplicateCard = ({ lead, onSelect, selected }) => (
           <div style={{ fontWeight: 700, fontSize: 14, color: '#111827' }}>{lead.full_name}</div>
           <div style={{ fontSize: 12, color: '#6b7280' }}>{lead.phone} · {lead.country}</div>
           <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>
-            {lead.course_interested} · Created {dayjs(lead.created_at).format('MMM D, YYYY')}
+            {lead.course_interested} · Created {dayjs(lead.created_at).format('DD/MM/YYYY')}
           </div>
         </div>
       </div>

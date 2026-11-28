@@ -56,12 +56,12 @@ export default function PayEmiModal({ target, onClose, onDone }) {
       {target && (
         <div style={{ marginBottom: 12, color: '#6b7280' }}>
           Scheduled <b style={{ color: '#111827' }}>{fmt(target.amount)}</b>
-          {target.dueDate ? <> · due {dayjs(target.dueDate).format('DD MMM YYYY')}</> : null}
+          {target.dueDate ? <> · due {dayjs(target.dueDate).format('DD/MM/YYYY')}</> : null}
         </div>
       )}
       <Form form={form} layout="vertical">
         <Form.Item name="paid_on" label="Date received" rules={[{ required: true, message: 'Pick the date' }]}>
-          <DatePicker style={{ width: '100%' }} format="DD MMM YYYY" disabledDate={(d) => d.isAfter(dayjs(), 'day')} />
+          <DatePicker style={{ width: '100%' }} format="DD/MM/YYYY" disabledDate={(d) => d.isAfter(dayjs(), 'day')} />
         </Form.Item>
         <Form.Item name="amount" label="Amount received"
           extra="Enter less to record a part-payment; the rest will stay pending."
@@ -78,7 +78,7 @@ export default function PayEmiModal({ target, onClose, onDone }) {
               description="It becomes its own pending instalment, so it still shows as due and, if the date passes, as overdue." />
             <Form.Item name="remaining_due" label="Rest expected by"
               rules={[{ required: true, message: 'When will the rest come?' }]}>
-              <DatePicker style={{ width: '100%' }} format="DD MMM YYYY" disabledDate={(d) => d.isBefore(dayjs(), 'day')} />
+              <DatePicker style={{ width: '100%' }} format="DD/MM/YYYY" disabledDate={(d) => d.isBefore(dayjs(), 'day')} />
             </Form.Item>
           </>
         )}

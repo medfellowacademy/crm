@@ -120,7 +120,7 @@ const WebsiteLeadsPage = () => {
       sorter: (a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0),
       defaultSortOrder: 'descend',
       render: v => v ? (
-        <Tooltip title={dayjs(v).format('DD MMM YYYY HH:mm')}>
+        <Tooltip title={dayjs(v).format('DD/MM/YYYY HH:mm')}>
           <Text type="secondary">{dayjs(v).fromNow()}</Text>
         </Tooltip>
       ) : '—' },

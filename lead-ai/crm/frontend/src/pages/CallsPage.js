@@ -40,7 +40,7 @@ function SyncBadge({ row }) {
   if (!row.phone_paired) return <Tag>No phone</Tag>;
   if (!row.last_sync_at) return <Tag color="orange">Never synced</Tag>;
   const hrs = dayjs().diff(dayjs(row.last_sync_at), 'hour', true);
-  const text = dayjs(row.last_sync_at).format('DD MMM, h:mm A');
+  const text = dayjs(row.last_sync_at).format('DD/MM, h:mm A');
   return <Tooltip title={`Last sync ${text}`}><Tag color={hrs > 6 ? 'red' : 'green'}>{hrs > 6 ? `Stale · ${text}` : 'Live'}</Tag></Tooltip>;
 }
 
@@ -159,9 +159,9 @@ export default function CallsPage() {
                 <ResponsiveContainer width="100%" height={220}>
                   <ComposedChart data={data.trend}>
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="date" tickFormatter={(d) => dayjs(d).format('DD MMM')} />
+                    <XAxis dataKey="date" tickFormatter={(d) => dayjs(d).format('DD/MM')} />
                     <YAxis allowDecimals={false} />
-                    <RTooltip labelFormatter={(d) => dayjs(d).format('ddd, DD MMM')} />
+                    <RTooltip labelFormatter={(d) => dayjs(d).format('ddd, DD/MM')} />
                     <Legend />
                     <Bar dataKey="made" name="Made" fill="#91caff" />
                     <Line dataKey="connected" name="Connected" stroke="#389e0d" strokeWidth={2} dot={false} />
@@ -214,7 +214,7 @@ export default function CallsPage() {
               columns={[
                 { title: 'Phone', dataIndex: 'label', render: (v) => v || 'Phone' },
                 { title: 'Owner', dataIndex: 'user_email' },
-                { title: 'Last sync', dataIndex: 'last_sync_at', render: (v) => (v ? dayjs(v).format('DD MMM, h:mm A') : <Tag>Never</Tag>) },
+                { title: 'Last sync', dataIndex: 'last_sync_at', render: (v) => (v ? dayjs(v).format('DD/MM, h:mm A') : <Tag>Never</Tag>) },
                 { title: '', render: (_, r) => (
                   <Popconfirm title="Remove this phone? It will stop syncing." onConfirm={() => revoke.mutate(r.id)}>
                     <Button size="small" danger>Remove</Button>

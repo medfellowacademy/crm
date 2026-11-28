@@ -8650,7 +8650,7 @@ async def send_wa_template(
         "expected_fee": f"{int(lead.get('expected_revenue', 0)):,}" if lead.get('expected_revenue') else "0",
         "fee_amount":   f"{int(lead.get('expected_revenue', 0)):,}" if lead.get('expected_revenue') else "0",
         "follow_up_date": follow_up_str,
-        "enrollment_date": datetime.utcnow().strftime("%d %b %Y"),
+        "enrollment_date": datetime.utcnow().strftime("%d/%m/%Y"),
     }
     overrides = payload.get("variable_overrides", {}) or {}
     variables = {**defaults, **overrides}

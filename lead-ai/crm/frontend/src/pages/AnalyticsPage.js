@@ -798,7 +798,7 @@ const AnalyticsPage = () => {
               dataIndex: 'created_at',
               key: 'created',
               width: 110,
-              render: v => v ? new Date(v).toLocaleDateString('en-IN') : '—',
+              render: v => v ? new Date(v).toLocaleDateString('en-GB') : '—',
             },
           ]}
         />

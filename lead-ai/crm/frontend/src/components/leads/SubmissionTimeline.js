@@ -30,7 +30,7 @@ const MATCH_LABEL = {
   meta_id: 'matched on Meta submission id',
 };
 
-const fmt = (d) => (d ? dayjs(d).format('D MMM YYYY, h:mm A') : '—');
+const fmt = (d) => (d ? dayjs(d).format('DD/MM/YYYY, h:mm A') : '—');
 
 export default function SubmissionTimeline({ leadId }) {
   const { data, isLoading, isError } = useQuery({

@@ -88,7 +88,7 @@ const FinanceDashboard = () => {
         return bal > 0 ? <Text style={{ color: '#dc2626' }}>{fmt(bal)}</Text> : <Tag color="green">Cleared</Tag>;
       },
     },
-    { title: 'Enrolled', dataIndex: 'updated_at', key: 'updated_at', render: d => d ? dayjs(d).format('DD MMM YYYY') : '—' },
+    { title: 'Enrolled', dataIndex: 'updated_at', key: 'updated_at', render: d => d ? dayjs(d).format('DD/MM/YYYY') : '—' },
   ];
 
   return (

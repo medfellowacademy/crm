@@ -2,6 +2,7 @@ import React, { lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConfigProvider } from 'antd';
+import enUS from 'antd/locale/en_US';
 import ProfessionalLayout from './components/Layout/ProfessionalLayout';
 // Lazy-loaded pages — each becomes its own JS chunk (code splitting)
 const RoleBasedDashboard  = lazy(() => import('./pages/RoleBasedDashboard'));
@@ -145,11 +146,26 @@ function AppRoutes() {
   );
 }
 
+// Every date picker shows (and accepts typed) dates as day/month/year.
+const DATE_LOCALE = {
+  ...enUS,
+  DatePicker: {
+    ...enUS.DatePicker,
+    lang: {
+      ...enUS.DatePicker.lang,
+      fieldDateFormat: 'DD/MM/YYYY',
+      fieldDateTimeFormat: 'DD/MM/YYYY HH:mm',
+      fieldMonthFormat: 'MM/YYYY',
+    },
+  },
+};
+
 function App() {
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <ConfigProvider
+          locale={DATE_LOCALE}
           theme={{
             token: {
               colorPrimary: '#3b82f6',

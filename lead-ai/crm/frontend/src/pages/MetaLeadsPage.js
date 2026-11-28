@@ -40,7 +40,7 @@ const fmtDate = (v) => {
   const dateStr = d.format('YYYY-MM-DD');
   if (dateStr === today)     return 'Today';
   if (dateStr === yesterday) return 'Yesterday';
-  return d.format('DD MMM YYYY');
+  return d.format('DD/MM/YYYY');
 };
 
 // ── Adset leads modal ──────────────────────────────────────────────────────────
@@ -109,7 +109,7 @@ const DailyLeadsModal = ({ date, adset, open, onClose }) => {
       title={
         <Space>
           <CalendarOutlined />
-          <span>Leads on {date ? dayjs(date).format('DD MMM YYYY') : ''}</span>
+          <span>Leads on {date ? dayjs(date).format('DD/MM/YYYY') : ''}</span>
           {adset && <Tag color="purple">{adset}</Tag>}
         </Space>
       }
@@ -219,7 +219,7 @@ const RepeatedLeadsTable = () => {
           </Tag>
           <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>{r.campaign_name || ''}</div>
           <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 1 }}>
-            {r.created_at ? dayjs(r.created_at).format('DD MMM YYYY') : '—'}
+            {r.created_at ? dayjs(r.created_at).format('DD/MM/YYYY') : '—'}
           </div>
         </div>
       ),
@@ -234,7 +234,7 @@ const RepeatedLeadsTable = () => {
           <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>{r.last_submission_campaign || ''}</div>
           <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 1 }}>
             {r.last_submission_tab ? `Tab: ${r.last_submission_tab}` : ''}
-            {r.last_submission_date ? ` · ${dayjs(r.last_submission_date).format('DD MMM YYYY')}` : ''}
+            {r.last_submission_date ? ` · ${dayjs(r.last_submission_date).format('DD/MM/YYYY')}` : ''}
           </div>
         </div>
       ) : <Text type="secondary">—</Text>,
@@ -321,7 +321,7 @@ const DailyBreakdownTab = ({ adsets }) => {
       render: v => (
         <div>
           <Text strong>{fmtDate(v)}</Text>
-          <div style={{ fontSize: 11, color: '#9ca3af' }}>{dayjs(v).format('ddd, DD MMM')}</div>
+          <div style={{ fontSize: 11, color: '#9ca3af' }}>{dayjs(v).format('ddd, DD/MM')}</div>
         </div>
       ),
     },
@@ -616,7 +616,7 @@ const MetaLeadsPage = () => {
     {
       title: 'Latest Lead', dataIndex: 'latest', key: 'latest', width: 130,
       render: v => v ? (
-        <Tooltip title={dayjs(v).format('DD MMM YYYY HH:mm')}>
+        <Tooltip title={dayjs(v).format('DD/MM/YYYY HH:mm')}>
           <Text type="secondary">{dayjs(v).fromNow()}</Text>
         </Tooltip>
       ) : '—',

@@ -449,7 +449,7 @@ export default function SalesTargetsPage() {
             ) },
             { title: 'Course', dataIndex: 'course', ellipsis: true },
             { title: 'Fee', dataIndex: 'amount', align: 'right', render: fmt },
-            { title: 'Enrolled', dataIndex: 'at', render: (v) => dayjs(v).format('DD MMM YYYY') },
+            { title: 'Enrolled', dataIndex: 'at', render: (v) => dayjs(v).format('DD/MM/YYYY') },
           ]}
         />
       </Card>

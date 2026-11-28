@@ -80,8 +80,8 @@ const leadDefaults = (lead) => {
     country:         lead.country || '',
     expected_fee:    lead.expected_revenue ? String(Math.round(lead.expected_revenue)) : '',
     fee_amount:      lead.expected_revenue ? String(Math.round(lead.expected_revenue)) : '',
-    follow_up_date:  lead.follow_up_date ? dayjs(lead.follow_up_date).format('DD MMM YYYY') : '',
-    enrollment_date: dayjs().format('DD MMM YYYY'),
+    follow_up_date:  lead.follow_up_date ? dayjs(lead.follow_up_date).format('DD/MM/YYYY') : '',
+    enrollment_date: dayjs().format('DD/MM/YYYY'),
   };
 };
 

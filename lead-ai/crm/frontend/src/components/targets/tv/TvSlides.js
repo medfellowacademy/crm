@@ -114,7 +114,7 @@ export function SalesSlide({ data, photo, vh }) {
                   <span style={ellipsis}>🎓 {r.student}</span>
                   <span style={{ color: LEMON, fontFamily: DISPLAY_FONT }}>{fmt(r.amount)}</span>
                 </div>
-                <FitText style={{ color: MUTED, fontSize: FS.caption }}>{r.course} · {r.counselor} · {dayjs(r.at).format('DD MMM')}</FitText>
+                <FitText style={{ color: MUTED, fontSize: FS.caption }}>{r.course} · {r.counselor} · {dayjs(r.at).format('DD/MM')}</FitText>
               </div>
             </div>
           ))}
@@ -295,7 +295,7 @@ export function PerformanceSlide({ data, photo }) {
                 <SalesAvatar name={a.name} src={photo(a)} size={48} ring={LAVENDER} style={{ width: '5.4vh', height: '5.4vh' }} />
                 <div style={{ fontFamily: BODY_FONT, fontWeight: 700, fontSize: FS.label }}>
                   🎂 {a.name}
-                  <div style={{ color: LEMON, fontWeight: 500, fontSize: '0.8em' }}>{a.years} {a.years === 1 ? 'year' : 'years'} · {a.days === 0 ? 'today!' : a.days === 1 ? 'tomorrow' : dayjs(a.date).format('ddd D MMM')}</div>
+                  <div style={{ color: LEMON, fontWeight: 500, fontSize: '0.8em' }}>{a.years} {a.years === 1 ? 'year' : 'years'} · {a.days === 0 ? 'today!' : a.days === 1 ? 'tomorrow' : dayjs(a.date).format('ddd DD/MM')}</div>
                 </div>
               </div>
             ))}

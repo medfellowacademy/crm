@@ -53,7 +53,7 @@ function EmployeeDrawer({ employee, team, onClose }) {
 
   const chartData = grain === 'Monthly'
     ? (employee.monthly || []).map((m) => ({ label: dayjs(m.month + '-01').format('MMM YY'), revenue: m.revenue, enrolled: m.enrolled }))
-    : (employee.weekly || []).map((w) => ({ label: dayjs(w.week).format('D MMM'), revenue: w.revenue, enrolled: w.enrolled }));
+    : (employee.weekly || []).map((w) => ({ label: dayjs(w.week).format('DD/MM'), revenue: w.revenue, enrolled: w.enrolled }));
 
   const breakdownCols = (label) => [
     { title: label, dataIndex: 'name', ellipsis: true },
@@ -72,7 +72,7 @@ function EmployeeDrawer({ employee, team, onClose }) {
       <Space wrap style={{ marginBottom: 16 }}>
         <Tag color={ROLE_COLOR[employee.role] || 'default'}>{employee.role}</Tag>
         {employee.date_of_joining && (
-          <Tag>Joined {dayjs(employee.date_of_joining).format('DD MMM YYYY')}{employee.tenure ? ` · ${employee.tenure}` : ''}</Tag>
+          <Tag>Joined {dayjs(employee.date_of_joining).format('DD/MM/YYYY')}{employee.tenure ? ` · ${employee.tenure}` : ''}</Tag>
         )}
       </Space>
 
@@ -206,7 +206,7 @@ const EmployeePerformancePage = () => {
       title: 'Joined',
       key: 'joined',
       render: (_, r) => r.date_of_joining
-        ? <div><div>{dayjs(r.date_of_joining).format('DD MMM YYYY')}</div><Text type="secondary" style={{ fontSize: 12 }}>{r.tenure}</Text></div>
+        ? <div><div>{dayjs(r.date_of_joining).format('DD/MM/YYYY')}</div><Text type="secondary" style={{ fontSize: 12 }}>{r.tenure}</Text></div>
         : <Text type="secondary">Not set</Text>,
     },
     {

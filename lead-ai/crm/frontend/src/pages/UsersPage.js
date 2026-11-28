@@ -744,7 +744,7 @@ const UsersPage = () => {
             name="date_of_joining"
             label="Date of Joining (Optional)"
           >
-            <DatePicker size="large" style={{ width: '100%' }} format="DD MMM YYYY"
+            <DatePicker size="large" style={{ width: '100%' }} format="DD/MM/YYYY"
               placeholder="When did they join?" />
           </Form.Item>
 

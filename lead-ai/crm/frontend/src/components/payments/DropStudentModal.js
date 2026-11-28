@@ -69,7 +69,7 @@ export default function DropStudentModal({ lead, onClose, onDone }) {
           <Select placeholder="Select a reason" options={DROP_REASONS.map((r) => ({ value: r, label: r }))} />
         </Form.Item>
         <Form.Item name="dropped_on" label="Date dropped" rules={[{ required: true, message: 'Pick the date' }]}>
-          <DatePicker style={{ width: '100%' }} format="DD MMM YYYY" disabledDate={(d) => d.isAfter(dayjs(), 'day')} />
+          <DatePicker style={{ width: '100%' }} format="DD/MM/YYYY" disabledDate={(d) => d.isAfter(dayjs(), 'day')} />
         </Form.Item>
         <Form.Item
           name="refund_amount" label="Refund given (if any)"

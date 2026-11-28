@@ -63,7 +63,7 @@ export default function EmailSetup() {
       {data?.configured ? (
         <Alert type="success" showIcon icon={<MailOutlined />}
           message={`Sending from ${data.smtp_user}`}
-          description={`${data.sent_today} of ${data.daily_limit} emails used today${data.last_ok_at ? ` · verified ${dayjs(data.last_ok_at).format('DD MMM, h:mm A')}` : ''}`} />
+          description={`${data.sent_today} of ${data.daily_limit} emails used today${data.last_ok_at ? ` · verified ${dayjs(data.last_ok_at).format('DD/MM, h:mm A')}` : ''}`} />
       ) : data?.shared_sender ? (
         <Alert type="info" showIcon message="Not connected: emails currently go from the company mailbox"
           description="Replies still reach you. Connect your own mailbox so leads see your address." />

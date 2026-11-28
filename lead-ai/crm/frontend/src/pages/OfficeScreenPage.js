@@ -213,7 +213,7 @@ export default function OfficeScreenPage() {
 
   const { company, recent } = data;
   const monthLabel = dayjs(`${data.month}-01`).format('MMMM YYYY').toUpperCase();
-  const subtitle = TODAY_SLIDES.has(current) ? now.format('ddd D MMM').toUpperCase() : monthLabel.split(' ')[0];
+  const subtitle = TODAY_SLIDES.has(current) ? now.format('ddd DD/MM').toUpperCase() : monthLabel.split(' ')[0];
   const ticker = recent.length
     ? recent.map((r) => `🎓 ${r.student} joined ${r.course} — closed by ${r.counselor}`).join('   ✦   ')
     : 'Every enrollment shows up here the moment it happens';
@@ -311,7 +311,7 @@ export default function OfficeScreenPage() {
           <div style={{ flex: 1, display: 'grid', placeItems: 'center', textAlign: 'center' }}>
             <div>
               <div style={{ fontFamily: DISPLAY_FONT, fontSize: 'clamp(60px,min(14vw,26vh),280px)', lineHeight: 1, color: LEMON }}>{now.format('hh:mm')}</div>
-              <div style={{ fontFamily: BODY_FONT, fontWeight: 700, fontSize: FS.title, color: MUTED }}>{now.format('dddd, D MMMM')}</div>
+              <div style={{ fontFamily: BODY_FONT, fontWeight: 700, fontSize: FS.title, color: MUTED }}>{now.format('dddd, DD/MM')}</div>
             </div>
           </div>
         ) : (

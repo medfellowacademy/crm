@@ -42,7 +42,7 @@ export function PaymentActivity({ leadId, compact = false }) {
         </Form.Item>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <Form.Item name="promised_date" style={{ marginBottom: 0 }}>
-            <DatePicker size="small" format="DD MMM YYYY" placeholder="Promised date (optional)" />
+            <DatePicker size="small" format="DD/MM/YYYY" placeholder="Promised date (optional)" />
           </Form.Item>
           <Button type="primary" size="small" htmlType="submit" loading={add.isPending}>Add comment</Button>
         </div>
@@ -55,8 +55,8 @@ export function PaymentActivity({ leadId, compact = false }) {
             <div key={`c${c.id}`} style={{ padding: '6px 0', borderBottom: '1px solid #e5e7eb' }}>
               <div style={{ whiteSpace: 'pre-wrap' }}>{c.note}</div>
               <Text type="secondary">
-                {c.created_by} · {dayjs(c.created_at).format('DD MMM YYYY, h:mm A')}
-                {c.promised_date ? ` · promised ${dayjs(c.promised_date).format('DD MMM')}` : ''}
+                {c.created_by} · {dayjs(c.created_at).format('DD/MM/YYYY, h:mm A')}
+                {c.promised_date ? ` · promised ${dayjs(c.promised_date).format('DD/MM')}` : ''}
                 {c.emi_index != null ? ` · EMI ${Number(c.emi_index) + 1}` : ''}
               </Text>
             </div>
@@ -66,7 +66,7 @@ export function PaymentActivity({ leadId, compact = false }) {
               <Text strong style={{ fontSize: 12 }}>Payments recorded</Text>
               {payments.map((p) => (
                 <div key={`p${p.id}`} style={{ padding: '4px 0', borderBottom: '1px solid #e5e7eb' }}>
-                  <b>{fmt(p.amount)}</b> · EMI {Number(p.emi_index) + 1} · {dayjs(p.paid_on).format('DD MMM YYYY')}
+                  <b>{fmt(p.amount)}</b> · EMI {Number(p.emi_index) + 1} · {dayjs(p.paid_on).format('DD/MM/YYYY')}
                   {p.method ? ` · ${p.method}` : ''} <Text type="secondary">· {p.recorded_by}</Text>
                   {p.note ? <div style={{ color: '#6b7280' }}>{p.note}</div> : null}
                 </div>

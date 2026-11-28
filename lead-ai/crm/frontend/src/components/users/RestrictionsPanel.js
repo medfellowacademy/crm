@@ -62,7 +62,7 @@ export default function RestrictionsPanel({ user, onChanged }) {
               {f.active && (
                 <div style={{ marginTop: 2 }}>
                   <Text type="danger" style={{ fontSize: 12 }}>
-                    Restricted by {f.set_by || 'an administrator'}{f.set_at ? ` on ${dayjs(f.set_at).format('DD MMM YYYY')}` : ''}
+                    Restricted by {f.set_by || 'an administrator'}{f.set_at ? ` on ${dayjs(f.set_at).format('DD/MM/YYYY')}` : ''}
                   </Text>
                 </div>
               )}

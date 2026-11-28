@@ -129,7 +129,7 @@ const BrochuresPage = () => {
                     <Space size={4} wrap style={{ marginTop: 6 }}>
                       {b.file_size ? <Tag>{prettySize(b.file_size)}</Tag> : null}
                       <Text type="secondary" style={{ fontSize: 12 }}>
-                        {b.uploaded_by || 'Unknown'} · {b.created_at ? dayjs(b.created_at).format('DD MMM YYYY') : ''}
+                        {b.uploaded_by || 'Unknown'} · {b.created_at ? dayjs(b.created_at).format('DD/MM/YYYY') : ''}
                       </Text>
                     </Space>
                   </div>

@@ -123,7 +123,7 @@ function Compose({ lead, leadId, leadIds, onClose }) {
   const schedule = useMutation({
     mutationFn: (when) => emailAPI.schedule({ lead_id: leadId, ...payload(), send_at: when.toISOString() }).then((r) => r.data),
     onSuccess: (d) => {
-      message.success(`Scheduled for ${dayjs(d.send_at).format('ddd, DD MMM, h:mm A')}`);
+      message.success(`Scheduled for ${dayjs(d.send_at).format('ddd, DD/MM, h:mm A')}`);
       writeDraft(draftId, null); setMenuOpen(false); refresh(); onClose();
     },
     onError: (e) => message.error(errorText(e, 'The email could not be scheduled')),
@@ -134,7 +134,7 @@ function Compose({ lead, leadId, leadIds, onClose }) {
       writeDraft(draftId, null);
       setMenuOpen(false);
       if (when) {
-        message.success(`${d.queued} emails scheduled for ${dayjs(when).format('ddd, DD MMM, h:mm A')}`);
+        message.success(`${d.queued} emails scheduled for ${dayjs(when).format('ddd, DD/MM, h:mm A')}`);
         onClose();
       } else {
         setBatch(d);
@@ -172,16 +172,16 @@ function Compose({ lead, leadId, leadIds, onClose }) {
         {quickTimes().map((q) => (
           <Button key={q.label} block style={{ textAlign: 'left', display: 'flex', justifyContent: 'space-between' }}
             disabled={!canSend} loading={scheduling} onClick={() => scheduleAt(q.when)}>
-            <span>{q.label}</span><Text type="secondary">{q.when.format('ddd D MMM, h:mm A')}</Text>
+            <span>{q.label}</span><Text type="secondary">{q.when.format('ddd DD/MM, h:mm A')}</Text>
           </Button>
         ))}
       </div>
       <Text type="secondary" style={{ fontSize: 12 }}>Pick a date and time</Text>
-      <DatePicker showTime={{ format: 'h:mm A', use12Hours: true }} format="DD MMM YYYY, h:mm A" style={{ width: '100%', margin: '6px 0 8px' }}
+      <DatePicker showTime={{ format: 'h:mm A', use12Hours: true }} format="DD/MM/YYYY, h:mm A" style={{ width: '100%', margin: '6px 0 8px' }}
         value={custom} onChange={setCustom} disabledDate={(d) => d && d.isBefore(dayjs().startOf('day'))} getPopupContainer={(n) => n.parentNode} />
       <Button type="primary" block icon={<ClockCircleOutlined />} loading={scheduling}
         disabled={!canSend || !custom || custom.isBefore(dayjs().add(1, 'minute'))} onClick={() => scheduleAt(custom)}>
-        Schedule{custom ? ` for ${custom.format('D MMM, h:mm A')}` : ''}
+        Schedule{custom ? ` for ${custom.format('DD/MM, h:mm A')}` : ''}
       </Button>
     </div>
   );
@@ -315,7 +315,7 @@ function ScheduledTab({ leadId }) {
       locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Nothing scheduled for this lead" /> }}
       columns={[
         { title: 'Subject', dataIndex: 'subject', ellipsis: true },
-        { title: 'Send time', dataIndex: 'send_at', width: 170, render: (v) => dayjs(v).format('ddd D MMM, h:mm A') },
+        { title: 'Send time', dataIndex: 'send_at', width: 170, render: (v) => dayjs(v).format('ddd DD/MM, h:mm A') },
         { title: 'Status', dataIndex: 'status', width: 230, render: (v, r) => (
           <div><Tag color={(STATUS[v] || [])[0]}>{(STATUS[v] || [])[1] || v}</Tag>{r.error && <Text type="danger" style={{ fontSize: 12, display: 'block' }}>{r.error}</Text>}</div>) },
         { title: '', width: 80, render: (_, r) => r.status === 'pending' && (
@@ -334,11 +334,11 @@ function SentTab({ leadId }) {
           <Space size={6}>{v}{r.attachments?.length > 0 && (
             <Tooltip title={r.attachments.map((x) => x.name).join(', ')}><PaperClipOutlined /></Tooltip>)}</Space>) },
         { title: 'From', dataIndex: 'user_email', width: 160, ellipsis: true },
-        { title: 'Sent', dataIndex: 'created_at', width: 150, render: (v) => dayjs(v).format('D MMM YYYY, h:mm A') },
+        { title: 'Sent', dataIndex: 'created_at', width: 150, render: (v) => dayjs(v).format('DD/MM/YYYY, h:mm A') },
         { title: 'Engagement', width: 170, render: (_, r) => (
           r.status !== 'sent' ? '—' : (
             <Space size={4} wrap>
-              <Tooltip title={r.last_open_at ? `Last opened ${dayjs(r.last_open_at).format('D MMM, h:mm A')}. Open counts are approximate.` : 'Not opened yet (or opens are not tracked)'}>
+              <Tooltip title={r.last_open_at ? `Last opened ${dayjs(r.last_open_at).format('DD/MM, h:mm A')}. Open counts are approximate.` : 'Not opened yet (or opens are not tracked)'}>
                 <Tag icon={<EyeOutlined />} color={r.opens ? 'green' : 'default'} style={{ margin: 0 }}>{r.opens || 0}</Tag>
               </Tooltip>
               <Tooltip title="Link clicks"><Tag icon={<LinkOutlined />} color={r.clicks ? 'blue' : 'default'} style={{ margin: 0 }}>{r.clicks || 0}</Tag></Tooltip>

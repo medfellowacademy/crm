@@ -499,7 +499,7 @@ const LeadDetails = () => {
               {lead?.full_name}
             </h1>
             <div style={{ color: '#8c8c8c', marginTop: '4px' }}>
-              {lead?.lead_id} • Created {parseDate(lead?.created_at)?.format('MMM DD, YYYY')}
+              {lead?.lead_id} • Created {parseDate(lead?.created_at)?.format('DD/MM/YYYY')}
             </div>
           </div>
         </div>
@@ -569,7 +569,7 @@ const LeadDetails = () => {
               </Button>
             </Space>
             <span style={{ color: '#8c8c8c', fontSize: 12 }}>
-              {lead?.follow_up_date ? `Next call: ${parseDate(lead.follow_up_date).format('DD MMM YYYY, hh:mm A')}` : 'No call scheduled yet'}
+              {lead?.follow_up_date ? `Next call: ${parseDate(lead.follow_up_date).format('DD/MM/YYYY, hh:mm A')}` : 'No call scheduled yet'}
             </span>
           </Space>
         </div>
@@ -590,7 +590,7 @@ const LeadDetails = () => {
             <div>
               <div style={{ fontWeight: 600, marginBottom: '8px' }}>{lead.next_action}</div>
               <div style={{ fontSize: '12px', color: '#8c8c8c' }}>
-                Priority: {lead.priority_level} • Follow up: {lead.follow_up_date ? parseDate(lead.follow_up_date).format('MMM DD, hh:mm A') : 'Not set'}
+                Priority: {lead.priority_level} • Follow up: {lead.follow_up_date ? parseDate(lead.follow_up_date).format('DD/MM, hh:mm A') : 'Not set'}
               </div>
             </div>
           }
@@ -844,13 +844,13 @@ const LeadDetails = () => {
                 <Descriptions.Item label="Follow-up Date">
                   {!isEditing ? (
                     <span>
-                      {lead?.follow_up_date ? parseDate(lead.follow_up_date).format('MMM DD, YYYY hh:mm A') : '-'}
+                      {lead?.follow_up_date ? parseDate(lead.follow_up_date).format('DD/MM/YYYY hh:mm A') : '-'}
                     </span>
                   ) : (
                     <Form.Item name="follow_up_date" noStyle>
                       <DatePicker
                         showTime={{ format: 'hh:mm A', use12Hours: true }}
-                        format="MMM DD, YYYY hh:mm A"
+                        format="DD/MM/YYYY hh:mm A"
                         style={{ width: '100%' }}
                       />
                     </Form.Item>
@@ -1207,7 +1207,7 @@ const LeadDetails = () => {
                       )}
                       <span style={{ fontWeight: 600, marginLeft: 8 }}>{note.created_by}</span>
                       <span style={{ color: '#8c8c8c', marginLeft: 8, fontSize: 12 }}>
-                        {parseDate(note.created_at)?.format('MMM DD, YYYY hh:mm A')}
+                        {parseDate(note.created_at)?.format('DD/MM/YYYY hh:mm A')}
                       </span>
                     </div>
 
@@ -1259,7 +1259,7 @@ const LeadDetails = () => {
                         <Space size={8} wrap>
                           <Tag color={n.channel === 'whatsapp' ? 'green' : 'blue'}>{n.channel}</Tag>
                           <b>{n.created_by || n.author || ''}</b>
-                          <span style={{ color: '#8c8c8c', fontSize: 12 }}>{parseDate(n.created_at)?.format('DD MMM YYYY, hh:mm A')}</span>
+                          <span style={{ color: '#8c8c8c', fontSize: 12 }}>{parseDate(n.created_at)?.format('DD/MM/YYYY, hh:mm A')}</span>
                         </Space>
                         <div style={{ marginTop: 4 }}><NoteContent content={n.content} /></div>
                       </div>
@@ -1325,7 +1325,7 @@ const LeadDetails = () => {
                       {mainStatus && <div style={{ fontSize: 12, fontWeight: 600, color: '#262626' }}>{mainStatus}</div>}
                       {subStatus  && <div style={{ fontSize: 11, color: '#595959' }}>→ {subStatus}</div>}
                       <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 2 }}>
-                        {parseDate(latest.created_at)?.format('MMM DD, hh:mm A')}
+                        {parseDate(latest.created_at)?.format('DD/MM, hh:mm A')}
                         {latest.created_by && ` · ${latest.created_by}`}
                       </div>
                     </div>
@@ -1465,7 +1465,7 @@ const LeadDetails = () => {
                     size="small" pagination={false} rowKey={(r) => r.key} dataSource={emiRows}
                     columns={[
                       { title: 'Instalment', dataIndex: 'label' },
-                      { title: 'Due', dataIndex: 'date', render: (d) => (d ? dayjs(d).format('DD MMM YYYY') : '—') },
+                      { title: 'Due', dataIndex: 'date', render: (d) => (d ? dayjs(d).format('DD/MM/YYYY') : '—') },
                       { title: 'Amount', dataIndex: 'amount', align: 'right', render: (v) => fmtBoth(v) },
                       { title: 'Status', dataIndex: 'status', render: (s, r) => <Tag color={r.overdue ? 'red' : s === 'paid' ? 'green' : s === 'cancelled' ? 'default' : 'blue'}>{r.overdue ? 'overdue' : s || 'pending'}</Tag> },
                     ]}
@@ -1645,7 +1645,7 @@ const LeadDetails = () => {
         onOk={() => { updateLeadMutation.mutate({ follow_up_date: scheduleDate.toISOString() }); setScheduleOpen(false); }}
       >
         <p style={{ color: '#6b7280' }}>This sets the lead's follow-up date, so it shows in Today's Follow-ups and reminders.</p>
-        <DatePicker showTime={{ format: 'hh:mm A', use12Hours: true }} format="DD MMM YYYY, hh:mm A" value={scheduleDate}
+        <DatePicker showTime={{ format: 'hh:mm A', use12Hours: true }} format="DD/MM/YYYY, hh:mm A" value={scheduleDate}
           onChange={setScheduleDate} style={{ width: '100%' }} />
       </Modal>
 

@@ -334,7 +334,7 @@ function HospitalDetail({ hospital, onClose }) {
                             size="small" pagination={false} rowKey={(_, i) => i}
                             dataSource={r.sessions}
                             columns={[
-                              { title: 'Date', dataIndex: 'date' },
+                              { title: 'Date', dataIndex: 'date', render: (v) => (v ? String(v).slice(0, 10).split('-').reverse().join('/') : '—') },
                               { title: 'Hours', dataIndex: 'hours' },
                               { title: 'Note', dataIndex: 'note', render: (v) => v || '—' },
                             ]}

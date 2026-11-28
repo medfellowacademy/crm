@@ -89,7 +89,7 @@ const LeadRecoveryPage = () => {
     {
       title: 'Started',
       dataIndex: 'started_at',
-      render: (v) => (v ? <Tooltip title={dayjs(v).format('DD MMM YYYY, HH:mm')}>{dayjs(v).fromNow()}</Tooltip> : '—'),
+      render: (v) => (v ? <Tooltip title={dayjs(v).format('DD/MM/YYYY, HH:mm')}>{dayjs(v).fromNow()}</Tooltip> : '—'),
     },
     {
       title: 'Last reminded',

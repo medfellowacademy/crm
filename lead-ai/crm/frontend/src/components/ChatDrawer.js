@@ -26,7 +26,7 @@ function formatDate(ts) {
   const yesterday = new Date(); yesterday.setDate(today.getDate() - 1);
   if (d.toDateString() === today.toDateString()) return 'Today';
   if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
-  return d.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' });
+  return d.toLocaleDateString('en-GB');
 }
 
 function groupByDate(msgs) {

@@ -336,7 +336,7 @@ const EnrollmentModal = ({ open, lead, onSave, onCancel, loading, courseOptions,
         {/* ── Enrollment Date ───────────────────────────────────────── */}
         <Form.Item name="enrolled_at" label="Enrollment Date (when the sale closed)"
           rules={[{ required: true, message: 'Enter the enrollment date' }]}>
-          <DatePicker style={{ width: '100%' }} format="DD MMM YYYY" disabledDate={d => d && d.isAfter(dayjs(), 'day')} />
+          <DatePicker style={{ width: '100%' }} format="DD/MM/YYYY" disabledDate={d => d && d.isAfter(dayjs(), 'day')} />
         </Form.Item>
 
         {/* ── Revenue ────────────────────────────────────────────────── */}

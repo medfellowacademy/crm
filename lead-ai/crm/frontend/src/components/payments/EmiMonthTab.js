@@ -96,7 +96,7 @@ export default function EmiMonthTab({ onChanged }) {
     { title: 'Counselor', dataIndex: 'counselor' },
     { title: 'Instalment', key: 'emi', render: (_, r) => r.label || `EMI ${r.emi_index + 1}` },
     { title: 'Due', dataIndex: 'due_date', sorter: (a, b) => a.due_date.localeCompare(b.due_date), defaultSortOrder: 'ascend',
-      render: (d) => dayjs(d).format('DD MMM YYYY') },
+      render: (d) => dayjs(d).format('DD/MM/YYYY') },
     { title: 'Scheduled EMI', dataIndex: 'scheduled', align: 'right', sorter: (a, b) => a.scheduled - b.scheduled, render: fmt },
     { title: 'Received', key: 'received', align: 'right', render: (_, r) => {
       if (r.status !== 'paid') return <Text type="secondary">—</Text>;
@@ -111,7 +111,7 @@ export default function EmiMonthTab({ onChanged }) {
     } },
     { title: 'Status', dataIndex: 'status', render: (v) => <Tag color={STATUS[v].color}>{STATUS[v].label}</Tag> },
     { title: 'Paid on', key: 'paid', render: (_, r) => (r.paid_date
-      ? <span>{dayjs(r.paid_date).format('DD MMM')}{r.method ? <Text type="secondary"> · {r.method}</Text> : null}</span>
+      ? <span>{dayjs(r.paid_date).format('DD/MM')}{r.method ? <Text type="secondary"> · {r.method}</Text> : null}</span>
       : <Text type="secondary">—</Text>) },
     { title: 'Comments', key: 'comments', width: 230, render: (_, r) => (
       <div style={{ fontSize: 12 }}>

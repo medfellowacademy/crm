@@ -31,9 +31,9 @@ export const followUpInfo = (card, now = dayjs()) => {
   const due = parseUtc(card.follow_up);
   if (!due) return null;
   const days = due.startOf('day').diff(now.startOf('day'), 'day');
-  if (card.overdue) return { color: 'red', text: `Overdue ${Math.max(1, -days)}d`, title: `Follow-up was due ${due.format('DD MMM, hh:mm A')}` };
+  if (card.overdue) return { color: 'red', text: `Overdue ${Math.max(1, -days)}d`, title: `Follow-up was due ${due.format('DD/MM, hh:mm A')}` };
   if (days === 0) return { color: 'gold', text: `Today ${due.format('hh:mm A')}`, title: 'Follow-up today' };
-  return { color: 'blue', text: due.format('DD MMM'), title: `Follow-up ${due.format('DD MMM YYYY, hh:mm A')}` };
+  return { color: 'blue', text: due.format('DD/MM'), title: `Follow-up ${due.format('DD/MM/YYYY, hh:mm A')}` };
 };
 
 export const scoreColor = (score) => (score >= 70 ? '#16a34a' : score >= 40 ? '#d97706' : '#6b7280');

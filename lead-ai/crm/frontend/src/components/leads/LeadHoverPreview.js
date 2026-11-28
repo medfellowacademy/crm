@@ -176,7 +176,7 @@ const PreviewCard = ({ lead, pos, onMouseEnter, onMouseLeave }) => {
           label="Follow-up"
           value={
             followDate
-              ? `${followDate.format('MMM D')}${isOverdue ? ' · Overdue' : isToday ? ' · Today' : ''}`
+              ? `${followDate.format('DD/MM')}${isOverdue ? ' · Overdue' : isToday ? ' · Today' : ''}`
               : null
           }
           valueColor={isOverdue ? '#ef4444' : isToday ? '#f59e0b' : '#374151'}

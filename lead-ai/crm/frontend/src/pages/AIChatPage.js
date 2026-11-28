@@ -378,7 +378,7 @@ function KnowledgeBaseTab() {
               title={<span>{doc.title} <Tag color={CATEGORY_COLOR[doc.category]}>{CATEGORY_LABEL[doc.category]}</Tag></span>}
               description={
                 <span style={{ fontSize: 12 }}>
-                  {doc.file_name} · uploaded by {doc.uploaded_by} · {doc.created_at ? new Date(doc.created_at).toLocaleDateString() : ''}
+                  {doc.file_name} · uploaded by {doc.uploaded_by} · {doc.created_at ? new Date(doc.created_at).toLocaleDateString('en-GB') : ''}
                 </span>
               }
             />

@@ -118,7 +118,7 @@ const ExpandedRow = ({ lead, onUpload, uploading, onMarkPaid }) => {
                   display: 'flex', justifyContent: 'space-between',
                   padding: '4px 0', borderBottom: '1px solid #e5e7eb', fontSize: 13,
                 }}>
-                  <span>{p.date ? dayjs(p.date).format('DD MMM YYYY') : `Payment ${i + 1}`}</span>
+                  <span>{p.date ? dayjs(p.date).format('DD/MM/YYYY') : `Payment ${i + 1}`}</span>
                   <Text strong>{fmt(p.amount)}</Text>
                 </div>
               ))}
@@ -142,7 +142,7 @@ const ExpandedRow = ({ lead, onUpload, uploading, onMarkPaid }) => {
                 }}>
                   <span style={{ fontSize: 13 }}>
                     <b>{instalmentLabel(emis, i)}</b>
-                    <div style={{ fontSize: 12, color: '#6b7280' }}>{emi.date ? dayjs(emi.date).format('DD MMM YYYY') : 'No due date'}</div>
+                    <div style={{ fontSize: 12, color: '#6b7280' }}>{emi.date ? dayjs(emi.date).format('DD/MM/YYYY') : 'No due date'}</div>
                   </span>
                   <Text strong style={{ fontSize: 13 }}>
                     {fmt(emi.status === 'paid' && emi.paid_amount != null ? emi.paid_amount : emi.amount)}
@@ -160,7 +160,7 @@ const ExpandedRow = ({ lead, onUpload, uploading, onMarkPaid }) => {
                     </Button>
                   )}
                   {emi.status === 'paid' && emi.paid_date && (
-                    <Text type="secondary" style={{ fontSize: 11 }}>on {dayjs(emi.paid_date).format('DD MMM')}{emi.method ? ` · ${emi.method}` : ''}</Text>
+                    <Text type="secondary" style={{ fontSize: 11 }}>on {dayjs(emi.paid_date).format('DD/MM')}{emi.method ? ` · ${emi.method}` : ''}</Text>
                   )}
                 </div>
               );
@@ -508,7 +508,7 @@ const PaymentsPage = () => {
       key: 'enrolled_at',
       render: (_, r) => {
         const d = r.enroll_date || r.enrolled_at;
-        return d ? dayjs(d).format('DD MMM YYYY') : <Text type="secondary">Date missing</Text>;
+        return d ? dayjs(d).format('DD/MM/YYYY') : <Text type="secondary">Date missing</Text>;
       },
       sorter: (a, b) => dayjs(a.enroll_date || a.enrolled_at || 0).unix() - dayjs(b.enroll_date || b.enrolled_at || 0).unix(),
     },

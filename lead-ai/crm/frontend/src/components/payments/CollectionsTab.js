@@ -88,7 +88,7 @@ export default function CollectionsTab({ data }) {
                 { title: 'For', dataIndex: 'label', responsive: ['md'] },
                 { title: 'Counselor', dataIndex: 'counselor', responsive: ['md'] },
                 { title: 'Due', dataIndex: 'due_date', render: (d, r) => (
-                  <span>{dayjs(d).format('DD MMM')} <Tag color={r.days_until <= 3 ? 'orange' : 'default'}>{r.days_until === 0 ? 'today' : `in ${r.days_until}d`}</Tag></span>
+                  <span>{dayjs(d).format('DD/MM')} <Tag color={r.days_until <= 3 ? 'orange' : 'default'}>{r.days_until === 0 ? 'today' : `in ${r.days_until}d`}</Tag></span>
                 ) },
                 { title: 'Amount', dataIndex: 'amount', align: 'right', render: fmt },
               ]}

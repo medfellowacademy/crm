@@ -1243,8 +1243,8 @@ const LeadsPageEnhanced = () => {
                 {(r.is_repeated || (r.submission_count || 1) > 1 || repeatedLeadIds.has(r.lead_id)) && (
                   <Tooltip title={
                     `${r.submission_count || 2} submissions` +
-                    (r.first_submission_at ? ` · first ${dayjs(r.first_submission_at).format('D MMM')}` : '') +
-                    (r.last_submission_at ? ` · last ${dayjs(r.last_submission_at).format('D MMM')}` : '') +
+                    (r.first_submission_at ? ` · first ${dayjs(r.first_submission_at).format('DD/MM')}` : '') +
+                    (r.last_submission_at ? ` · last ${dayjs(r.last_submission_at).format('DD/MM')}` : '') +
                     ' · click to see full history'
                   }>
                     <Tag
@@ -1530,7 +1530,7 @@ const LeadsPageEnhanced = () => {
             variant="borderless"
             value={d}
             showTime={{ format: 'hh:mm A', use12Hours: true }}
-            format="MMM DD hh:mm A"
+            format="DD/MM hh:mm A"
             size="small"
             placeholder="Set follow-up"
             style={{
@@ -1563,7 +1563,7 @@ const LeadsPageEnhanced = () => {
       render: (d) => {
         const parsed = parseDate(d);
         return (
-          <Tooltip title={parsed ? parsed.format('DD MMM YYYY, hh:mm A') : '—'}>
+          <Tooltip title={parsed ? parsed.format('DD/MM/YYYY, hh:mm A') : '—'}>
             <Text type="secondary">{parsed ? parsed.fromNow() : '—'}</Text>
           </Tooltip>
         );
@@ -1581,7 +1581,7 @@ const LeadsPageEnhanced = () => {
         const date = d || r.created_at;
         const parsed = parseDate(date);
         return (
-          <Tooltip title={parsed ? parsed.format('DD MMM YYYY, hh:mm A') : '—'}>
+          <Tooltip title={parsed ? parsed.format('DD/MM/YYYY, hh:mm A') : '—'}>
             <Text type="secondary">{parsed ? parsed.fromNow() : '—'}</Text>
           </Tooltip>
         );
@@ -2280,7 +2280,7 @@ const LeadsPageEnhanced = () => {
                   <Form.Item name="follow_up_date" label="Follow-up Date & Time">
                     <DatePicker
                       showTime={{ format: 'hh:mm A', use12Hours: true }}
-                      format="MMM DD, YYYY hh:mm A"
+                      format="DD/MM/YYYY hh:mm A"
                       style={{ width: '100%' }}
                       placeholder="Select date and time"
                     />
@@ -2398,7 +2398,7 @@ const LeadsPageEnhanced = () => {
               <Form.Item name="follow_up_date" label="Follow-up Date & Time">
                 <DatePicker
                   showTime={{ format: 'hh:mm A', use12Hours: true }}
-                  format="MMM DD, YYYY hh:mm A"
+                  format="DD/MM/YYYY hh:mm A"
                   style={{ width: '100%' }}
                   placeholder="Select date and time"
                 />
@@ -2799,9 +2799,9 @@ const LeadsPageEnhanced = () => {
                         {lead.email && <span style={{ marginRight: 12 }}>✉ {lead.email}</span>}
                         {lead.course_interested && <span style={{ marginRight: 12 }}>📚 {lead.course_interested}</span>}
                         <br />
-                        First: <b>{lead.first_submission_at ? dayjs(lead.first_submission_at).format('D MMM YYYY') : '—'}</b>
+                        First: <b>{lead.first_submission_at ? dayjs(lead.first_submission_at).format('DD/MM/YYYY') : '—'}</b>
                         {'  ·  '}
-                        Last: <b>{lead.last_submission_at ? dayjs(lead.last_submission_at).format('D MMM YYYY') : '—'}</b>
+                        Last: <b>{lead.last_submission_at ? dayjs(lead.last_submission_at).format('DD/MM/YYYY') : '—'}</b>
                         {lead.last_submission_campaign && <span>{'  ·  '}via {lead.last_submission_campaign}</span>}
                         {Array.isArray(lead.repeat_channels) && lead.repeat_channels.length > 0 && (
                           <span>{'  ·  '}channels: {lead.repeat_channels.join(', ')}</span>

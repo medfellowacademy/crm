@@ -143,7 +143,7 @@ function QuickActionModal({ lead, onClose, onDone }) {
               ))}
             </div>
             <DatePicker
-              showTime={{ format: 'hh:mm A', use12Hours: true }} format="DD MMM YYYY, hh:mm A" style={{ width: '100%' }} value={nextDate} disabled={noNext}
+              showTime={{ format: 'hh:mm A', use12Hours: true }} format="DD/MM/YYYY, hh:mm A" style={{ width: '100%' }} value={nextDate} disabled={noNext}
               onChange={setNextDate} disabledDate={(d) => d && d < dayjs().startOf('day')} placeholder="Pick the next follow-up date and time"
             />
             <Checkbox checked={noNext} onChange={(e) => setNoNext(e.target.checked)} style={{ marginTop: 8 }}>No further follow-up needed</Checkbox>
@@ -167,9 +167,9 @@ function LeadRow({ lead, tab, rank, onLog, onChat, onSnooze }) {
   const due = parseUtc(lead.follow_up_date);
   const topPriority = rank != null && rank < 3;
   const dueText = !due ? 'No follow-up date'
-    : overdue ? `${lead.days_overdue} day${lead.days_overdue === 1 ? '' : 's'} overdue · was ${due.format('DD MMM, hh:mm A')}`
+    : overdue ? `${lead.days_overdue} day${lead.days_overdue === 1 ? '' : 's'} overdue · was ${due.format('DD/MM, hh:mm A')}`
       : tab === 'today' ? `Due ${due.format('hh:mm A')}${lead.due_passed ? ' · time passed' : ''}`
-        : `Due ${due.format('ddd DD MMM, hh:mm A')}`;
+        : `Due ${due.format('ddd DD/MM, hh:mm A')}`;
   const accent = overdue ? '#f5222d' : lead.due_passed ? '#fa8c16' : segmentColor[lead.ai_segment] || '#1890ff';
   const snoozeItems = quickDates.map((q, i) => ({ key: String(i), label: q.label }));
 
@@ -345,7 +345,7 @@ export default function FollowupTodayPage() {
   const snooze = async (lead, q) => {
     try {
       await leadsAPI.update(lead.lead_id, { follow_up_date: q.get().toISOString() });
-      message.success(`${lead.full_name}: follow-up moved to ${q.get().format('ddd DD MMM, hh:mm A')}`);
+      message.success(`${lead.full_name}: follow-up moved to ${q.get().format('ddd DD/MM, hh:mm A')}`);
       dropFromList(lead);
     } catch (e) {
       message.error(errText(e, 'Could not reschedule - nothing was changed'));
@@ -369,7 +369,7 @@ export default function FollowupTodayPage() {
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>
           <Title level={3} style={{ margin: 0 }}><CalendarOutlined style={{ color: '#1890ff', marginRight: 8 }} />Follow-ups</Title>
-          <Text type="secondary">{dayjs().format('dddd, D MMMM YYYY')}{dataUpdatedAt ? ` · updated ${dayjs(dataUpdatedAt).format('hh:mm:ss A')}` : ''}</Text>
+          <Text type="secondary">{dayjs().format('dddd, DD/MM/YYYY')}{dataUpdatedAt ? ` · updated ${dayjs(dataUpdatedAt).format('hh:mm:ss A')}` : ''}</Text>
         </div>
         <Space wrap>
           {isAdmin && (

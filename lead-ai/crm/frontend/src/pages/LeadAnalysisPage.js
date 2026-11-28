@@ -160,7 +160,7 @@ const LeadAnalysisPage = () => {
       l.phone || '',
       l.email || '',
       l.assigned_to || '',
-      l.created_at ? new Date(l.created_at).toLocaleDateString('en-IN') : '',
+      l.created_at ? new Date(l.created_at).toLocaleDateString('en-GB') : '',
     ]);
     const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
@@ -174,9 +174,9 @@ const LeadAnalysisPage = () => {
 
   // ── PDF report: generates self-contained HTML + opens print dialog ────────
   const handleDownloadPDF = () => {
-    const fromLabel = dateRange[0].format('DD MMM YYYY');
-    const toLabel   = dateRange[1].format('DD MMM YYYY');
-    const now       = dayjs().format('DD MMM YYYY, h:mm A');
+    const fromLabel = dateRange[0].format('DD/MM/YYYY');
+    const toLabel   = dateRange[1].format('DD/MM/YYYY');
+    const now       = dayjs().format('DD/MM/YYYY, h:mm A');
 
     // SVG helpers
     const hBar = (items, nameKey, valueKey, color) => {
@@ -387,8 +387,8 @@ tbody td{border-bottom:1px solid #f1f5f9;vertical-align:middle}
   const handleDownloadReport = () => {
     const wb = XLSX.utils.book_new();
 
-    const fromLabel = dateRange[0].format('DD MMM YYYY');
-    const toLabel   = dateRange[1].format('DD MMM YYYY');
+    const fromLabel = dateRange[0].format('DD/MM/YYYY');
+    const toLabel   = dateRange[1].format('DD/MM/YYYY');
 
     // ── Sheet 1: Summary ────────────────────────────────────────────────────
     const totalLeads   = filteredLeads.length;
@@ -407,7 +407,7 @@ tbody td{border-bottom:1px solid #f1f5f9;vertical-align:middle}
 
     const summarySheet = XLSX.utils.aoa_to_sheet([
       ['Lead Analysis Report'],
-      [`Generated: ${dayjs().format('DD MMM YYYY, h:mm A')}`],
+      [`Generated: ${dayjs().format('DD/MM/YYYY, h:mm A')}`],
       [`Date Range: ${fromLabel} → ${toLabel}`],
       [],
       ['Metric', 'Value'],
@@ -506,8 +506,8 @@ tbody td{border-bottom:1px solid #f1f5f9;vertical-align:middle}
       calculateLeadAge(l.created_at),
       calculateDaysSinceUpdate(l.updated_at),
       l.potential_revenue || 0,
-      l.created_at ? dayjs(l.created_at).format('DD MMM YYYY') : '',
-      l.updated_at ? dayjs(l.updated_at).format('DD MMM YYYY') : '',
+      l.created_at ? dayjs(l.created_at).format('DD/MM/YYYY') : '',
+      l.updated_at ? dayjs(l.updated_at).format('DD/MM/YYYY') : '',
     ]);
     const leadSheet = XLSX.utils.aoa_to_sheet([leadHeaders, ...leadRows]);
     leadSheet['!cols'] = [
@@ -770,7 +770,7 @@ tbody td{border-bottom:1px solid #f1f5f9;vertical-align:middle}
       sorter: (a, b) => dayjs(a.enrolled_at || 0).valueOf() - dayjs(b.enrolled_at || 0).valueOf(),
       render: (date, record) => (
         record.status === 'Enrolled'
-          ? (date ? <Text>{dayjs(date).format('DD MMM YYYY')}</Text> : <Text type="secondary">—</Text>)
+          ? (date ? <Text>{dayjs(date).format('DD/MM/YYYY')}</Text> : <Text type="secondary">—</Text>)
           : <Text type="secondary">—</Text>
       )
     },
@@ -1345,7 +1345,7 @@ tbody td{border-bottom:1px solid #f1f5f9;vertical-align:middle}
               dataIndex: 'created_at',
               key: 'created',
               width: 110,
-              render: v => v ? new Date(v).toLocaleDateString('en-IN') : '—',
+              render: v => v ? new Date(v).toLocaleDateString('en-GB') : '—',
             },
           ]}
         />

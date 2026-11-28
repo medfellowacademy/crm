@@ -105,7 +105,7 @@ const MarketingDashboard = () => {
         <Col xs={24} sm={12} lg={6}>
           <KpiCard
             title="Meta Sync Status" value={metaStatus?.sync_status === 'running' ? 'Syncing…' : metaStatus?.enabled ? 'Active' : 'Not synced'}
-            sub={metaStatus?.last_synced_at ? `Last: ${new Date(metaStatus.last_synced_at).toLocaleDateString()}` : null}
+            sub={metaStatus?.last_synced_at ? `Last: ${new Date(metaStatus.last_synced_at).toLocaleDateString('en-GB')}` : null}
             icon={Share2} color="#f59e0b"
           />
         </Col>

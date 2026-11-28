@@ -51,7 +51,7 @@ export default function DroppedTab({ onChanged }) {
             ) },
             { title: 'Counselor', dataIndex: 'counselor' },
             { title: 'Course', dataIndex: 'course', ellipsis: true, width: 200 },
-            { title: 'Dropped on', dataIndex: 'dropped_on', render: (d) => (d ? dayjs(d).format('DD MMM YYYY') : <Text type="secondary">—</Text>) },
+            { title: 'Dropped on', dataIndex: 'dropped_on', render: (d) => (d ? dayjs(d).format('DD/MM/YYYY') : <Text type="secondary">—</Text>) },
             { title: 'Reason', key: 'reason', width: 220, render: (_, r) => (r.recorded ? (
               <div>
                 <Tag color="volcano">{r.reason}</Tag>

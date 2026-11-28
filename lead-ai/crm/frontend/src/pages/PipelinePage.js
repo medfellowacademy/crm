@@ -267,7 +267,7 @@ const PipelinePage = () => {
             <RangePicker
               value={dateRange}
               onChange={setDateRange}
-              format="DD MMM YYYY"
+              format="DD/MM/YYYY"
               style={{ width: 280 }}
             />
           </div>

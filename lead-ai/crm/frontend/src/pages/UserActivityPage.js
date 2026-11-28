@@ -153,7 +153,7 @@ export default function UserActivityPage() {
         return ts && ts.format('YYYY-MM-DD') === dayStr;
       });
       days.push({
-        date:     d.format('DD MMM'),
+        date:     d.format('DD/MM'),
         updated:  dayLeads.length,
         enrolled: dayLeads.filter(l => l.status === 'Enrolled').length,
         potential: dayLeads.filter(l => ['Hot', 'Warm'].includes(l.status)).length,
@@ -277,7 +277,7 @@ export default function UserActivityPage() {
             <RangePicker
               value={dateRange}
               onChange={v => setDateRange(v || [dayjs().subtract(29, 'days'), dayjs()])}
-              format="DD MMM YYYY"
+              format="DD/MM/YYYY"
               style={{ width: 280 }}
               presets={PRESETS}
             />
