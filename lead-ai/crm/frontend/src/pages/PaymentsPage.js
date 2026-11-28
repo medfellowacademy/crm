@@ -410,7 +410,7 @@ const PaymentsPage = () => {
       key: 'full_name',
       render: (t, r) => (
         <div>
-          <div style={{ fontWeight: 600 }}>{t}</div>
+          <div style={{ fontWeight: 600 }}>{t}{r.course_count > 1 && <Tag color="purple" style={{ marginLeft: 6 }}>{r.course_count} courses</Tag>}</div>
           <div style={{ fontSize: 12, color: '#6b7280' }}>{r.phone}</div>
           {r.email && <div style={{ fontSize: 11, color: '#9ca3af' }}>{r.email}</div>}
         </div>

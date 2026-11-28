@@ -9,6 +9,7 @@ small fetch), an overdue-EMI worklist, "mark EMI paid" with an audit ledger
 """
 
 import threading
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Literal, Optional
 
@@ -107,6 +108,9 @@ def get_payments_overview(
         today = pa.today_ist()
         everything = scoped_enrolled(rbac.lead_scope_names(current_user))
         period = [l for l in everything if pa.in_period(l, date_from, date_to)]
+        # how many courses each doctor has (additional courses point at the first record)
+        courses = Counter(l.get("primary_lead_id") or l.get("id") for l in everything)
+        period = [{**l, "course_count": courses[l.get("primary_lead_id") or l.get("id")]} for l in period]
         overdue_all = pa.overdue_emis(everything, today)
         # A registration balance is not an EMI: keep it out of the EMI overdue figures
         overdue = [o for o in overdue_all if o.get("kind") != "registration"]

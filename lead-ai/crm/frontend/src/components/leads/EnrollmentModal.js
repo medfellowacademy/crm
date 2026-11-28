@@ -66,7 +66,9 @@ const serializeRow = (r, toINR, kind) => {
   return out;
 };
 
-const EnrollmentModal = ({ open, lead, onSave, onCancel, loading }) => {
+// With `courseOptions` the form adds ANOTHER course for the same doctor (course and counselor are chosen too).
+const EnrollmentModal = ({ open, lead, onSave, onCancel, loading, courseOptions, counselorOptions }) => {
+  const addingCourse = Array.isArray(courseOptions);
   const [form] = Form.useForm();
   const [lmsModules, setLmsModules] = useState([]);
   // instalments cancelled because the student dropped: not editable here, kept as they are
@@ -81,7 +83,7 @@ const EnrollmentModal = ({ open, lead, onSave, onCancel, loading }) => {
   const symbol = currency === 'USD' ? '$' : '₹';
   const fmt = fmtNum(symbol);
   const parse = parseNum(symbol);
-  const isEdit = lead?.status === 'Enrolled';
+  const isEdit = !addingCourse && lead?.status === 'Enrolled';
 
   useEffect(() => {
     if (!open) return;
@@ -109,6 +111,8 @@ const EnrollmentModal = ({ open, lead, onSave, onCancel, loading }) => {
       reg_balances:           live.filter((e) => e.kind === 'registration').map(toRow),
       emis:                   live.filter((e) => e.kind !== 'registration').map(toRow),
       registration_payments:  regPayments,
+      course_interested:      undefined,
+      assigned_to:            existing.assigned_to || undefined,
     });
     forceUpdate(n => n + 1);
   }, [open, lead]);
@@ -175,6 +179,7 @@ const EnrollmentModal = ({ open, lead, onSave, onCancel, loading }) => {
         ...cancelled,
       ];
       onSave({
+        ...(addingCourse ? { course_interested: vals.course_interested, assigned_to: vals.assigned_to || null } : {}),
         status:                'Enrolled',
         enrolled_at:           vals.enrolled_at ? ymd(vals.enrolled_at) : null,
         actual_revenue:        vals.actual_revenue != null ? toINR(vals.actual_revenue) : null,
@@ -257,7 +262,7 @@ const EnrollmentModal = ({ open, lead, onSave, onCancel, loading }) => {
       title={
         <Space>
           <CheckCircleOutlined style={{ color: '#10b981', fontSize: 18 }} />
-          <span>{isEdit ? 'Payment Details' : 'Enrollment Details'} — {lead?.full_name}</span>
+          <span>{addingCourse ? 'Add another course' : (isEdit ? 'Payment Details' : 'Enrollment Details')} — {lead?.full_name}</span>
         </Space>
       }
       open={open}
@@ -269,7 +274,7 @@ const EnrollmentModal = ({ open, lead, onSave, onCancel, loading }) => {
           <Button onClick={onCancel}>Cancel</Button>
           <Button type="primary" loading={loading} onClick={handleSave}
             style={{ background: '#10b981', borderColor: '#10b981' }}>
-            {isEdit ? 'Save payment details' : 'Confirm Enrollment'}
+            {addingCourse ? 'Add course' : (isEdit ? 'Save payment details' : 'Confirm Enrollment')}
           </Button>
         </Space>
       }
@@ -309,6 +314,23 @@ const EnrollmentModal = ({ open, lead, onSave, onCancel, loading }) => {
             message={`The payments add up to ${inr(overScheduled)} more than the total fee`}
             description="Check the amounts: received plus scheduled should not be more than the course fee."
           />
+        )}
+
+        {addingCourse && (
+          <Row gutter={12}>
+            <Col span={15}>
+              <Form.Item name="course_interested" label="New course" rules={[{ required: true, message: 'Choose the course' }]}>
+                <Select showSearch placeholder="Choose the course" optionFilterProp="label"
+                  options={courseOptions.map((c) => ({ value: c, label: c }))} />
+              </Form.Item>
+            </Col>
+            <Col span={9}>
+              <Form.Item name="assigned_to" label="Counselor for this sale">
+                <Select showSearch allowClear optionFilterProp="label"
+                  options={(counselorOptions || []).map((c) => ({ value: c, label: c }))} />
+              </Form.Item>
+            </Col>
+          </Row>
         )}
 
         {/* ── Enrollment Date ───────────────────────────────────────── */}

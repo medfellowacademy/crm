@@ -129,6 +129,13 @@ export const brochuresAPI = {
 };
 
 // Follow-ups work list
+export const enrollmentsAPI = {
+  list: (leadId) => api.get(`/api/leads/${leadId}/enrollments`),
+  add: (leadId, data) => api.post(`/api/leads/${leadId}/enrollments`, data),
+  link: (leadId, otherLeadId) => api.post(`/api/leads/${leadId}/enrollments/link`, { other_lead_id: otherLeadId }),
+  unlink: (leadId) => api.post(`/api/leads/${leadId}/enrollments/unlink`),
+};
+
 export const emailAPI = {
   account: () => api.get('/api/email/account'),
   save: (data) => api.put('/api/email/account', data),

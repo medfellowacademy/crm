@@ -134,6 +134,7 @@ from ai_chat import router as ai_chat_router
 from attendance import router as attendance_router
 from payroll_router import router as payroll_router
 from calls_router import router as calls_router
+from enrollments_router import router as enrollments_router
 import email_router as email_router_mod
 from email_router import router as email_router
 from sheets_router import router as sheets_router
@@ -794,6 +795,7 @@ app.include_router(ai_chat_router)
 app.include_router(attendance_router)
 app.include_router(payroll_router)
 app.include_router(calls_router)
+app.include_router(enrollments_router)
 app.include_router(email_router)
 app.include_router(sheets_router)
 app.include_router(mbg_router)

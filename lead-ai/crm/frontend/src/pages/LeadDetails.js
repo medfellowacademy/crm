@@ -137,6 +137,7 @@ const parseDate = (s) => {
 import ActivityTimeline from '../features/activity/ActivityTimeline';
 import SubmissionTimeline from '../components/leads/SubmissionTimeline';
 import CallHistory from '../components/leads/CallHistory';
+import CoursesCard from '../components/leads/CoursesCard';
 import EmailComposeModal from '../components/email/EmailComposeModal';
 import AIAssistantPanel from '../features/ai/AIAssistantPanel';
 import CallTimeWidget from '../components/leads/CallTimeWidget';
@@ -634,6 +635,9 @@ const LeadDetails = () => {
             forms and half-typed notes keep their state when switching. */}
         <Col xs={24} lg={19}>
           <div style={show('overview')}>
+          {/* Every course this doctor has taken, and "Add another course" */}
+          <CoursesCard lead={lead} />
+
           {/* Lead Information */}
           <Card 
             title="Lead Information"

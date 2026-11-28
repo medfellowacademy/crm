@@ -729,6 +729,11 @@ class SupabaseDataLayer:
                 "utm_source,utm_medium,utm_campaign,source,country,"
                 "course_interested,assigned_to"
             )
+            try:                       # several courses of one doctor are linked by this column
+                self.client.table('leads').select('primary_lead_id').limit(1).execute()
+                SELECT += ",primary_lead_id"
+            except Exception:
+                pass
             page_size = 1000
             offset = 0
             all_leads = []
@@ -744,6 +749,10 @@ class SupabaseDataLayer:
                 if len(rows) < page_size:
                     break
                 offset += page_size
+
+            # Course records of one doctor share a phone and email on purpose: leave them (and the first record) alone.
+            linked = {l.get('primary_lead_id') for l in all_leads if l.get('primary_lead_id')}
+            all_leads = [l for l in all_leads if not l.get('primary_lead_id') and l.get('id') not in linked]
 
             # ── 2. Build duplicate groups ─────────────────────────────────
             # Map: normalised key → list of lead dicts
